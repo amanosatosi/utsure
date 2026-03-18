@@ -4,13 +4,22 @@
 
 ## Current scope
 
-The repository currently contains the initial project skeleton:
+The repository currently contains the initial project skeleton plus the first media inspection and source decode path:
 
-- `utsure_encoder_core`: reusable C++ target for media inspection and future media, timeline, subtitle, and encode logic.
+- `utsure_encoder_core`: reusable C++ target for media inspection, source decode normalization, and future media, timeline, subtitle, and encode logic.
 - `utsure_encoder_app`: Qt 6 Widgets desktop shell that links the core and launches a minimal window.
 - Windows GitHub Actions build validation using MSYS2 UCRT64, CMake, Ninja, Qt 6 Widgets, FFmpeg, `libx264`, `libx265`, and a pinned source build of `libassmod`.
 
-No real media probing, timeline assembly, subtitle burn-in, or encoding logic is implemented yet.
+Implemented so far:
+
+- FFmpeg-based primary stream inspection into structured core metadata.
+- Main-source decode into normalized internal video frame and audio sample objects with explicit timestamps.
+
+Not implemented yet:
+
+- Timeline assembly.
+- Subtitle burn-in.
+- Final encode orchestration.
 
 ## Layout
 
@@ -29,8 +38,8 @@ The repository is set up to build in GitHub Actions on Windows. The workflow:
 2. Builds a pinned `libassmod` source dependency into an isolated prefix.
 3. Audits configure-time dependency discovery.
 4. Configures the project with CMake.
-5. Builds `utsure_encoder_core`, `utsure_encoder_app`, and the core media inspection test executable.
-6. Generates a deterministic sample media file and runs the core inspection tests.
+5. Builds `utsure_encoder_core`, `utsure_encoder_app`, and the core media inspection and decode test executables.
+6. Generates a deterministic sample media file and runs the core inspection and decode tests.
 7. Launches the Qt app in offscreen smoke-test mode.
 
 See:

@@ -1,5 +1,9 @@
 add_library(utsure_encoder_core STATIC
     src/build_info.cpp
+    src/media/decoded_media.cpp
+    src/media/ffmpeg_media_support.cpp
+    src/media/media_decode_report.cpp
+    src/media/media_decoder.cpp
     src/media/media_inspector.cpp
     src/media/media_inspection_report.cpp
 )

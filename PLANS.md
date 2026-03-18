@@ -9,7 +9,9 @@ This file is the living execution plan for the repository. Update it when a mile
 - [ ] M2 Project skeleton is implemented and awaiting CI validation.
 - [ ] M3 Core-only build foundation is implemented and awaiting CI validation.
 - [ ] M4 Dependency strategy and adapter seams are implemented and awaiting CI validation.
+- [ ] M5 Core project and timeline contracts are ready to resume after decode flow.
 - [ ] M6 Media input inspection is implemented and awaiting CI validation.
+- [ ] M7 Decode and normalized processing flow is implemented and awaiting CI validation.
 
 ## Active assumptions
 
@@ -22,6 +24,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - Windows build validation is currently anchored in GitHub Actions because the local machine does not expose a Qt-capable compiler toolchain.
 - `libassmod` is currently treated as a pinned source dependency built into an isolated prefix because it installs as a `libass`-compatible package name rather than a uniquely named `libassmod` package.
 - Media inspection was intentionally pulled ahead of broader project/timeline contracts because those contracts need real stream metadata and explicit cadence fields instead of placeholder assumptions.
+- The decode and normalized processing milestone is also being pulled ahead of the broader project/timeline contracts by explicit user request, but it remains limited to the main source path only.
 
 ## Architecture direction
 
@@ -138,6 +141,8 @@ Done criteria:
 
 ### M5 Define core project and timeline contracts
 
+Status: Deferred by milestone reorder, now ready to resume
+
 Scope:
 - Introduce the first stable core types for project settings, source assets, timeline segments, and encode requests.
 - Encode the rule that the main source owns output frame rate.
@@ -190,7 +195,38 @@ Done criteria:
 - The project can determine whether assets are compatible or require normalization.
 - Output frame-rate derivation from the main source is enforced in the probe-to-project path.
 
-### M7 Assemble timeline segments for intro, main, and outro
+### M7 Implement source decode and normalized processing flow
+
+Status: Implemented, pending CI validation
+
+Scope:
+- Add a source decode service that reads the primary video and audio streams selected by the probe layer.
+- Normalize decoded video frames and audio samples into explicit internal buffer types suitable for later composition and encode work.
+- Keep timestamp handling, cadence preservation, and debug visibility explicit for the main-source-only path.
+
+Likely files/modules:
+- `src/core/include/utsure/core/media/`
+- `src/core/src/media/`
+- `tests/core/`
+- `scripts/ci/`
+
+Risks:
+- Hiding cadence mistakes inside timestamp conversion or decode flush handling.
+- Picking internal pixel/sample formats that are hard to reason about later.
+- Letting decode details leak FFmpeg types into public core headers.
+
+Validation:
+- Decode generated sample media into internal video frame and audio sample objects.
+- Verify representative frame/sample timestamps and normalization metadata.
+- Verify the decode report is understandable enough to debug the flow from source packet timing to internal objects.
+
+Done criteria:
+- Source video frames decode into internal frame objects.
+- Source audio samples decode into internal sample objects.
+- Pixel/sample normalization rules are explicit in code and observable in tests.
+- Timestamp handling is consistent and understandable for the main source path.
+
+### M8 Assemble timeline segments for intro, main, and outro
 
 Scope:
 - Build the timeline assembler that converts probed assets into an ordered output plan.
@@ -214,7 +250,7 @@ Done criteria:
 - Timeline assembly works for the supported segment combinations.
 - Unsupported combinations fail with explicit diagnostics.
 
-### M8 Add encode session orchestration and first H.264 path
+### M9 Add encode session orchestration and first H.264 path
 
 Scope:
 - Introduce the encode session object that drives decode, transform, and encode stages.
@@ -238,7 +274,7 @@ Done criteria:
 - A minimal H.264 encode completes successfully through the core.
 - Progress and failure states are observable from the orchestration layer.
 
-### M9 Add subtitle renderer adapter and burn-in path
+### M10 Add subtitle renderer adapter and burn-in path
 
 Scope:
 - Introduce the subtitle renderer abstraction and `libassmod` implementation.
@@ -263,7 +299,7 @@ Done criteria:
 - Subtitle burn-in works through the adapter boundary.
 - Core logic can request subtitle rendering without knowing `libassmod` details.
 
-### M10 Extend encode support to H.265
+### M11 Extend encode support to H.265
 
 Scope:
 - Add H.265 output as a first-class encode option.
@@ -286,7 +322,7 @@ Done criteria:
 - The core supports both H.264 and H.265 output.
 - Codec selection does not duplicate large parts of the pipeline.
 
-### M11 Add thin Qt 6 Widgets desktop shell
+### M12 Add thin Qt 6 Widgets desktop shell
 
 Scope:
 - Add the first real desktop window and wire it to the core boundaries.
@@ -311,7 +347,7 @@ Done criteria:
 - Qt Widgets shell launches and drives the core successfully.
 - GUI remains thin and does not own timeline or encode policy.
 
-### M12 Harden correctness, packaging, and portability
+### M13 Harden correctness, packaging, and portability
 
 Scope:
 - Expand test coverage around probe, timeline, subtitle, and encode correctness.
@@ -338,4 +374,4 @@ Done criteria:
 
 ## Immediate next milestone
 
-Define the first project and timeline contracts on top of inspected media metadata, then re-run CI so M2, M3, M4, and M6 can be closed with real build validation.
+Define the first project and timeline contracts on top of inspected and decoded media metadata, then re-run CI so M2, M3, M4, M6, and M7 can be closed with real build validation.

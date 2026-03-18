@@ -1,21 +1,15 @@
 #include "utsure/core/media/media_inspector.hpp"
 
+#include "ffmpeg_media_support.hpp"
+
 extern "C" {
-#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
-#include <libavutil/channel_layout.h>
-#include <libavutil/error.h>
-#include <libavutil/pixdesc.h>
-#include <libavutil/samplefmt.h>
 }
 
-#include <array>
 #include <exception>
 #include <filesystem>
-#include <memory>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -23,123 +17,7 @@ namespace utsure::core::media {
 
 namespace {
 
-struct FormatContextDeleter final {
-    void operator()(AVFormatContext *format_context) const noexcept {
-        if (format_context == nullptr) {
-            return;
-        }
-
-        avformat_close_input(&format_context);
-    }
-};
-
-using FormatContextHandle = std::unique_ptr<AVFormatContext, FormatContextDeleter>;
-
-std::string ffmpeg_error_to_string(int error_code) {
-    std::array<char, AV_ERROR_MAX_STRING_SIZE> buffer{};
-    av_strerror(error_code, buffer.data(), buffer.size());
-    return std::string(buffer.data());
-}
-
-Rational to_rational(const AVRational value) {
-    return Rational{
-        .numerator = static_cast<std::int64_t>(value.num),
-        .denominator = static_cast<std::int64_t>(value.den)
-    };
-}
-
-std::optional<std::int64_t> to_optional_pts(const std::int64_t value) {
-    if (value == AV_NOPTS_VALUE) {
-        return std::nullopt;
-    }
-
-    return value;
-}
-
-std::string codec_name_from_parameters(const AVCodecParameters &parameters) {
-    const auto *codec_name = avcodec_get_name(parameters.codec_id);
-    if (codec_name == nullptr || std::string_view(codec_name).empty()) {
-        return "unknown";
-    }
-
-    return codec_name;
-}
-
-std::string pixel_format_name_from_parameters(const AVCodecParameters &parameters) {
-    if (parameters.format < 0) {
-        return "unknown";
-    }
-
-    const auto *pixel_format_name = av_get_pix_fmt_name(static_cast<AVPixelFormat>(parameters.format));
-    if (pixel_format_name == nullptr) {
-        return "unknown";
-    }
-
-    return pixel_format_name;
-}
-
-std::string sample_format_name_from_parameters(const AVCodecParameters &parameters) {
-    if (parameters.format < 0) {
-        return "unknown";
-    }
-
-    const auto *sample_format_name = av_get_sample_fmt_name(static_cast<AVSampleFormat>(parameters.format));
-    if (sample_format_name == nullptr) {
-        return "unknown";
-    }
-
-    return sample_format_name;
-}
-
-std::string channel_layout_name_from_parameters(const AVCodecParameters &parameters) {
-    if (parameters.ch_layout.nb_channels <= 0 || parameters.ch_layout.order == AV_CHANNEL_ORDER_UNSPEC) {
-        return "unknown";
-    }
-
-    std::array<char, 128> buffer{};
-    const auto describe_result = av_channel_layout_describe(&parameters.ch_layout, buffer.data(), buffer.size());
-    if (describe_result < 0) {
-        return "unknown";
-    }
-
-    return std::string(buffer.data());
-}
-
-TimestampInfo build_timestamp_info(const AVStream &stream) {
-    return TimestampInfo{
-        .time_base = to_rational(stream.time_base),
-        .start_pts = to_optional_pts(stream.start_time),
-        .duration_pts = to_optional_pts(stream.duration)
-    };
-}
-
-VideoStreamInfo build_video_stream_info(const AVStream &stream) {
-    const auto &parameters = *stream.codecpar;
-    return VideoStreamInfo{
-        .stream_index = stream.index,
-        .codec_name = codec_name_from_parameters(parameters),
-        .width = parameters.width,
-        .height = parameters.height,
-        .pixel_format_name = pixel_format_name_from_parameters(parameters),
-        .average_frame_rate = to_rational(stream.avg_frame_rate),
-        .timestamps = build_timestamp_info(stream),
-        .frame_count = to_optional_pts(stream.nb_frames)
-    };
-}
-
-AudioStreamInfo build_audio_stream_info(const AVStream &stream) {
-    const auto &parameters = *stream.codecpar;
-    return AudioStreamInfo{
-        .stream_index = stream.index,
-        .codec_name = codec_name_from_parameters(parameters),
-        .sample_format_name = sample_format_name_from_parameters(parameters),
-        .sample_rate = parameters.sample_rate,
-        .channel_count = parameters.ch_layout.nb_channels,
-        .channel_layout_name = channel_layout_name_from_parameters(parameters),
-        .timestamps = build_timestamp_info(stream),
-        .frame_count = to_optional_pts(stream.nb_frames)
-    };
-}
+using ffmpeg_support::FormatContextHandle;
 
 MediaInspectionResult make_error(
     std::string input_path,
@@ -203,7 +81,7 @@ MediaInspectionResult MediaInspector::inspect(const std::filesystem::path &input
             return make_error(
                 input_path_string,
                 "Failed to open media input '" + input_path_string + "'.",
-                "FFmpeg reported: " + ffmpeg_error_to_string(open_result)
+                "FFmpeg reported: " + ffmpeg_support::ffmpeg_error_to_string(open_result)
             );
         }
 
@@ -214,7 +92,7 @@ MediaInspectionResult MediaInspector::inspect(const std::filesystem::path &input
             return make_error(
                 input_path_string,
                 "Failed to read stream information from '" + input_path_string + "'.",
-                "FFmpeg reported: " + ffmpeg_error_to_string(stream_info_result)
+                "FFmpeg reported: " + ffmpeg_support::ffmpeg_error_to_string(stream_info_result)
             );
         }
 
@@ -230,7 +108,7 @@ MediaInspectionResult MediaInspector::inspect(const std::filesystem::path &input
             return make_error(
                 input_path_string,
                 "Failed to select a primary video stream from '" + input_path_string + "'.",
-                "FFmpeg reported: " + ffmpeg_error_to_string(primary_video_stream_index)
+                "FFmpeg reported: " + ffmpeg_support::ffmpeg_error_to_string(primary_video_stream_index)
             );
         }
 
@@ -246,7 +124,7 @@ MediaInspectionResult MediaInspector::inspect(const std::filesystem::path &input
             return make_error(
                 input_path_string,
                 "Failed to select a primary audio stream from '" + input_path_string + "'.",
-                "FFmpeg reported: " + ffmpeg_error_to_string(primary_audio_stream_index)
+                "FFmpeg reported: " + ffmpeg_support::ffmpeg_error_to_string(primary_audio_stream_index)
             );
         }
 
@@ -258,26 +136,13 @@ MediaInspectionResult MediaInspector::inspect(const std::filesystem::path &input
             );
         }
 
-        MediaSourceInfo media_source_info{
-            .input_name = normalized_input_path.filename().string(),
-            .container_format_name = format_context->iformat != nullptr ? format_context->iformat->name : "unknown",
-            .container_duration_microseconds = to_optional_pts(format_context->duration),
-            .primary_video_stream = std::nullopt,
-            .primary_audio_stream = std::nullopt
-        };
-
-        if (primary_video_stream_index >= 0) {
-            media_source_info.primary_video_stream =
-                build_video_stream_info(*format_context->streams[primary_video_stream_index]);
-        }
-
-        if (primary_audio_stream_index >= 0) {
-            media_source_info.primary_audio_stream =
-                build_audio_stream_info(*format_context->streams[primary_audio_stream_index]);
-        }
-
         return MediaInspectionResult{
-            .media_source_info = std::move(media_source_info),
+            .media_source_info = ffmpeg_support::build_media_source_info(
+                normalized_input_path,
+                *format_context,
+                primary_video_stream_index >= 0 ? primary_video_stream_index : -1,
+                primary_audio_stream_index >= 0 ? primary_audio_stream_index : -1
+            ),
             .error = std::nullopt
         };
     } catch (const std::exception &exception) {
