@@ -116,7 +116,12 @@ std::string format_media_decode_report(
         report << "audio.present=no\n";
     }
 
-    return report.str();
+    std::string formatted_report = report.str();
+    if (!formatted_report.empty() && formatted_report.back() == '\n') {
+        formatted_report.pop_back();
+    }
+
+    return formatted_report;
 }
 
 }  // namespace utsure::core::media
