@@ -21,6 +21,18 @@ function(utsure_normalize_path output_variable input_path)
     set(${output_variable} "${_normalized_path}" PARENT_SCOPE)
 endfunction()
 
+function(utsure_resolve_existing_path output_variable input_path)
+    if(NOT EXISTS "${input_path}")
+        set(${output_variable} "" PARENT_SCOPE)
+        return()
+    endif()
+
+    file(REAL_PATH "${input_path}" _resolved_path)
+    file(TO_CMAKE_PATH "${_resolved_path}" _resolved_path)
+    string(TOLOWER "${_resolved_path}" _resolved_path)
+    set(${output_variable} "${_resolved_path}" PARENT_SCOPE)
+endfunction()
+
 function(utsure_configure_dependencies)
     if(UTSURE_BUILD_APP)
         find_package(Qt6 ${UTSURE_QT_MIN_VERSION} REQUIRED COMPONENTS Widgets)
@@ -110,12 +122,21 @@ function(utsure_configure_dependencies)
         pkg_check_modules(UTSURE_LIBASS REQUIRED IMPORTED_TARGET GLOBAL libass)
         pkg_get_variable(UTSURE_LIBASS_PCFILEDIR libass pcfiledir)
         utsure_normalize_path(_libassmod_pcfiledir "${UTSURE_LIBASS_PCFILEDIR}")
+        set(_libassmod_actual_pcfile "${_libassmod_pcfiledir}/libass.pc")
 
-        string(FIND "${_libassmod_pcfiledir}" "${_libassmod_root}" _libassmod_root_match)
-        if(NOT _libassmod_root_match EQUAL 0)
+        if(NOT EXISTS "${_libassmod_actual_pcfile}")
             message(FATAL_ERROR
-                "pkg-config resolved 'libass' from '${_libassmod_pcfiledir}', but libassmod was expected from "
-                "'${_libassmod_root}'. Ensure libassmod's pkg-config prefix is ahead of any system libass entry."
+                "pkg-config resolved libass from '${_libassmod_pcfiledir}', but '${_libassmod_actual_pcfile}' does not exist."
+            )
+        endif()
+
+        utsure_resolve_existing_path(_libassmod_expected_pcfile_resolved "${_libassmod_pc_expected}")
+        utsure_resolve_existing_path(_libassmod_actual_pcfile_resolved "${_libassmod_actual_pcfile}")
+
+        if(NOT _libassmod_expected_pcfile_resolved STREQUAL _libassmod_actual_pcfile_resolved)
+            message(FATAL_ERROR
+                "pkg-config resolved 'libass' from '${_libassmod_actual_pcfile_resolved}', but libassmod was expected at "
+                "'${_libassmod_expected_pcfile_resolved}'. Ensure libassmod's pkg-config prefix is ahead of any system libass entry."
             )
         endif()
 
