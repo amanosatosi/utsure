@@ -33,134 +33,133 @@ function(utsure_resolve_existing_path output_variable input_path)
     set(${output_variable} "${_resolved_path}" PARENT_SCOPE)
 endfunction()
 
-function(utsure_configure_dependencies)
+macro(utsure_configure_dependencies)
     if(UTSURE_BUILD_APP)
         find_package(Qt6 ${UTSURE_QT_MIN_VERSION} REQUIRED COMPONENTS Widgets)
     endif()
 
     if(NOT UTSURE_ENABLE_DEPENDENCY_AUDIT)
         message(STATUS "UTSURE dependency audit is disabled.")
-        return()
-    endif()
+    else()
+        find_package(PkgConfig REQUIRED)
 
-    find_package(PkgConfig REQUIRED)
+        pkg_check_modules(UTSURE_LIBAVCODEC REQUIRED IMPORTED_TARGET GLOBAL libavcodec)
+        pkg_check_modules(UTSURE_LIBAVFILTER REQUIRED IMPORTED_TARGET GLOBAL libavfilter)
+        pkg_check_modules(UTSURE_LIBAVFORMAT REQUIRED IMPORTED_TARGET GLOBAL libavformat)
+        pkg_check_modules(UTSURE_LIBAVUTIL REQUIRED IMPORTED_TARGET GLOBAL libavutil)
+        pkg_check_modules(UTSURE_LIBSWRESAMPLE REQUIRED IMPORTED_TARGET GLOBAL libswresample)
+        pkg_check_modules(UTSURE_LIBSWSCALE REQUIRED IMPORTED_TARGET GLOBAL libswscale)
+        pkg_check_modules(UTSURE_X264 REQUIRED IMPORTED_TARGET GLOBAL x264)
+        pkg_check_modules(UTSURE_X265 REQUIRED IMPORTED_TARGET GLOBAL x265)
 
-    pkg_check_modules(UTSURE_LIBAVCODEC REQUIRED IMPORTED_TARGET GLOBAL libavcodec)
-    pkg_check_modules(UTSURE_LIBAVFILTER REQUIRED IMPORTED_TARGET GLOBAL libavfilter)
-    pkg_check_modules(UTSURE_LIBAVFORMAT REQUIRED IMPORTED_TARGET GLOBAL libavformat)
-    pkg_check_modules(UTSURE_LIBAVUTIL REQUIRED IMPORTED_TARGET GLOBAL libavutil)
-    pkg_check_modules(UTSURE_LIBSWRESAMPLE REQUIRED IMPORTED_TARGET GLOBAL libswresample)
-    pkg_check_modules(UTSURE_LIBSWSCALE REQUIRED IMPORTED_TARGET GLOBAL libswscale)
-    pkg_check_modules(UTSURE_X264 REQUIRED IMPORTED_TARGET GLOBAL x264)
-    pkg_check_modules(UTSURE_X265 REQUIRED IMPORTED_TARGET GLOBAL x265)
-
-    if(NOT TARGET utsure_ffmpeg)
-        add_library(utsure_ffmpeg INTERFACE)
-        add_library(utsure::ffmpeg ALIAS utsure_ffmpeg)
-        target_link_libraries(utsure_ffmpeg
-            INTERFACE
-                PkgConfig::UTSURE_LIBAVCODEC
-                PkgConfig::UTSURE_LIBAVFILTER
-                PkgConfig::UTSURE_LIBAVFORMAT
-                PkgConfig::UTSURE_LIBAVUTIL
-                PkgConfig::UTSURE_LIBSWRESAMPLE
-                PkgConfig::UTSURE_LIBSWSCALE
-        )
-    endif()
-
-    if(NOT TARGET utsure_x264)
-        add_library(utsure_x264 INTERFACE)
-        add_library(utsure::x264 ALIAS utsure_x264)
-        target_link_libraries(utsure_x264 INTERFACE PkgConfig::UTSURE_X264)
-    endif()
-
-    if(NOT TARGET utsure_x265)
-        add_library(utsure_x265 INTERFACE)
-        add_library(utsure::x265 ALIAS utsure_x265)
-        target_link_libraries(utsure_x265 INTERFACE PkgConfig::UTSURE_X265)
-    endif()
-
-    set(_libassmod_status "not validated")
-    set(_libassmod_pcfiledir "")
-
-    if(UTSURE_REQUIRE_LIBASSMOD OR NOT "${UTSURE_LIBASSMOD_ROOT}" STREQUAL "")
-        if("${UTSURE_LIBASSMOD_ROOT}" STREQUAL "")
-            message(FATAL_ERROR
-                "UTSURE_REQUIRE_LIBASSMOD is ON, but UTSURE_LIBASSMOD_ROOT is empty. "
-                "Build libassmod into an isolated prefix and point UTSURE_LIBASSMOD_ROOT at that prefix."
+        if(NOT TARGET utsure_ffmpeg)
+            add_library(utsure_ffmpeg INTERFACE)
+            add_library(utsure::ffmpeg ALIAS utsure_ffmpeg)
+            target_link_libraries(utsure_ffmpeg
+                INTERFACE
+                    PkgConfig::UTSURE_LIBAVCODEC
+                    PkgConfig::UTSURE_LIBAVFILTER
+                    PkgConfig::UTSURE_LIBAVFORMAT
+                    PkgConfig::UTSURE_LIBAVUTIL
+                    PkgConfig::UTSURE_LIBSWRESAMPLE
+                    PkgConfig::UTSURE_LIBSWSCALE
             )
         endif()
 
-        utsure_normalize_path(_libassmod_root "${UTSURE_LIBASSMOD_ROOT}")
+        if(NOT TARGET utsure_x264)
+            add_library(utsure_x264 INTERFACE)
+            add_library(utsure::x264 ALIAS utsure_x264)
+            target_link_libraries(utsure_x264 INTERFACE PkgConfig::UTSURE_X264)
+        endif()
 
-        set(_libassmod_header_path "${_libassmod_root}/include/ass/ass.h")
-        set(_libassmod_pc_candidates
-            "${_libassmod_root}/lib/pkgconfig/libass.pc"
-            "${_libassmod_root}/lib64/pkgconfig/libass.pc"
-        )
-        set(_libassmod_pc_expected "")
+        if(NOT TARGET utsure_x265)
+            add_library(utsure_x265 INTERFACE)
+            add_library(utsure::x265 ALIAS utsure_x265)
+            target_link_libraries(utsure_x265 INTERFACE PkgConfig::UTSURE_X265)
+        endif()
 
-        foreach(_candidate IN LISTS _libassmod_pc_candidates)
-            if(EXISTS "${_candidate}")
-                set(_libassmod_pc_expected "${_candidate}")
-                break()
+        set(_libassmod_status "not validated")
+        set(_libassmod_pcfiledir "")
+
+        if(UTSURE_REQUIRE_LIBASSMOD OR NOT "${UTSURE_LIBASSMOD_ROOT}" STREQUAL "")
+            if("${UTSURE_LIBASSMOD_ROOT}" STREQUAL "")
+                message(FATAL_ERROR
+                    "UTSURE_REQUIRE_LIBASSMOD is ON, but UTSURE_LIBASSMOD_ROOT is empty. "
+                    "Build libassmod into an isolated prefix and point UTSURE_LIBASSMOD_ROOT at that prefix."
+                )
             endif()
-        endforeach()
 
-        if(NOT EXISTS "${_libassmod_header_path}")
-            message(FATAL_ERROR
-                "libassmod was expected under '${_libassmod_root}', but '${_libassmod_header_path}' was not found."
+            utsure_normalize_path(_libassmod_root "${UTSURE_LIBASSMOD_ROOT}")
+
+            set(_libassmod_header_path "${_libassmod_root}/include/ass/ass.h")
+            set(_libassmod_pc_candidates
+                "${_libassmod_root}/lib/pkgconfig/libass.pc"
+                "${_libassmod_root}/lib64/pkgconfig/libass.pc"
             )
+            set(_libassmod_pc_expected "")
+
+            foreach(_candidate IN LISTS _libassmod_pc_candidates)
+                if(EXISTS "${_candidate}")
+                    set(_libassmod_pc_expected "${_candidate}")
+                    break()
+                endif()
+            endforeach()
+
+            if(NOT EXISTS "${_libassmod_header_path}")
+                message(FATAL_ERROR
+                    "libassmod was expected under '${_libassmod_root}', but '${_libassmod_header_path}' was not found."
+                )
+            endif()
+
+            if("${_libassmod_pc_expected}" STREQUAL "")
+                message(FATAL_ERROR
+                    "libassmod was expected under '${_libassmod_root}', but no libass pkg-config file was found."
+                )
+            endif()
+
+            pkg_check_modules(UTSURE_LIBASS REQUIRED IMPORTED_TARGET GLOBAL libass)
+            pkg_get_variable(UTSURE_LIBASS_PCFILEDIR libass pcfiledir)
+            utsure_normalize_path(_libassmod_pcfiledir "${UTSURE_LIBASS_PCFILEDIR}")
+            set(_libassmod_actual_pcfile "${_libassmod_pcfiledir}/libass.pc")
+
+            if(NOT EXISTS "${_libassmod_actual_pcfile}")
+                message(FATAL_ERROR
+                    "pkg-config resolved libass from '${_libassmod_pcfiledir}', but '${_libassmod_actual_pcfile}' does not exist."
+                )
+            endif()
+
+            utsure_resolve_existing_path(_libassmod_expected_pcfile_resolved "${_libassmod_pc_expected}")
+            utsure_resolve_existing_path(_libassmod_actual_pcfile_resolved "${_libassmod_actual_pcfile}")
+
+            if(NOT _libassmod_expected_pcfile_resolved STREQUAL _libassmod_actual_pcfile_resolved)
+                message(FATAL_ERROR
+                    "pkg-config resolved 'libass' from '${_libassmod_actual_pcfile_resolved}', but libassmod was expected at "
+                    "'${_libassmod_expected_pcfile_resolved}'. Ensure libassmod's pkg-config prefix is ahead of any system libass entry."
+                )
+            endif()
+
+            if(NOT TARGET utsure_subtitle_renderer_dependency)
+                add_library(utsure_subtitle_renderer_dependency INTERFACE)
+                add_library(utsure::subtitle_renderer_dependency ALIAS utsure_subtitle_renderer_dependency)
+                target_link_libraries(utsure_subtitle_renderer_dependency INTERFACE PkgConfig::UTSURE_LIBASS)
+            endif()
+
+            set(_libassmod_status "validated from ${_libassmod_pcfiledir}")
+            set(_libassmod_pcfiledir "${_libassmod_pcfiledir}")
         endif()
 
-        if("${_libassmod_pc_expected}" STREQUAL "")
-            message(FATAL_ERROR
-                "libassmod was expected under '${_libassmod_root}', but no libass pkg-config file was found."
-            )
+        message(STATUS "UTSURE dependency audit summary:")
+        if(UTSURE_BUILD_APP)
+            message(STATUS "  Qt6 Widgets: found via CMake package config")
         endif()
-
-        pkg_check_modules(UTSURE_LIBASS REQUIRED IMPORTED_TARGET GLOBAL libass)
-        pkg_get_variable(UTSURE_LIBASS_PCFILEDIR libass pcfiledir)
-        utsure_normalize_path(_libassmod_pcfiledir "${UTSURE_LIBASS_PCFILEDIR}")
-        set(_libassmod_actual_pcfile "${_libassmod_pcfiledir}/libass.pc")
-
-        if(NOT EXISTS "${_libassmod_actual_pcfile}")
-            message(FATAL_ERROR
-                "pkg-config resolved libass from '${_libassmod_pcfiledir}', but '${_libassmod_actual_pcfile}' does not exist."
-            )
-        endif()
-
-        utsure_resolve_existing_path(_libassmod_expected_pcfile_resolved "${_libassmod_pc_expected}")
-        utsure_resolve_existing_path(_libassmod_actual_pcfile_resolved "${_libassmod_actual_pcfile}")
-
-        if(NOT _libassmod_expected_pcfile_resolved STREQUAL _libassmod_actual_pcfile_resolved)
-            message(FATAL_ERROR
-                "pkg-config resolved 'libass' from '${_libassmod_actual_pcfile_resolved}', but libassmod was expected at "
-                "'${_libassmod_expected_pcfile_resolved}'. Ensure libassmod's pkg-config prefix is ahead of any system libass entry."
-            )
-        endif()
-
-        if(NOT TARGET utsure_subtitle_renderer_dependency)
-            add_library(utsure_subtitle_renderer_dependency INTERFACE)
-            add_library(utsure::subtitle_renderer_dependency ALIAS utsure_subtitle_renderer_dependency)
-            target_link_libraries(utsure_subtitle_renderer_dependency INTERFACE PkgConfig::UTSURE_LIBASS)
-        endif()
-
-        set(_libassmod_status "validated from ${_libassmod_pcfiledir}")
-        set(_libassmod_pcfiledir "${_libassmod_pcfiledir}")
+        message(STATUS "  FFmpeg libavcodec: ${UTSURE_LIBAVCODEC_VERSION}")
+        message(STATUS "  FFmpeg libavfilter: ${UTSURE_LIBAVFILTER_VERSION}")
+        message(STATUS "  FFmpeg libavformat: ${UTSURE_LIBAVFORMAT_VERSION}")
+        message(STATUS "  FFmpeg libavutil: ${UTSURE_LIBAVUTIL_VERSION}")
+        message(STATUS "  FFmpeg libswresample: ${UTSURE_LIBSWRESAMPLE_VERSION}")
+        message(STATUS "  FFmpeg libswscale: ${UTSURE_LIBSWSCALE_VERSION}")
+        message(STATUS "  x264: ${UTSURE_X264_VERSION}")
+        message(STATUS "  x265: ${UTSURE_X265_VERSION}")
+        message(STATUS "  libassmod: ${_libassmod_status}")
     endif()
-
-    message(STATUS "UTSURE dependency audit summary:")
-    if(UTSURE_BUILD_APP)
-        message(STATUS "  Qt6 Widgets: found via CMake package config")
-    endif()
-    message(STATUS "  FFmpeg libavcodec: ${UTSURE_LIBAVCODEC_VERSION}")
-    message(STATUS "  FFmpeg libavfilter: ${UTSURE_LIBAVFILTER_VERSION}")
-    message(STATUS "  FFmpeg libavformat: ${UTSURE_LIBAVFORMAT_VERSION}")
-    message(STATUS "  FFmpeg libavutil: ${UTSURE_LIBAVUTIL_VERSION}")
-    message(STATUS "  FFmpeg libswresample: ${UTSURE_LIBSWRESAMPLE_VERSION}")
-    message(STATUS "  FFmpeg libswscale: ${UTSURE_LIBSWSCALE_VERSION}")
-    message(STATUS "  x264: ${UTSURE_X264_VERSION}")
-    message(STATUS "  x265: ${UTSURE_X265_VERSION}")
-    message(STATUS "  libassmod: ${_libassmod_status}")
-endfunction()
+endmacro()
