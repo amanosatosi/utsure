@@ -247,6 +247,11 @@ TimelineAssemblyResult TimelineAssembler::assemble(const TimelineAssemblyRequest
             },
             .error = std::nullopt
         };
+    } catch (const std::runtime_error &exception) {
+        return make_assembly_error(
+            exception.what(),
+            "Adjust the intro/outro clips so their formats and cadence match the supported timeline rules."
+        );
     } catch (const std::exception &exception) {
         return make_assembly_error(
             "Timeline assembly aborted because an unexpected exception was raised.",
@@ -386,6 +391,11 @@ TimelineCompositionResult TimelineComposer::compose(
             },
             .error = std::nullopt
         };
+    } catch (const std::runtime_error &exception) {
+        return make_composition_error(
+            exception.what(),
+            "Adjust the decoded segment cadence or audio layout so every composed segment matches the main timeline."
+        );
     } catch (const std::exception &exception) {
         return make_composition_error(
             "Timeline composition aborted because an unexpected exception was raised.",
