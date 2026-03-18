@@ -22,6 +22,7 @@ using utsure::core::media::OutputVideoCodec;
 
 constexpr std::string_view kExpectedH264Report =
     "job.input.main_source=inspection-sample.avi\n"
+    "job.subtitles.present=no\n"
     "job.output.path=job-sample-h264.mp4\n"
     "job.output.video.codec=h264\n"
     "job.output.video.preset=medium\n"
@@ -39,6 +40,7 @@ constexpr std::string_view kExpectedH264Report =
     "input.audio.sample_rate=48000\n"
     "decoded.video_frames=48\n"
     "decoded.audio_blocks=94\n"
+    "subtitles.burned_video_frames=0\n"
     "output.container=mov,mp4,m4a,3gp,3g2,mj2\n"
     "output.encoded_video_frames=48\n"
     "output.video.present=yes\n"
@@ -55,6 +57,7 @@ constexpr std::string_view kExpectedH264Report =
 
 constexpr std::string_view kExpectedH265Report =
     "job.input.main_source=inspection-sample.avi\n"
+    "job.subtitles.present=no\n"
     "job.output.path=job-sample-h265.mp4\n"
     "job.output.video.codec=h265\n"
     "job.output.video.preset=medium\n"
@@ -72,6 +75,7 @@ constexpr std::string_view kExpectedH265Report =
     "input.audio.sample_rate=48000\n"
     "decoded.video_frames=48\n"
     "decoded.audio_blocks=94\n"
+    "subtitles.burned_video_frames=0\n"
     "output.container=mov,mp4,m4a,3gp,3g2,mj2\n"
     "output.encoded_video_frames=48\n"
     "output.video.present=yes\n"

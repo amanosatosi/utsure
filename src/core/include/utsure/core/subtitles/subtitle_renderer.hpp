@@ -84,5 +84,6 @@ public:
 };
 
 [[nodiscard]] const char *to_string(SubtitleBitmapPixelFormat pixel_format) noexcept;
+[[nodiscard]] std::unique_ptr<SubtitleRenderer> create_default_subtitle_renderer();
 
 }  // namespace utsure::core::subtitles

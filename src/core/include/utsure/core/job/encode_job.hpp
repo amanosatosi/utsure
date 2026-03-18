@@ -14,6 +14,11 @@ struct EncodeJobInput final {
     std::filesystem::path main_source_path{};
 };
 
+struct EncodeJobSubtitleSettings final {
+    std::filesystem::path subtitle_path{};
+    std::string format_hint{"ass"};
+};
+
 struct EncodeJobVideoOutputSettings final {
     media::OutputVideoCodec codec{media::OutputVideoCodec::h264};
     std::string preset{"medium"};
@@ -27,6 +32,7 @@ struct EncodeJobOutputSettings final {
 
 struct EncodeJob final {
     EncodeJobInput input{};
+    std::optional<EncodeJobSubtitleSettings> subtitles{};
     EncodeJobOutputSettings output{};
 };
 
@@ -36,6 +42,7 @@ struct EncodeJobSummary final {
     media::DecodeNormalizationPolicy decode_normalization_policy{};
     std::int64_t decoded_video_frame_count{0};
     std::int64_t decoded_audio_block_count{0};
+    std::int64_t subtitled_video_frame_count{0};
     media::EncodedMediaSummary encoded_media_summary{};
 };
 

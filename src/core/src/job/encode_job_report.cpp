@@ -36,6 +36,11 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
     std::ostringstream report;
 
     report << "job.input.main_source=" << format_path_leaf(encode_job_summary.job.input.main_source_path) << '\n';
+    report << "job.subtitles.present=" << (encode_job_summary.job.subtitles.has_value() ? "yes" : "no") << '\n';
+    if (encode_job_summary.job.subtitles.has_value()) {
+        report << "job.subtitles.path=" << format_path_leaf(encode_job_summary.job.subtitles->subtitle_path) << '\n';
+        report << "job.subtitles.format_hint=" << encode_job_summary.job.subtitles->format_hint << '\n';
+    }
     report << "job.output.path=" << format_path_leaf(encode_job_summary.job.output.output_path) << '\n';
     report << "job.output.video.codec=" << media::to_string(encode_job_summary.job.output.video.codec) << '\n';
     report << "job.output.video.preset=" << encode_job_summary.job.output.video.preset << '\n';
@@ -68,6 +73,7 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
 
     report << "decoded.video_frames=" << encode_job_summary.decoded_video_frame_count << '\n';
     report << "decoded.audio_blocks=" << encode_job_summary.decoded_audio_block_count << '\n';
+    report << "subtitles.burned_video_frames=" << encode_job_summary.subtitled_video_frame_count << '\n';
     report << "output.container=" << encode_job_summary.encoded_media_summary.output_info.container_format_name << '\n';
     report << "output.encoded_video_frames=" << encode_job_summary.encoded_media_summary.encoded_video_frame_count
            << '\n';

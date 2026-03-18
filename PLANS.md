@@ -14,6 +14,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [ ] M7 Decode and normalized processing flow is implemented and awaiting CI validation.
 - [ ] M9 Software encoding backends are implemented and awaiting CI validation.
 - [ ] M10 Subtitle renderer abstraction is implemented and awaiting CI validation.
+- [ ] M14 libassmod subtitle burn-in is implemented and awaiting CI validation.
 
 ## Active assumptions
 
@@ -30,6 +31,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The software encoding backend milestone is also being pulled ahead of the broader project/timeline and session-orchestration milestones by explicit user request, and it remains limited to the main-source decoded video path with minimal codec configuration.
 - The muxed-output job/config milestone is also being pulled ahead of broader timeline and session modeling by explicit user request, and it remains limited to main-source video-only output settings.
 - The subtitle renderer abstraction milestone is also being pulled ahead of timeline assembly and subtitle burn-in integration by explicit user request, and it remains limited to a technology-agnostic renderer boundary plus timestamped RGBA-oriented render contracts.
+- The libassmod subtitle burn-in milestone is also being pulled ahead of intro/outro and broader timeline work by explicit user request, and it remains limited to main-source ASS subtitle burn-in before final encode.
 
 ## Architecture direction
 
@@ -313,6 +315,37 @@ Done criteria:
 - The boundary is clean enough to support multiple implementations later.
 - The rest of the pipeline depends on the abstraction, not directly on `libassmod`.
 
+### M14 Integrate libassmod subtitle burn-in
+
+Status: Implemented, pending CI validation
+
+Scope:
+- Implement the `libassmod`-backed subtitle renderer behind the core subtitle abstraction.
+- Render ASS subtitle output at decoded frame timestamps and composite it onto RGBA video frames before final encode.
+- Keep timestamp handling exact and defer intro/outro logic and broader timeline integration.
+
+Likely files/modules:
+- `src/core/include/utsure/core/subtitles/`
+- `src/core/src/adapters/libassmod/`
+- `src/core/src/subtitles/`
+- `src/core/src/job/`
+- `tests/core/`
+
+Risks:
+- Misinterpreting `libassmod` bitmap alpha/color semantics and producing weak burn-in output.
+- Letting libass-specific choices leak out of the abstraction and into job or media headers.
+- Counting subtitle timing correctly at frame boundaries while preserving the main-source cadence.
+
+Validation:
+- Core tests verify `libassmod` rendering visibility at representative timestamps for a sample ASS script.
+- H.264 and H.265 burn-in job tests verify valid encoded outputs, preserved cadence, and visible subtitle changes in the encoded video.
+
+Done criteria:
+- The pipeline can load an ASS subtitle file.
+- Subtitles render at the correct timestamps.
+- Subtitle bitmaps composite onto output video frames before encode.
+- The pipeline produces a valid encoded output with burned-in subtitles.
+
 ### M11 Extend encode support to H.265
 
 Status: Merged into M9 software encoding backends
@@ -386,4 +419,4 @@ Done criteria:
 
 ## Immediate next milestone
 
-Return to the broader project and timeline contracts before concrete `libassmod` rendering and subtitle burn-in integration, then re-run CI so the implemented milestones can be closed with real build validation.
+Return to the broader project and timeline contracts before intro/outro and broader subtitle/timeline orchestration, then re-run CI so the implemented milestones can be closed with real build validation.

@@ -2,8 +2,14 @@ find_program(UTSURE_FFMPEG_EXECUTABLE NAMES ffmpeg REQUIRED)
 
 set(UTSURE_TEST_MEDIA_DIR "${CMAKE_CURRENT_BINARY_DIR}/media")
 set(UTSURE_SAMPLE_MEDIA_FILE "${UTSURE_TEST_MEDIA_DIR}/inspection-sample.avi")
+set(UTSURE_SUBTITLE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-sample.ass")
 
 file(MAKE_DIRECTORY "${UTSURE_TEST_MEDIA_DIR}")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-sample.ass"
+    "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+    COPYONLY
+)
 
 add_custom_command(
     OUTPUT "${UTSURE_SAMPLE_MEDIA_FILE}"
@@ -149,4 +155,42 @@ add_test(
 add_test(
     NAME utsure.core.subtitles.renderer.error
     COMMAND utsure_core_subtitle_renderer_tests --error
+)
+
+add_executable(utsure_core_subtitle_burn_in_tests
+    subtitle_burn_in_tests.cpp
+)
+
+target_link_libraries(utsure_core_subtitle_burn_in_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_core_subtitle_burn_in_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_subtitle_burn_in_tests)
+
+add_dependencies(utsure_core_subtitle_burn_in_tests utsure_generate_sample_media)
+
+add_test(
+    NAME utsure.core.subtitles.libassmod.render
+    COMMAND utsure_core_subtitle_burn_in_tests --render "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.h264
+    COMMAND utsure_core_subtitle_burn_in_tests --h264
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/subtitle-plain-h264.mp4"
+        "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-h264.mp4"
+)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.h265
+    COMMAND utsure_core_subtitle_burn_in_tests --h265
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/subtitle-plain-h265.mp4"
+        "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-h265.mp4"
 )
