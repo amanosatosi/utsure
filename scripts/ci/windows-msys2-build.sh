@@ -20,6 +20,9 @@ cmake -S . -B build -G Ninja \
 
 cmake --build build --target utsure_encoder_core --parallel
 cmake --build build --target utsure_encoder_app --parallel
+cmake --build build --target utsure_core_media_inspection_tests --parallel
+
+ctest --test-dir build --output-on-failure
 
 export QT_PLUGIN_PATH="/ucrt64/share/qt6/plugins"
 export QT_QPA_PLATFORM="offscreen"

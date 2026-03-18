@@ -7,8 +7,9 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M0 Repository inspection completed.
 - [x] M1 Repo scaffolding docs completed.
 - [ ] M2 Project skeleton is implemented and awaiting CI validation.
-- [ ] M3 Core-only build foundation is partially implemented; the first test target is still pending.
+- [ ] M3 Core-only build foundation is implemented and awaiting CI validation.
 - [ ] M4 Dependency strategy and adapter seams are implemented and awaiting CI validation.
+- [ ] M6 Media input inspection is implemented and awaiting CI validation.
 
 ## Active assumptions
 
@@ -20,6 +21,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - Correctness comes before performance work.
 - Windows build validation is currently anchored in GitHub Actions because the local machine does not expose a Qt-capable compiler toolchain.
 - `libassmod` is currently treated as a pinned source dependency built into an isolated prefix because it installs as a `libass`-compatible package name rather than a uniquely named `libassmod` package.
+- Media inspection was intentionally pulled ahead of broader project/timeline contracts because those contracts need real stream metadata and explicit cadence fields instead of placeholder assumptions.
 
 ## Architecture direction
 
@@ -79,7 +81,7 @@ Done criteria:
 
 ### M3 Establish core-only build and test foundation
 
-Status: In progress
+Status: Implemented, pending CI validation
 
 Scope:
 - Create an empty `encoder-core` target and a minimal test target.
@@ -162,6 +164,8 @@ Done criteria:
 - Frame-rate ownership by the main source is explicit in the model or validation rules.
 
 ### M6 Implement FFmpeg-based media probing and normalization rules
+
+Status: Implemented, pending CI validation
 
 Scope:
 - Add a media probe service that reads stream properties from candidate inputs.
@@ -334,4 +338,4 @@ Done criteria:
 
 ## Immediate next milestone
 
-Complete M3 by adding the first core test target, then re-run CI so M2 and M4 can be closed with real build validation.
+Define the first project and timeline contracts on top of inspected media metadata, then re-run CI so M2, M3, M4, and M6 can be closed with real build validation.

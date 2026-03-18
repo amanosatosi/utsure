@@ -4,6 +4,8 @@ project(utsure VERSION 0.1.0 LANGUAGES CXX)
 
 option(UTSURE_BUILD_APP "Build the Qt 6 Widgets desktop application." ON)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -20,4 +22,8 @@ add_subdirectory(src/core)
 
 if(UTSURE_BUILD_APP)
     add_subdirectory(src/app)
+endif()
+
+if(BUILD_TESTING)
+    add_subdirectory(tests)
 endif()

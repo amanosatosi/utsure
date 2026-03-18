@@ -1,5 +1,7 @@
 add_library(utsure_encoder_core STATIC
     src/build_info.cpp
+    src/media/media_inspector.cpp
+    src/media/media_inspection_report.cpp
 )
 
 add_library(utsure::encoder_core ALIAS utsure_encoder_core)
@@ -9,6 +11,11 @@ target_compile_features(utsure_encoder_core PUBLIC cxx_std_20)
 target_include_directories(utsure_encoder_core
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+)
+
+target_link_libraries(utsure_encoder_core
+    PRIVATE
+        utsure::ffmpeg
 )
 
 target_compile_definitions(utsure_encoder_core

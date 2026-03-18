@@ -6,7 +6,7 @@
 
 The repository currently contains the initial project skeleton:
 
-- `utsure_encoder_core`: reusable C++ target for future media, timeline, subtitle, and encode logic.
+- `utsure_encoder_core`: reusable C++ target for media inspection and future media, timeline, subtitle, and encode logic.
 - `utsure_encoder_app`: Qt 6 Widgets desktop shell that links the core and launches a minimal window.
 - Windows GitHub Actions build validation using MSYS2 UCRT64, CMake, Ninja, Qt 6 Widgets, FFmpeg, `libx264`, `libx265`, and a pinned source build of `libassmod`.
 
@@ -29,8 +29,8 @@ The repository is set up to build in GitHub Actions on Windows. The workflow:
 2. Builds a pinned `libassmod` source dependency into an isolated prefix.
 3. Audits configure-time dependency discovery.
 4. Configures the project with CMake.
-5. Builds `utsure_encoder_core`.
-6. Builds `utsure_encoder_app`.
+5. Builds `utsure_encoder_core`, `utsure_encoder_app`, and the core media inspection test executable.
+6. Generates a deterministic sample media file and runs the core inspection tests.
 7. Launches the Qt app in offscreen smoke-test mode.
 
 See:
