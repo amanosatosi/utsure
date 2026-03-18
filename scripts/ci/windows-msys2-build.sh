@@ -24,6 +24,7 @@ cmake --build build --target utsure_core_media_inspection_tests --parallel
 cmake --build build --target utsure_core_media_decode_tests --parallel
 cmake --build build --target utsure_core_media_encode_tests --parallel
 cmake --build build --target utsure_core_encode_job_tests --parallel
+cmake --build build --target utsure_core_subtitle_renderer_tests --parallel
 
 ctest --test-dir build --output-on-failure
 

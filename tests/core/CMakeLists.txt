@@ -127,3 +127,26 @@ add_test(
         "${UTSURE_SAMPLE_MEDIA_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/job-sample-h265.mp4"
 )
+
+add_executable(utsure_core_subtitle_renderer_tests
+    subtitle_renderer_tests.cpp
+)
+
+target_link_libraries(utsure_core_subtitle_renderer_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_core_subtitle_renderer_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_subtitle_renderer_tests)
+
+add_test(
+    NAME utsure.core.subtitles.renderer.flow
+    COMMAND utsure_core_subtitle_renderer_tests --flow
+)
+
+add_test(
+    NAME utsure.core.subtitles.renderer.error
+    COMMAND utsure_core_subtitle_renderer_tests --error
+)

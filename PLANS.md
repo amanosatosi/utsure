@@ -13,6 +13,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [ ] M6 Media input inspection is implemented and awaiting CI validation.
 - [ ] M7 Decode and normalized processing flow is implemented and awaiting CI validation.
 - [ ] M9 Software encoding backends are implemented and awaiting CI validation.
+- [ ] M10 Subtitle renderer abstraction is implemented and awaiting CI validation.
 
 ## Active assumptions
 
@@ -28,6 +29,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The decode and normalized processing milestone is also being pulled ahead of the broader project/timeline contracts by explicit user request, but it remains limited to the main source path only.
 - The software encoding backend milestone is also being pulled ahead of the broader project/timeline and session-orchestration milestones by explicit user request, and it remains limited to the main-source decoded video path with minimal codec configuration.
 - The muxed-output job/config milestone is also being pulled ahead of broader timeline and session modeling by explicit user request, and it remains limited to main-source video-only output settings.
+- The subtitle renderer abstraction milestone is also being pulled ahead of timeline assembly and subtitle burn-in integration by explicit user request, and it remains limited to a technology-agnostic renderer boundary plus timestamped RGBA-oriented render contracts.
 
 ## Architecture direction
 
@@ -282,30 +284,34 @@ Done criteria:
 - Output timestamps remain coherent.
 - Resulting files are structurally valid.
 
-### M10 Add subtitle renderer adapter and burn-in path
+### M10 Add subtitle renderer abstraction and libassmod adapter seam
+
+Status: Implemented, pending CI validation
 
 Scope:
-- Introduce the subtitle renderer abstraction and `libassmod` implementation.
-- Burn subtitles into the video path without leaking renderer details into the domain model.
-- Define subtitle timing expectations against the assembled timeline.
+- Introduce the subtitle renderer abstraction and session lifecycle in `encoder-core`.
+- Define how the pipeline requests subtitle output at a given timestamp and receives RGBA-oriented overlay data.
+- Keep `libassmod`-specific parsing and rendering behavior outside the abstraction and defer actual burn-in integration.
 
 Likely files/modules:
-- `src/core/subtitles/`
+- `src/core/include/utsure/core/subtitles/`
+- `src/core/src/subtitles/`
 - `src/core/adapters/libassmod/`
-- `tests/integration/subtitles/`
+- `tests/core/`
 
 Risks:
-- Subtitle timing alignment across intro/main/outro boundaries.
-- Pixel format conversions and color handling around burn-in.
-- Tight coupling between the renderer and FFmpeg frame handling.
+- Overfitting the abstraction to `libassmod` instead of a reusable renderer contract.
+- Choosing a subtitle surface shape that makes later RGBA composition awkward.
+- Pulling subtitle-specific policy into unrelated pipeline code before the timeline exists.
 
 Validation:
-- Integration test with a known subtitle sample and visual or metadata-based verification.
-- Tests ensure subtitle timing is correct relative to the assembled timeline.
+- Core tests exercise subtitle session creation and timestamped render requests through the abstraction using a fake implementation.
+- Public headers compile without exposing `libassmod` types or linking subtitle technology into unrelated core code.
 
 Done criteria:
-- Subtitle burn-in works through the adapter boundary.
-- Core logic can request subtitle rendering without knowing `libassmod` details.
+- There is a subtitle-renderer abstraction in `encoder-core`.
+- The boundary is clean enough to support multiple implementations later.
+- The rest of the pipeline depends on the abstraction, not directly on `libassmod`.
 
 ### M11 Extend encode support to H.265
 
@@ -380,4 +386,4 @@ Done criteria:
 
 ## Immediate next milestone
 
-Return to the broader project and timeline contracts on top of the inspected, decoded, encoded, and job-driven media flow, then re-run CI so M2, M3, M4, M5, M6, M7, and M9 can be closed with real build validation.
+Return to the broader project and timeline contracts before concrete `libassmod` rendering and subtitle burn-in integration, then re-run CI so the implemented milestones can be closed with real build validation.

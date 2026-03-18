@@ -4,7 +4,7 @@
 
 ## Current scope
 
-The repository currently contains the initial project skeleton plus the first media inspection, source decode path, minimal software video encode backends, and a small core encode-job model:
+The repository currently contains the initial project skeleton plus the first media inspection, source decode path, minimal software video encode backends, a small core encode-job model, and a subtitle renderer abstraction:
 
 - `utsure_encoder_core`: reusable C++ target for media inspection, source decode normalization, minimal software video encode backends, and future media, timeline, subtitle, and broader encode logic.
 - `utsure_encoder_app`: Qt 6 Widgets desktop shell that links the core and launches a minimal window.
@@ -16,12 +16,13 @@ Implemented so far:
 - Main-source decode into normalized internal video frame and audio sample objects with explicit timestamps.
 - Main-source software video encode backends for `libx264` and `libx265` with minimal codec, preset, and CRF settings.
 - A core job/config layer that drives inspect -> decode -> muxed video encode without introducing GUI-bound settings types.
+- A technology-agnostic subtitle renderer/session boundary with timestamped RGBA-oriented overlay contracts.
 
 Not implemented yet:
 
 - Audio output encode.
 - Timeline assembly.
-- Subtitle burn-in.
+- `libassmod` subtitle rendering and subtitle burn-in composition.
 - Broader timeline, subtitle, and audio-capable encode session orchestration.
 
 ## Layout
@@ -41,8 +42,8 @@ The repository is set up to build in GitHub Actions on Windows. The workflow:
 2. Builds a pinned `libassmod` source dependency into an isolated prefix.
 3. Audits configure-time dependency discovery.
 4. Configures the project with CMake.
-5. Builds `utsure_encoder_core`, `utsure_encoder_app`, and the core media inspection, decode, encode, and job-level encode test executables.
-6. Generates a deterministic sample media file and runs the core inspection, decode, encode, and job-level encode tests.
+5. Builds `utsure_encoder_core`, `utsure_encoder_app`, and the core media inspection, decode, encode, job-level encode, and subtitle-renderer abstraction test executables.
+6. Generates a deterministic sample media file and runs the core inspection, decode, encode, job-level encode, and subtitle-renderer abstraction tests.
 7. Launches the Qt app in offscreen smoke-test mode.
 
 See:

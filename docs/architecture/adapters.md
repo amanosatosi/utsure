@@ -10,6 +10,9 @@ Dependency wiring is centralized, but third-party APIs must stay out of the core
 
 ## Planned adapter targets
 
+- `src/core/include/utsure/core/subtitles/`
+  - Defines the technology-agnostic subtitle renderer/session contracts that the rest of the core depends on.
+  - Owns timestamp-based subtitle render requests and RGBA-oriented overlay results.
 - `src/core/adapters/ffmpeg/`
   - Links `utsure::ffmpeg`.
   - Owns probing, decode, filter, and encode API integration.
@@ -17,7 +20,7 @@ Dependency wiring is centralized, but third-party APIs must stay out of the core
   - Links `utsure::x264` and `utsure::x265` where codec-specific wiring is needed.
 - `src/core/adapters/libassmod/`
   - Links `utsure::subtitle_renderer_dependency`.
-  - Owns subtitle parsing, shaping, and frame overlay requests.
+  - Implements the core subtitle renderer/session contracts, plus subtitle parsing and shaping details.
 
 ## Why this boundary matters
 
