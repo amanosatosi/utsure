@@ -8,7 +8,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M1 Repo scaffolding docs completed.
 - [ ] M2 Project skeleton is implemented and awaiting CI validation.
 - [ ] M3 Core-only build foundation is partially implemented; the first test target is still pending.
-- [ ] M4 Dependency strategy and adapter seams remain next after skeleton validation.
+- [ ] M4 Dependency strategy and adapter seams are implemented and awaiting CI validation.
 
 ## Active assumptions
 
@@ -19,6 +19,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - Output frame rate always follows the main source video.
 - Correctness comes before performance work.
 - Windows build validation is currently anchored in GitHub Actions because the local machine does not expose a Qt-capable compiler toolchain.
+- `libassmod` is currently treated as a pinned source dependency built into an isolated prefix because it installs as a `libass`-compatible package name rather than a uniquely named `libassmod` package.
 
 ## Architecture direction
 
@@ -105,6 +106,8 @@ Done criteria:
 - The core remains free of Qt Widgets dependencies.
 
 ### M4 Define dependency strategy and adapter seams
+
+Status: Implemented, pending CI validation
 
 Scope:
 - Decide how the project locates and versions Qt 6, FFmpeg, `libassmod`, `libx264`, and `libx265`.
@@ -331,4 +334,4 @@ Done criteria:
 
 ## Immediate next milestone
 
-Execute M4: lock the dependency strategy and document the adapter seams for FFmpeg, `libassmod`, and the future timeline/encode boundaries.
+Complete M3 by adding the first core test target, then re-run CI so M2 and M4 can be closed with real build validation.

@@ -1,5 +1,3 @@
-find_package(Qt6 6.5 REQUIRED COMPONENTS Widgets)
-
 qt_standard_project_setup()
 
 qt_add_executable(utsure_encoder_app WIN32

@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      UTSURE_LIBASSMOD_REF: 1.0
 
     defaults:
       run:
@@ -24,10 +26,25 @@ jobs:
           msystem: UCRT64
           update: true
           install: >-
+            git
             mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ffmpeg
+            mingw-w64-ucrt-x86_64-freetype
             mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-fribidi
+            mingw-w64-ucrt-x86_64-harfbuzz
+            mingw-w64-ucrt-x86_64-libx264
+            mingw-w64-ucrt-x86_64-meson
             mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
             mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-x265
+
+      - name: Build libassmod
+        run: ./scripts/ci/windows-msys2-build-libassmod.sh
+
+      - name: Audit dependencies
+        run: ./scripts/ci/windows-msys2-dependency-audit.sh
 
       - name: Configure, build, and smoke test
         run: ./scripts/ci/windows-msys2-build.sh
