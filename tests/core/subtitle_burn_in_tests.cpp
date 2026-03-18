@@ -32,6 +32,7 @@ using utsure::core::subtitles::SubtitleRenderRequest;
 using utsure::core::subtitles::SubtitleRenderResult;
 using utsure::core::subtitles::SubtitleRenderSessionCreateRequest;
 using utsure::core::subtitles::create_default_subtitle_renderer;
+using utsure::core::timeline::SubtitleTimingMode;
 
 int fail(std::string_view message) {
     std::cerr << message << '\n';
@@ -432,6 +433,103 @@ int run_timeline_burn_in_assertion(
     return 0;
 }
 
+int run_timeline_full_output_burn_in_assertion(
+    const std::filesystem::path &intro_path,
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &outro_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &plain_output_path,
+    const std::filesystem::path &burned_output_path
+) {
+    CollectingObserver observer{};
+    const EncodeJob plain_job{
+        .input = {
+            .intro_source_path = intro_path,
+            .main_source_path = main_path,
+            .outro_source_path = outro_path
+        },
+        .output = {
+            .output_path = plain_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJob burned_job{
+        .input = {
+            .intro_source_path = intro_path,
+            .main_source_path = main_path,
+            .outro_source_path = outro_path
+        },
+        .subtitles = utsure::core::job::EncodeJobSubtitleSettings{
+            .subtitle_path = subtitle_path,
+            .format_hint = "ass",
+            .timing_mode = SubtitleTimingMode::full_output_timeline
+        },
+        .output = {
+            .output_path = burned_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJobResult plain_job_result = EncodeJobRunner::run(plain_job);
+    const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!plain_job_result.succeeded() || !burned_job_result.succeeded()) {
+        return fail("Full-output timeline subtitle burn-in jobs failed unexpectedly.");
+    }
+
+    const auto &summary = *burned_job_result.encode_job_summary;
+    if (summary.timeline_summary.segments.size() != 3 ||
+        !summary.timeline_summary.segments[0].subtitles_enabled ||
+        !summary.timeline_summary.segments[1].subtitles_enabled ||
+        !summary.timeline_summary.segments[2].subtitles_enabled) {
+        return fail("Full-output timeline subtitle scope did not enable every segment.");
+    }
+
+    if (summary.subtitled_video_frame_count != 11) {
+        return fail("Unexpected count of subtitled video frames for the full-output timeline burn-in path.");
+    }
+
+    const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);
+    const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
+    if (!plain_output_decode.succeeded() || !burned_output_decode.succeeded()) {
+        return fail("Full-output timeline subtitle output decode failed unexpectedly.");
+    }
+
+    if (assert_decoded_output(*plain_output_decode.decoded_media_source, 96U) != 0 ||
+        assert_decoded_output(*burned_output_decode.decoded_media_source, 96U) != 0) {
+        return 1;
+    }
+
+    if (!frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U)) {
+        return fail("Full-output timeline subtitle burn-in did not change the first intro frame.");
+    }
+
+    if (!any_frame_changed_in_range(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U, 11U)) {
+        return fail("Full-output timeline subtitle burn-in did not alter the expected opening frame range.");
+    }
+
+    const auto observer_result = assert_observer_flow(observer, 3);
+    if (observer_result != 0) {
+        return observer_result;
+    }
+
+    std::cout << "timeline.full_output.frame0.changed=yes\n";
+    std::cout << "timeline.full_output.subtitled_frames=" << summary.subtitled_video_frame_count << '\n';
+    std::cout << "timeline.full_output.segment_scope=intro:yes,main:yes,outro:yes\n";
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -440,7 +538,8 @@ int main(int argc, char *argv[]) {
             "Usage: utsure_core_subtitle_burn_in_tests "
             "[--render <subtitle>|--h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--h265 <input> <subtitle> <plain-output> <burned-output>|"
-            "--timeline-h264 <intro> <main> <outro> <subtitle> <plain-output> <burned-output>]"
+            "--timeline-h264 <intro> <main> <outro> <subtitle> <plain-output> <burned-output>|"
+            "--timeline-full-h264 <intro> <main> <outro> <subtitle> <plain-output> <burned-output>]"
         );
     }
 
@@ -472,6 +571,17 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--timeline-h264" && argc == 8) {
         return run_timeline_burn_in_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4]),
+            std::filesystem::path(argv[5]),
+            std::filesystem::path(argv[6]),
+            std::filesystem::path(argv[7])
+        );
+    }
+
+    if (mode == "--timeline-full-h264" && argc == 8) {
+        return run_timeline_full_output_burn_in_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3]),
             std::filesystem::path(argv[4]),

@@ -206,6 +206,35 @@ int run_overwrite_warning_assertion(
     return 0;
 }
 
+int run_output_conflicts_main_assertion(const std::filesystem::path &main_path) {
+    const auto result = EncodeJobPreflight::inspect(make_base_job(main_path, main_path));
+
+    if (result.can_start_encode()) {
+        return fail("A preflight job that writes over the main source passed unexpectedly.");
+    }
+
+    if (!issues_contain(
+            result,
+            EncodeJobPreflightIssueCode::invalid_output_path,
+            EncodeJobPreflightIssueSeverity::error)) {
+        return fail("The output-conflicts-main preflight job did not report the expected output-path error.");
+    }
+
+    if (!issues_contain(
+            result,
+            EncodeJobPreflightIssueCode::output_will_be_overwritten,
+            EncodeJobPreflightIssueSeverity::warning)) {
+        return fail("The output-conflicts-main preflight job did not report the expected overwrite warning.");
+    }
+
+    if (result.preview_summary.has_value()) {
+        return fail("An output-conflicts-main preflight job unexpectedly produced a preview summary.");
+    }
+
+    std::cout << "output_conflict=main_source\n";
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -215,7 +244,8 @@ int main(int argc, char *argv[]) {
             "[--valid-preview <intro> <main> <outro> <subtitle> <output>|"
             "--invalid-fps <main> <bad-intro> <output>|"
             "--missing-subtitle <main> <missing-subtitle> <output>|"
-            "--overwrite-warning <main> <output>]"
+            "--overwrite-warning <main> <output>|"
+            "--output-conflicts-main <main>]"
         );
     }
 
@@ -252,6 +282,10 @@ int main(int argc, char *argv[]) {
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3])
         );
+    }
+
+    if (mode == "--output-conflicts-main" && argc == 3) {
+        return run_output_conflicts_main_assertion(std::filesystem::path(argv[2]));
     }
 
     return fail("Unknown mode or wrong argument count for utsure_core_encode_job_preflight_tests.");

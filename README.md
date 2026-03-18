@@ -28,6 +28,14 @@ Not implemented yet:
 - Audio output encode.
 - Broader timeline, subtitle, and audio-capable encode session orchestration.
 
+## Developer handoff
+
+Start here when picking up the repository:
+
+- `docs/setup/windows-msys2.md`: supported local setup, build, test, and packaging commands
+- `docs/release/windows-portable.md`: current packaging and release expectations for the Windows bundle
+- `docs/roadmap.md`: near-term versus later work
+
 ## Layout
 
 - `src/core/`: reusable core target and public headers.
@@ -48,10 +56,12 @@ The repository is set up to build in GitHub Actions on Windows. The workflow:
 5. Builds `utsure_encoder_core`, `utsure_encoder_app`, and the core media inspection, decode, encode, timeline, job-level encode, subtitle-renderer abstraction, and subtitle burn-in test executables.
 6. Generates deterministic sample media and subtitle files and runs the core inspection, decode, encode, timeline, job-level encode, subtitle-renderer abstraction, and subtitle burn-in tests.
 7. Launches the Qt app in offscreen smoke-test mode and prints the window structure summary.
-8. Packages a portable Windows bundle with `windeployqt`, bundled non-Qt DLLs, and a downloadable `.zip` artifact.
+8. Packages a portable Windows bundle with `windeployqt`, bundled non-Qt DLLs, a downloadable `.zip` artifact, and a post-package extract-and-launch validation pass.
 
 See:
 
 - `docs/architecture/dependencies.md`
 - `docs/architecture/adapters.md`
 - `docs/setup/windows-msys2.md`
+- `docs/release/windows-portable.md`
+- `docs/roadmap.md`

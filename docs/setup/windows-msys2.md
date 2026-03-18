@@ -1,8 +1,12 @@
-# Windows MSYS2 Setup
+# Windows MSYS2 Developer Setup
 
-This is the Windows-first development path and the same dependency strategy used in GitHub Actions.
+This is the supported local developer path today. It matches the Windows GitHub Actions job and is the expected setup for anyone picking up the repository.
 
-## Install MSYS2 UCRT64 packages
+## Use the right shell
+
+Run the commands below from the MSYS2 `UCRT64` shell, not from PowerShell or the plain MSYS shell.
+
+## One-time package install
 
 ```bash
 pacman -S --needed \
@@ -21,45 +25,58 @@ pacman -S --needed \
   mingw-w64-ucrt-x86_64-harfbuzz
 ```
 
-## Build the pinned `libassmod` dependency
+## Fresh clone quick start
 
-The project currently expects the `libassmod` source dependency to be built into an isolated prefix.
+From a clean repository checkout:
 
 ```bash
 export UTSURE_LIBASSMOD_REF=1.0
 ./scripts/ci/windows-msys2-build-libassmod.sh
+./scripts/ci/windows-msys2-dependency-audit.sh
+UTSURE_CMAKE_BUILD_TYPE=Debug ./scripts/ci/windows-msys2-build.sh
 ```
 
-That produces:
+What that does:
 
-- source checkout under `.deps/libassmod/src`
-- build directory under `.deps/libassmod/build`
-- install prefix under `.deps/libassmod/prefix`
+- builds the pinned `libassmod` source dependency into `.deps/libassmod/prefix`
+- audits configure-time dependency discovery before the main build
+- configures `build/` with CMake and Ninja
+- builds the core library, desktop app, and core test executables
+- runs `ctest --output-on-failure`
+- launches the Qt app in offscreen smoke-test mode
 
-## Audit dependencies and build the project
+## Daily commands
+
+Rebuild and rerun the current validation set:
 
 ```bash
-./scripts/ci/windows-msys2-dependency-audit.sh
-./scripts/ci/windows-msys2-build.sh
+UTSURE_CMAKE_BUILD_TYPE=Debug ./scripts/ci/windows-msys2-build.sh
 ```
 
-## Package a portable Windows bundle
-
-After a successful build, create the portable app folder and `.zip` bundle with:
+Create the current portable release artifact:
 
 ```bash
 UTSURE_CMAKE_BUILD_TYPE=Release ./scripts/ci/windows-msys2-build.sh
 ./scripts/ci/windows-msys2-package-portable.sh
 ```
 
-That produces:
+## Important paths
 
-- deployable folder under `artifacts/encoder-windows-x64-portable`
-- zipped artifact under `artifacts/encoder-windows-x64-portable.zip`
-- bundle manifests inside the deployable folder that record the Qt-deployed files and manually bundled non-Qt DLLs
+- `.deps/libassmod/src`: pinned `libassmod` checkout
+- `.deps/libassmod/build`: `libassmod` build directory
+- `.deps/libassmod/prefix`: `libassmod` install prefix used by CMake and `pkg-config`
+- `build/`: local CMake build tree
+- `artifacts/encoder-windows-x64-portable`: unpacked portable bundle
+- `artifacts/encoder-windows-x64-portable.zip`: zipped portable artifact
 
-## Manual setup notes
+## Manual CMake notes
 
-- `UTSURE_LIBASSMOD_ROOT` is passed to CMake by the CI script and should point at the `libassmod` install prefix if you run CMake manually.
+- `UTSURE_LIBASSMOD_ROOT` should point at `.deps/libassmod/prefix` if you invoke CMake manually.
 - `PKG_CONFIG_PATH` must resolve `libass` from the `libassmod` prefix before any system `libass`.
-- The local machine in this thread is not the source of truth for compiler validation; GitHub Actions is.
+- `CMAKE_PREFIX_PATH` should include `/ucrt64` for the MSYS2 Qt and FFmpeg packages.
+
+## Current limits
+
+- GitHub Actions is still the authoritative source of build verification for this repository state.
+- The supported local path is Windows-first via MSYS2 UCRT64.
+- The only documented release output today is the portable Windows bundle.

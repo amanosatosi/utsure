@@ -19,6 +19,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M12 First usable desktop GUI completed.
 - [x] M13 Windows portable packaging slice completed.
 - [x] M13 Usability and safety slice completed.
+- [x] M15 Hardening and handoff completed.
 
 ## Active assumptions
 
@@ -37,6 +38,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The subtitle renderer abstraction milestone is also being pulled ahead of timeline assembly and subtitle burn-in integration by explicit user request, and it remains limited to a technology-agnostic renderer boundary plus timestamped RGBA-oriented render contracts.
 - The libassmod subtitle burn-in milestone is also being pulled ahead of intro/outro and broader timeline work by explicit user request, and it remains limited to main-source ASS subtitle burn-in before final encode.
 - The timeline composition milestone now includes ordered intro/main/outro segment assembly, decoded-stream stitching with aligned normalized audio, and encode-job integration while the output backend remains video-only.
+- The hardening and handoff milestone is limited to validation coverage for the current pipeline, practical build/setup notes, packaging and release guidance, and a clearer roadmap split between near-term and later work.
 
 ## Architecture direction
 
@@ -411,7 +413,7 @@ Done criteria:
 
 ### M13 Harden correctness, packaging, and portability
 
-Status: In progress
+Status: Completed
 
 Current slice:
 - Add GitHub Actions packaging for one portable Windows app bundle.
@@ -425,6 +427,10 @@ Scope:
 - Expand test coverage around probe, timeline, subtitle, and encode correctness.
 - Improve diagnostics, cancellation, and recoverability.
 - Add Windows packaging and document the portability work needed for Linux/macOS.
+
+Scope change:
+- M13 closes with the Windows portable packaging path, GUI safety/preflight improvements, and the existing core correctness baseline.
+- Deeper cancellation, recoverability, and cross-platform portability work is deferred into the roadmap instead of blocking the handoff milestone.
 
 Likely files/modules:
 - `tests/`
@@ -444,6 +450,44 @@ Done criteria:
 - Major correctness risks are covered by tests.
 - The remaining Linux/macOS gaps are documented explicitly.
 
+### M15 Hardening and handoff
+
+Status: Completed
+
+Scope:
+- Add a small number of high-signal validations around the most failure-prone current pipeline paths.
+- Turn the Windows-first setup/build path into a practical developer handoff note.
+- Document portable packaging and release considerations for the current Windows artifact.
+- Separate the roadmap into near-term follow-up work versus later/deferred work.
+
+Likely files/modules:
+- `tests/core/`
+- `tests/core/CMakeLists.txt`
+- `README.md`
+- `docs/setup/`
+- `docs/release/`
+- `docs/roadmap.md`
+
+Risks:
+- Spending effort on broad test expansion instead of the few code paths that remain materially under-validated.
+- Leaving packaging/release expectations implicit and forcing later contributors to reverse-engineer CI behavior.
+- Mixing next-step engineering work with longer-horizon portability and architecture ideas.
+
+Validation:
+- GitHub Actions builds the app, runs the focused core pipeline tests, smoke-tests the GUI, and validates the portable bundle.
+- Repository docs describe the supported developer setup, packaging path, and staged roadmap clearly enough for a new contributor to follow them without tribal knowledge.
+
+Completion notes:
+- Added focused validation for preflight output-path conflicts that would overwrite the main input.
+- Added end-to-end validation for `full_output_timeline` subtitle burn-in across intro/main/outro composition.
+- Added explicit developer setup, Windows portable release, and staged roadmap documents for handoff.
+
+Done criteria:
+- Key pipeline components have at least basic validation coverage for their remaining high-risk paths.
+- There is a practical developer setup/build note for the Windows-first workflow.
+- Packaging and release considerations are documented for the current portable bundle.
+- The roadmap separates near-term follow-up tasks from later/deferred work.
+
 ## Immediate next milestone
 
-The Windows portable packaging and usability/safety slices of M13 are complete. The remaining M13 correctness, diagnostics, and portability work is still open.
+Follow the near-term roadmap, starting with audio output encode and muxing through the existing composed timeline path.

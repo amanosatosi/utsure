@@ -238,6 +238,12 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/preflight-overwrite.mp4"
 )
 
+add_test(
+    NAME utsure.core.job.preflight.output_conflicts_main
+    COMMAND utsure_core_encode_job_preflight_tests --output-conflicts-main
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+)
+
 add_executable(utsure_core_timeline_tests
     timeline_tests.cpp
 )
@@ -366,4 +372,15 @@ add_test(
         "${UTSURE_SUBTITLE_SAMPLE_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/timeline-subtitle-plain-h264.mp4"
         "${UTSURE_TEST_MEDIA_DIR}/timeline-subtitle-burn-h264.mp4"
+)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.timeline.full_output.h264
+    COMMAND utsure_core_subtitle_burn_in_tests --timeline-full-h264
+        "${UTSURE_TIMELINE_INTRO_FILE}"
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TIMELINE_OUTRO_FILE}"
+        "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/timeline-full-subtitle-plain-h264.mp4"
+        "${UTSURE_TEST_MEDIA_DIR}/timeline-full-subtitle-burn-h264.mp4"
 )
