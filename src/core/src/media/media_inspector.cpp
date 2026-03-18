@@ -23,7 +23,17 @@ namespace utsure::core::media {
 
 namespace {
 
-using FormatContextHandle = std::unique_ptr<AVFormatContext, decltype(&avformat_close_input)>;
+struct FormatContextDeleter final {
+    void operator()(AVFormatContext *format_context) const noexcept {
+        if (format_context == nullptr) {
+            return;
+        }
+
+        avformat_close_input(&format_context);
+    }
+};
+
+using FormatContextHandle = std::unique_ptr<AVFormatContext, FormatContextDeleter>;
 
 std::string ffmpeg_error_to_string(int error_code) {
     std::array<char, AV_ERROR_MAX_STRING_SIZE> buffer{};
@@ -197,7 +207,7 @@ MediaInspectionResult MediaInspector::inspect(const std::filesystem::path &input
             );
         }
 
-        FormatContextHandle format_context(raw_format_context, &avformat_close_input);
+        FormatContextHandle format_context(raw_format_context);
 
         const auto stream_info_result = avformat_find_stream_info(format_context.get(), nullptr);
         if (stream_info_result < 0) {
