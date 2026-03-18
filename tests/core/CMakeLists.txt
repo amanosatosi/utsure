@@ -98,3 +98,32 @@ add_test(
         "${UTSURE_SAMPLE_MEDIA_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/encode-sample-h265.mp4"
 )
+
+add_executable(utsure_core_encode_job_tests
+    encode_job_tests.cpp
+)
+
+target_link_libraries(utsure_core_encode_job_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_core_encode_job_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_encode_job_tests)
+
+add_dependencies(utsure_core_encode_job_tests utsure_generate_sample_media)
+
+add_test(
+    NAME utsure.core.job.encode.h264
+    COMMAND utsure_core_encode_job_tests --h264
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-sample-h264.mp4"
+)
+
+add_test(
+    NAME utsure.core.job.encode.h265
+    COMMAND utsure_core_encode_job_tests --h265
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-sample-h265.mp4"
+)

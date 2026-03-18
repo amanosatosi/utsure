@@ -4,7 +4,7 @@
 
 ## Current scope
 
-The repository currently contains the initial project skeleton plus the first media inspection, source decode path, and minimal software video encode backends:
+The repository currently contains the initial project skeleton plus the first media inspection, source decode path, minimal software video encode backends, and a small core encode-job model:
 
 - `utsure_encoder_core`: reusable C++ target for media inspection, source decode normalization, minimal software video encode backends, and future media, timeline, subtitle, and broader encode logic.
 - `utsure_encoder_app`: Qt 6 Widgets desktop shell that links the core and launches a minimal window.
@@ -15,13 +15,14 @@ Implemented so far:
 - FFmpeg-based primary stream inspection into structured core metadata.
 - Main-source decode into normalized internal video frame and audio sample objects with explicit timestamps.
 - Main-source software video encode backends for `libx264` and `libx265` with minimal codec, preset, and CRF settings.
+- A core job/config layer that drives inspect -> decode -> muxed video encode without introducing GUI-bound settings types.
 
 Not implemented yet:
 
 - Audio output encode.
 - Timeline assembly.
 - Subtitle burn-in.
-- Broader encode session orchestration.
+- Broader timeline, subtitle, and audio-capable encode session orchestration.
 
 ## Layout
 
@@ -40,8 +41,8 @@ The repository is set up to build in GitHub Actions on Windows. The workflow:
 2. Builds a pinned `libassmod` source dependency into an isolated prefix.
 3. Audits configure-time dependency discovery.
 4. Configures the project with CMake.
-5. Builds `utsure_encoder_core`, `utsure_encoder_app`, and the core media inspection, decode, and encode test executables.
-6. Generates a deterministic sample media file and runs the core inspection, decode, and encode tests.
+5. Builds `utsure_encoder_core`, `utsure_encoder_app`, and the core media inspection, decode, encode, and job-level encode test executables.
+6. Generates a deterministic sample media file and runs the core inspection, decode, encode, and job-level encode tests.
 7. Launches the Qt app in offscreen smoke-test mode.
 
 See:

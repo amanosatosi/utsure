@@ -9,7 +9,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [ ] M2 Project skeleton is implemented and awaiting CI validation.
 - [ ] M3 Core-only build foundation is implemented and awaiting CI validation.
 - [ ] M4 Dependency strategy and adapter seams are implemented and awaiting CI validation.
-- [ ] M5 Core project and timeline contracts are ready to resume after decode flow.
+- [ ] M5 Core job and configuration contracts are implemented and awaiting CI validation.
 - [ ] M6 Media input inspection is implemented and awaiting CI validation.
 - [ ] M7 Decode and normalized processing flow is implemented and awaiting CI validation.
 - [ ] M9 Software encoding backends are implemented and awaiting CI validation.
@@ -27,6 +27,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - Media inspection was intentionally pulled ahead of broader project/timeline contracts because those contracts need real stream metadata and explicit cadence fields instead of placeholder assumptions.
 - The decode and normalized processing milestone is also being pulled ahead of the broader project/timeline contracts by explicit user request, but it remains limited to the main source path only.
 - The software encoding backend milestone is also being pulled ahead of the broader project/timeline and session-orchestration milestones by explicit user request, and it remains limited to the main-source decoded video path with minimal codec configuration.
+- The muxed-output job/config milestone is also being pulled ahead of broader timeline and session modeling by explicit user request, and it remains limited to main-source video-only output settings.
 
 ## Architecture direction
 
@@ -141,34 +142,32 @@ Done criteria:
 - Adapter boundaries are documented.
 - The build does not hard-wire GUI and core together.
 
-### M5 Define core project and timeline contracts
+### M5 Add core job configuration and muxed encode entry point
 
-Status: Deferred by milestone reorder, now ready to resume
+Status: Implemented, pending CI validation
 
 Scope:
-- Introduce the first stable core types for project settings, source assets, timeline segments, and encode requests.
-- Encode the rule that the main source owns output frame rate.
-- Capture intro and outro as ordinary timeline segment types.
+- Introduce the first stable core job/config types for source selection and output settings.
+- Keep the fields limited to the current usable encode path: output path, codec, preset, and CRF.
+- Keep the structure ready for later subtitle and timeline expansion without adding those fields yet.
 
 Likely files/modules:
-- `src/core/include/utsure/project/`
-- `src/core/include/utsure/timeline/`
-- `src/core/include/utsure/encode/`
+- `src/core/include/utsure/core/job/`
 - `src/core/src/`
 - `tests/core/`
 
 Risks:
-- Hard-coding assumptions about assets before probing rules exist.
-- Mixing UI concerns into project or timeline types.
+- Letting UI-oriented concerns leak into the core job/config model.
+- Hard-coding today's encode path so tightly that subtitle or timeline fields become awkward later.
 
 Validation:
-- Core unit tests cover basic project and timeline construction.
-- Timeline contracts compile without FFmpeg or Qt runtime dependencies.
+- Core tests cover job construction and job-driven end-to-end muxed encode for one H.264 and one H.265 sample.
+- Job/config contracts compile without Qt runtime dependencies.
 
 Done criteria:
-- Core public headers define the initial domain contracts.
-- Timeline segment representation includes intro, main, and outro.
-- Frame-rate ownership by the main source is explicit in the model or validation rules.
+- Core public headers define the initial job/config contracts.
+- The pipeline can produce muxed output through the job model.
+- Output settings are explicit and remain separate from any UI layer.
 
 ### M6 Implement FFmpeg-based media probing and normalization rules
 
@@ -381,4 +380,4 @@ Done criteria:
 
 ## Immediate next milestone
 
-Define the first project and timeline contracts on top of inspected, decoded, and encoded media metadata, then re-run CI so M2, M3, M4, M6, M7, and M9 can be closed with real build validation.
+Return to the broader project and timeline contracts on top of the inspected, decoded, encoded, and job-driven media flow, then re-run CI so M2, M3, M4, M5, M6, M7, and M9 can be closed with real build validation.
