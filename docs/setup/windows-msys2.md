@@ -43,6 +43,21 @@ That produces:
 ./scripts/ci/windows-msys2-build.sh
 ```
 
+## Package a portable Windows bundle
+
+After a successful build, create the portable app folder and `.zip` bundle with:
+
+```bash
+UTSURE_CMAKE_BUILD_TYPE=Release ./scripts/ci/windows-msys2-build.sh
+./scripts/ci/windows-msys2-package-portable.sh
+```
+
+That produces:
+
+- deployable folder under `artifacts/encoder-windows-x64-portable`
+- zipped artifact under `artifacts/encoder-windows-x64-portable.zip`
+- bundle manifests inside the deployable folder that record the Qt-deployed files and manually bundled non-Qt DLLs
+
 ## Manual setup notes
 
 - `UTSURE_LIBASSMOD_ROOT` is passed to CMake by the CI script and should point at the `libassmod` install prefix if you run CMake manually.

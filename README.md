@@ -8,7 +8,7 @@ The repository currently contains the initial project skeleton plus the first us
 
 - `utsure_encoder_core`: reusable C++ target for media inspection, source decode normalization, minimal software video encode backends, and future media, timeline, subtitle, and broader encode logic.
 - `utsure_encoder_app`: Qt 6 Widgets desktop app that builds and runs the supported encode job flow against the core.
-- Windows GitHub Actions build validation using MSYS2 UCRT64, CMake, Ninja, Qt 6 Widgets, FFmpeg, `libx264`, `libx265`, and a pinned source build of `libassmod`.
+- Windows GitHub Actions build validation and portable artifact packaging using MSYS2 UCRT64, CMake, Ninja, Qt 6 Widgets, FFmpeg, `libx264`, `libx265`, and a pinned source build of `libassmod`.
 
 Implemented so far:
 
@@ -48,6 +48,7 @@ The repository is set up to build in GitHub Actions on Windows. The workflow:
 5. Builds `utsure_encoder_core`, `utsure_encoder_app`, and the core media inspection, decode, encode, timeline, job-level encode, subtitle-renderer abstraction, and subtitle burn-in test executables.
 6. Generates deterministic sample media and subtitle files and runs the core inspection, decode, encode, timeline, job-level encode, subtitle-renderer abstraction, and subtitle burn-in tests.
 7. Launches the Qt app in offscreen smoke-test mode and prints the window structure summary.
+8. Packages a portable Windows bundle with `windeployqt`, bundled non-Qt DLLs, and a downloadable `.zip` artifact.
 
 See:
 

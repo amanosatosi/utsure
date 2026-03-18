@@ -10,7 +10,9 @@ jobs:
   build:
     runs-on: windows-latest
     env:
+      UTSURE_CMAKE_BUILD_TYPE: Release
       UTSURE_LIBASSMOD_REF: "1.0"
+      UTSURE_PORTABLE_BUNDLE_NAME: encoder-windows-x64-portable
 
     defaults:
       run:
@@ -48,3 +50,13 @@ jobs:
 
       - name: Configure, build, and smoke test
         run: ./scripts/ci/windows-msys2-build.sh
+
+      - name: Package portable bundle
+        run: ./scripts/ci/windows-msys2-package-portable.sh
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: encoder-windows-x64-portable
+          if-no-files-found: error
+          path: artifacts/encoder-windows-x64-portable.zip

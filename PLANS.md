@@ -17,6 +17,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M14 libassmod subtitle burn-in completed.
 - [x] M8 Intro/outro timeline composition completed.
 - [x] M12 First usable desktop GUI completed.
+- [x] M13 Windows portable packaging slice completed.
 
 ## Active assumptions
 
@@ -409,6 +410,14 @@ Done criteria:
 
 ### M13 Harden correctness, packaging, and portability
 
+Status: In progress
+
+Current slice:
+- Add GitHub Actions packaging for one portable Windows app bundle.
+- Keep this slice limited to deployable runtime bundling and artifact publication.
+- Defer the broader correctness, cancellation, recoverability, and cross-platform portability work until after the packaging path is in place.
+- Packaging slice status: completed.
+
 Scope:
 - Expand test coverage around probe, timeline, subtitle, and encode correctness.
 - Improve diagnostics, cancellation, and recoverability.
@@ -434,4 +443,4 @@ Done criteria:
 
 ## Immediate next milestone
 
-M12 is complete. The next milestone is M13 correctness, packaging, and portability work.
+The Windows portable packaging slice of M13 is complete. The remaining M13 correctness, diagnostics, and portability work is still open.
