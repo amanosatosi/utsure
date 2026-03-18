@@ -1,0 +1,47 @@
+#include "main_window.hpp"
+
+#include "utsure/core/build_info.hpp"
+
+#include <QApplication>
+#include <QCommandLineOption>
+#include <QCommandLineParser>
+#include <QDebug>
+#include <QTimer>
+
+namespace {
+
+QString to_qstring(std::string_view text) {
+    return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+}
+
+}  // namespace
+
+int main(int argc, char *argv[]) {
+    QApplication app(argc, argv);
+    QApplication::setApplicationName(to_qstring(utsure::core::BuildInfo::project_name()));
+    QApplication::setApplicationVersion(to_qstring(utsure::core::BuildInfo::project_version()));
+
+    QCommandLineParser parser;
+    parser.setApplicationDescription("utsure desktop application skeleton");
+    parser.addHelpOption();
+
+    const QCommandLineOption smokeTestOption(
+        "smoke-test",
+        "Launch the main window and exit automatically after a short delay."
+    );
+    parser.addOption(smokeTestOption);
+    parser.process(app);
+
+    MainWindow mainWindow;
+    mainWindow.show();
+
+    if (parser.isSet(smokeTestOption)) {
+        qInfo().noquote() << "Starting utsure GUI smoke test.";
+        QTimer::singleShot(300, [&app]() {
+            qInfo().noquote() << "utsure GUI smoke test completed.";
+            app.quit();
+        });
+    }
+
+    return app.exec();
+}

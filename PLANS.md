@@ -6,7 +6,9 @@ This file is the living execution plan for the repository. Update it when a mile
 
 - [x] M0 Repository inspection completed.
 - [x] M1 Repo scaffolding docs completed.
-- [ ] M2 First implementation milestone is next.
+- [ ] M2 Project skeleton is implemented and awaiting CI validation.
+- [ ] M3 Core-only build foundation is partially implemented; the first test target is still pending.
+- [ ] M4 Dependency strategy and adapter seams remain next after skeleton validation.
 
 ## Active assumptions
 
@@ -16,6 +18,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - Intro and outro clips are modeled as timeline segments, not one-off pipeline branches.
 - Output frame rate always follows the main source video.
 - Correctness comes before performance work.
+- Windows build validation is currently anchored in GitHub Actions because the local machine does not expose a Qt-capable compiler toolchain.
 
 ## Architecture direction
 
@@ -42,7 +45,7 @@ This file is the living execution plan for the repository. Update it when a mile
 
 ### M2 Bootstrap repository layout and root build entry
 
-Status: Next
+Status: Implemented, pending CI validation
 
 Scope:
 - Create the top-level repository layout needed for source, tests, docs, scripts, and CMake support.
@@ -74,6 +77,8 @@ Done criteria:
 - No product features are implemented yet.
 
 ### M3 Establish core-only build and test foundation
+
+Status: In progress
 
 Scope:
 - Create an empty `encoder-core` target and a minimal test target.
@@ -326,4 +331,4 @@ Done criteria:
 
 ## Immediate next milestone
 
-Execute M2: bootstrap the repository layout and add the root CMake entry point, without adding product features.
+Execute M4: lock the dependency strategy and document the adapter seams for FFmpeg, `libassmod`, and the future timeline/encode boundaries.
