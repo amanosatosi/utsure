@@ -2,6 +2,7 @@ find_program(UTSURE_FFMPEG_EXECUTABLE NAMES ffmpeg REQUIRED)
 
 set(UTSURE_TEST_MEDIA_DIR "${CMAKE_CURRENT_BINARY_DIR}/media")
 set(UTSURE_SAMPLE_MEDIA_FILE "${UTSURE_TEST_MEDIA_DIR}/inspection-sample.avi")
+set(UTSURE_MEMORY_HEAVY_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/memory-heavy-main.mp4")
 set(UTSURE_TIMELINE_INTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-intro.avi")
 set(UTSURE_TIMELINE_OUTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-outro.avi")
 set(UTSURE_TIMELINE_BAD_FPS_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-bad-fps.avi")
@@ -24,6 +25,19 @@ add_custom_command(
         -pix_fmt yuv420p
         -c:a pcm_s16le
         "${UTSURE_SAMPLE_MEDIA_FILE}"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${UTSURE_MEMORY_HEAVY_MAIN_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "color=c=black:size=1920x1080:rate=24"
+        -t 8
+        -c:v libx264
+        -preset ultrafast
+        -pix_fmt yuv420p
+        -an
+        "${UTSURE_MEMORY_HEAVY_MAIN_FILE}"
     VERBATIM
 )
 
@@ -68,6 +82,7 @@ add_custom_target(
     utsure_generate_sample_media
     DEPENDS
         "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_MEMORY_HEAVY_MAIN_FILE}"
         "${UTSURE_TIMELINE_INTRO_FILE}"
         "${UTSURE_TIMELINE_OUTRO_FILE}"
         "${UTSURE_TIMELINE_BAD_FPS_FILE}"
@@ -190,6 +205,13 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/job-timeline-h264.mp4"
 )
 
+add_test(
+    NAME utsure.core.job.encode.working_set_too_large
+    COMMAND utsure_core_encode_job_tests --working-set-too-large
+        "${UTSURE_MEMORY_HEAVY_MAIN_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-memory-heavy.mp4"
+)
+
 add_executable(utsure_core_encode_job_preflight_tests
     encode_job_preflight_tests.cpp
 )
@@ -242,6 +264,13 @@ add_test(
     NAME utsure.core.job.preflight.output_conflicts_main
     COMMAND utsure_core_encode_job_preflight_tests --output-conflicts-main
         "${UTSURE_SAMPLE_MEDIA_FILE}"
+)
+
+add_test(
+    NAME utsure.core.job.preflight.working_set_too_large
+    COMMAND utsure_core_encode_job_preflight_tests --working-set-too-large
+        "${UTSURE_MEMORY_HEAVY_MAIN_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/preflight-memory-heavy.mp4"
 )
 
 add_executable(utsure_core_timeline_tests

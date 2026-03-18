@@ -1,5 +1,6 @@
 #include "utsure/core/job/encode_job_preflight.hpp"
 
+#include "encode_job_working_set_guard.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 
@@ -380,6 +381,8 @@ const char *to_string(const EncodeJobPreflightIssueCode code) noexcept {
         return "invalid_video_settings";
     case EncodeJobPreflightIssueCode::output_will_be_overwritten:
         return "output_will_be_overwritten";
+    case EncodeJobPreflightIssueCode::working_set_limit_exceeded:
+        return "working_set_limit_exceeded";
     case EncodeJobPreflightIssueCode::timeline_validation_failed:
         return "timeline_validation_failed";
     case EncodeJobPreflightIssueCode::subtitle_validation_failed:
@@ -492,6 +495,20 @@ EncodeJobPreflightResult EncodeJobPreflight::inspect(const EncodeJob &job) noexc
 
         const auto &timeline_plan = *timeline_result.timeline_plan;
         validate_subtitle_session(job, timeline_plan, issues);
+
+        if (const auto working_set_failure = working_set_guard::check(
+                timeline_plan,
+                job.subtitles,
+                {}
+            ); working_set_failure.has_value()) {
+            append_issue(
+                issues,
+                EncodeJobPreflightIssueSeverity::error,
+                EncodeJobPreflightIssueCode::working_set_limit_exceeded,
+                working_set_failure->message,
+                working_set_failure->actionable_hint
+            );
+        }
 
         EncodeJobPreviewSummary preview_summary{
             .segment_count = timeline_plan.segments.size(),

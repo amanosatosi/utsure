@@ -233,6 +233,28 @@ int assert_observer_flow(
     return 0;
 }
 
+int assert_working_set_blocked_observer_flow(const CollectingObserver &observer) {
+    if (observer.progress_updates.empty()) {
+        return fail("The memory-heavy encode job did not report any progress.");
+    }
+
+    if (observer.progress_updates.front().stage != EncodeJobStage::assembling_timeline) {
+        return fail("The memory-heavy encode job did not start at timeline assembly.");
+    }
+
+    for (const auto &progress : observer.progress_updates) {
+        if (progress.stage == EncodeJobStage::decoding_segment) {
+            return fail("The memory-heavy encode job should have been rejected before decode started.");
+        }
+    }
+
+    if (observer.log_messages.empty()) {
+        return fail("The memory-heavy encode job did not report any log messages.");
+    }
+
+    return 0;
+}
+
 std::string build_validation_report(
     const EncodeJobSummary &encode_job_summary,
     const DecodedMediaSource &decoded_output
@@ -404,6 +426,51 @@ int run_timeline_h264_assertion(
     return 0;
 }
 
+int run_working_set_too_large_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &output_path
+) {
+    CollectingObserver observer{};
+    const EncodeJob job{
+        .input = {
+            .main_source_path = main_path
+        },
+        .output = {
+            .output_path = output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (job_result.succeeded() || !job_result.error.has_value()) {
+        return fail("A memory-heavy encode job succeeded unexpectedly.");
+    }
+
+    if (job_result.error->message.find("estimated to require about") == std::string::npos) {
+        return fail("The memory-heavy encode job did not report the working-set estimate.");
+    }
+
+    if (assert_working_set_blocked_observer_flow(observer) != 0) {
+        return 1;
+    }
+
+    std::error_code filesystem_error;
+    if (std::filesystem::exists(output_path, filesystem_error) && !filesystem_error) {
+        return fail("The memory-heavy encode job should not have created an output file.");
+    }
+
+    std::cout << job_result.error->message << '\n';
+    std::cout << job_result.error->actionable_hint << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -411,7 +478,8 @@ int main(int argc, char *argv[]) {
         return fail(
             "Usage: utsure_core_encode_job_tests "
             "[--h264|--h265] <input> <output> | "
-            "[--timeline-h264] <intro> <main> <outro> <output>"
+            "[--timeline-h264] <intro> <main> <outro> <output> | "
+            "[--working-set-too-large] <input> <output>"
         );
     }
 
@@ -441,6 +509,13 @@ int main(int argc, char *argv[]) {
             std::filesystem::path(argv[3]),
             std::filesystem::path(argv[4]),
             std::filesystem::path(argv[5])
+        );
+    }
+
+    if (mode == "--working-set-too-large" && argc == 4) {
+        return run_working_set_too_large_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
         );
     }
 

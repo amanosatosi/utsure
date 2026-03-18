@@ -235,6 +235,39 @@ int run_output_conflicts_main_assertion(const std::filesystem::path &main_path) 
     return 0;
 }
 
+int run_working_set_too_large_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &output_path
+) {
+    remove_file_if_present(output_path);
+
+    const auto result = EncodeJobPreflight::inspect(make_base_job(main_path, output_path));
+    if (result.can_start_encode()) {
+        return fail("A memory-heavy preflight job passed unexpectedly.");
+    }
+
+    if (!issues_contain(
+            result,
+            EncodeJobPreflightIssueCode::working_set_limit_exceeded,
+            EncodeJobPreflightIssueSeverity::error)) {
+        return fail("The memory-heavy preflight job did not report the expected working-set error.");
+    }
+
+    if (!result.preview_summary.has_value()) {
+        return fail("A memory-heavy preflight job should still report a preview summary.");
+    }
+
+    const auto &preview = *result.preview_summary;
+    if (!preview.main_source_info.primary_video_stream.has_value() ||
+        preview.main_source_info.primary_video_stream->width != 1920 ||
+        preview.main_source_info.primary_video_stream->height != 1080) {
+        return fail("Unexpected preview resolution for the memory-heavy job.");
+    }
+
+    std::cout << "working_set_limit=blocked\n";
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -245,7 +278,8 @@ int main(int argc, char *argv[]) {
             "--invalid-fps <main> <bad-intro> <output>|"
             "--missing-subtitle <main> <missing-subtitle> <output>|"
             "--overwrite-warning <main> <output>|"
-            "--output-conflicts-main <main>]"
+            "--output-conflicts-main <main>|"
+            "--working-set-too-large <main> <output>]"
         );
     }
 
@@ -286,6 +320,13 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--output-conflicts-main" && argc == 3) {
         return run_output_conflicts_main_assertion(std::filesystem::path(argv[2]));
+    }
+
+    if (mode == "--working-set-too-large" && argc == 4) {
+        return run_working_set_too_large_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
+        );
     }
 
     return fail("Unknown mode or wrong argument count for utsure_core_encode_job_preflight_tests.");

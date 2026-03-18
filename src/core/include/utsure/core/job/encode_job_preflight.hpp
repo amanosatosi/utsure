@@ -22,6 +22,7 @@ enum class EncodeJobPreflightIssueCode : std::uint8_t {
     invalid_output_path,
     invalid_video_settings,
     output_will_be_overwritten,
+    working_set_limit_exceeded,
     timeline_validation_failed,
     subtitle_validation_failed
 };

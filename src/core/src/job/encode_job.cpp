@@ -1,5 +1,6 @@
 #include "utsure/core/job/encode_job.hpp"
 
+#include "encode_job_working_set_guard.hpp"
 #include "../subtitles/subtitle_burn_in.hpp"
 #include "utsure/core/media/media_decoder.hpp"
 #include "utsure/core/media/media_inspector.hpp"
@@ -233,6 +234,19 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             EncodeJobLogLevel::info,
             "Timeline assembled with " + std::to_string(timeline_plan.segments.size()) + " segment(s)."
         );
+
+        if (const auto working_set_failure = working_set_guard::check(
+                timeline_plan,
+                job.subtitles,
+                options.decode_normalization_policy
+            ); working_set_failure.has_value()) {
+            return make_error(
+                job,
+                working_set_failure->message,
+                working_set_failure->actionable_hint,
+                &telemetry
+            );
+        }
 
         std::vector<media::DecodedMediaSource> decoded_segments{};
         decoded_segments.reserve(timeline_plan.segments.size());

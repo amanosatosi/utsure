@@ -80,3 +80,4 @@ UTSURE_CMAKE_BUILD_TYPE=Release ./scripts/ci/windows-msys2-build.sh
 - GitHub Actions is still the authoritative source of build verification for this repository state.
 - The supported local path is Windows-first via MSYS2 UCRT64.
 - The only documented release output today is the portable Windows bundle.
+- Large jobs can now be rejected during preflight if the current in-memory decode/compose pipeline is estimated to exceed its safety limit.
