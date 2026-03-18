@@ -18,6 +18,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M8 Intro/outro timeline composition completed.
 - [x] M12 First usable desktop GUI completed.
 - [x] M13 Windows portable packaging slice completed.
+- [x] M13 Usability and safety slice completed.
 
 ## Active assumptions
 
@@ -417,6 +418,8 @@ Current slice:
 - Keep this slice limited to deployable runtime bundling and artifact publication.
 - Defer the broader correctness, cancellation, recoverability, and cross-platform portability work until after the packaging path is in place.
 - Packaging slice status: completed.
+- Usability and safety slice status: completed.
+- Usability and safety slice scope: preflight validation, safer defaults, clearer logs/errors, overwrite confirmation, and lightweight preview feedback for the existing GUI flow.
 
 Scope:
 - Expand test coverage around probe, timeline, subtitle, and encode correctness.
@@ -443,4 +446,4 @@ Done criteria:
 
 ## Immediate next milestone
 
-The Windows portable packaging slice of M13 is complete. The remaining M13 correctness, diagnostics, and portability work is still open.
+The Windows portable packaging and usability/safety slices of M13 are complete. The remaining M13 correctness, diagnostics, and portability work is still open.

@@ -190,6 +190,54 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/job-timeline-h264.mp4"
 )
 
+add_executable(utsure_core_encode_job_preflight_tests
+    encode_job_preflight_tests.cpp
+)
+
+target_link_libraries(utsure_core_encode_job_preflight_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_core_encode_job_preflight_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_encode_job_preflight_tests)
+
+add_dependencies(utsure_core_encode_job_preflight_tests utsure_generate_sample_media)
+
+add_test(
+    NAME utsure.core.job.preflight.valid_preview
+    COMMAND utsure_core_encode_job_preflight_tests --valid-preview
+        "${UTSURE_TIMELINE_INTRO_FILE}"
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TIMELINE_OUTRO_FILE}"
+        "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/preflight-valid.mp4"
+)
+
+add_test(
+    NAME utsure.core.job.preflight.invalid_fps
+    COMMAND utsure_core_encode_job_preflight_tests --invalid-fps
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TIMELINE_BAD_FPS_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/preflight-invalid-fps.mp4"
+)
+
+add_test(
+    NAME utsure.core.job.preflight.missing_subtitle
+    COMMAND utsure_core_encode_job_preflight_tests --missing-subtitle
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/missing-subtitle.ass"
+        "${UTSURE_TEST_MEDIA_DIR}/preflight-missing-subtitle.mp4"
+)
+
+add_test(
+    NAME utsure.core.job.preflight.overwrite_warning
+    COMMAND utsure_core_encode_job_preflight_tests --overwrite-warning
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/preflight-overwrite.mp4"
+)
+
 add_executable(utsure_core_timeline_tests
     timeline_tests.cpp
 )

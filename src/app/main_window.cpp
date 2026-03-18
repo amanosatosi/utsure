@@ -2,6 +2,7 @@
 
 #include "encode_job_runner_controller.hpp"
 #include "utsure/core/build_info.hpp"
+#include "utsure/core/job/encode_job_preflight.hpp"
 
 #include <QComboBox>
 #include <QDir>
@@ -15,14 +16,17 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStringList>
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <algorithm>
 #include <string_view>
 
 namespace {
@@ -38,8 +42,42 @@ QString to_qstring(std::string_view text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
 }
 
+utsure::core::media::OutputVideoCodec codec_from_index(const int index) {
+    return index == static_cast<int>(utsure::core::media::OutputVideoCodec::h265)
+        ? utsure::core::media::OutputVideoCodec::h265
+        : utsure::core::media::OutputVideoCodec::h264;
+}
+
+QString recommended_preset(const utsure::core::media::OutputVideoCodec /*codec*/) {
+    return "medium";
+}
+
+int recommended_crf(const utsure::core::media::OutputVideoCodec codec) {
+    return codec == utsure::core::media::OutputVideoCodec::h265 ? 28 : 23;
+}
+
+QString codec_help_text(const utsure::core::media::OutputVideoCodec codec) {
+    return codec == utsure::core::media::OutputVideoCodec::h265
+        ? "Basic preset defaults for H.265: medium / CRF 28."
+        : "Basic preset defaults for H.264: medium / CRF 23.";
+}
+
 QString video_file_filter() {
     return "Video Files (*.avi *.mkv *.mov *.mp4 *.webm);;All Files (*)";
+}
+
+QString format_preflight_issue(
+    const utsure::core::job::EncodeJobPreflightIssue &issue
+) {
+    QString line = QString("[%1] %2")
+        .arg(to_qstring(utsure::core::job::to_string(issue.severity)))
+        .arg(to_qstring(issue.message));
+
+    if (!issue.actionable_hint.empty()) {
+        line += QString("\n        Hint: %1").arg(to_qstring(issue.actionable_hint));
+    }
+
+    return line;
 }
 
 PathRowWidgets create_path_row(
@@ -131,25 +169,18 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
     preset_combo_ = new QComboBox(output_group_);
     preset_combo_->setObjectName("presetCombo");
-    preset_combo_->setEditable(true);
+    preset_combo_->setEditable(false);
     preset_combo_->addItems(QStringList{
-        "ultrafast",
-        "superfast",
-        "veryfast",
-        "faster",
         "fast",
         "medium",
-        "slow",
-        "slower",
-        "veryslow"
+        "slow"
     });
-    preset_combo_->setCurrentText("medium");
+    preset_combo_->setToolTip("Basic presets: fast, medium, or slow.");
     output_layout->addRow("Preset", preset_combo_);
 
     crf_spin_box_ = new QSpinBox(output_group_);
     crf_spin_box_->setObjectName("crfSpinBox");
     crf_spin_box_->setRange(0, 51);
-    crf_spin_box_->setValue(23);
     output_layout->addRow("CRF", crf_spin_box_);
 
     const auto output_row = create_path_row(output_group_, "Required output path", false);
@@ -165,10 +196,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     status_label_->setObjectName("statusLabel");
     status_label_->setWordWrap(true);
 
+    preview_label_ = new QLabel(run_group);
+    preview_label_->setObjectName("previewLabel");
+    preview_label_->setWordWrap(true);
+
     progress_bar_ = new QProgressBar(run_group);
     progress_bar_->setObjectName("progressBar");
     progress_bar_->setRange(0, 1);
     progress_bar_->setValue(0);
+    progress_bar_->setFormat("Ready");
 
     start_button_ = new QPushButton("Start Encode", run_group);
     start_button_->setObjectName("startEncodeButton");
@@ -176,9 +212,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 
     run_layout->addWidget(new QLabel("Status", run_group), 0, 0);
     run_layout->addWidget(status_label_, 0, 1);
-    run_layout->addWidget(new QLabel("Progress", run_group), 1, 0);
-    run_layout->addWidget(progress_bar_, 1, 1);
-    run_layout->addWidget(start_button_, 0, 2, 2, 1);
+    run_layout->addWidget(new QLabel("Preview", run_group), 1, 0);
+    run_layout->addWidget(preview_label_, 1, 1);
+    run_layout->addWidget(new QLabel("Progress", run_group), 2, 0);
+    run_layout->addWidget(progress_bar_, 2, 1);
+    run_layout->addWidget(start_button_, 0, 2, 3, 1);
 
     auto *logs_group = new QGroupBox("Logs", central_widget);
     auto *logs_layout = new QVBoxLayout(logs_group);
@@ -203,8 +241,35 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(runner_controller_, &EncodeJobRunnerController::progress_changed, this, &MainWindow::handle_progress_changed);
     connect(runner_controller_, &EncodeJobRunnerController::log_message, this, &MainWindow::append_log_line);
     connect(runner_controller_, &EncodeJobRunnerController::job_finished, this, &MainWindow::handle_job_finished);
+    connect(codec_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int /*index*/) {
+        apply_codec_defaults();
+        mark_preview_stale();
+    });
+    connect(source_path_edit_, &QLineEdit::textChanged, this, [this](const QString &) {
+        mark_preview_stale();
+    });
+    connect(subtitle_path_edit_, &QLineEdit::textChanged, this, [this](const QString &) {
+        mark_preview_stale();
+    });
+    connect(intro_path_edit_, &QLineEdit::textChanged, this, [this](const QString &) {
+        mark_preview_stale();
+    });
+    connect(outro_path_edit_, &QLineEdit::textChanged, this, [this](const QString &) {
+        mark_preview_stale();
+    });
+    connect(output_path_edit_, &QLineEdit::textChanged, this, [this](const QString &) {
+        mark_preview_stale();
+    });
+    connect(preset_combo_, &QComboBox::currentTextChanged, this, [this](const QString &) {
+        mark_preview_stale();
+    });
+    connect(crf_spin_box_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int /*value*/) {
+        mark_preview_stale();
+    });
 
+    apply_codec_defaults();
     set_status_text("Ready to build an encode job.", false);
+    set_preview_text("Preview updates after input validation.", false);
     append_log_line("[info] Window ready.");
 }
 
@@ -213,7 +278,7 @@ QString MainWindow::window_structure_summary() const {
         "Main window structure:\n"
         "- Inputs: source video, subtitle file, optional intro clip, optional outro clip\n"
         "- Output: codec, preset, CRF, output path\n"
-        "- Run: status label, progress bar, start encode button\n"
+        "- Run: status label, preview label, progress bar, start encode button\n"
         "- Logs: read-only text pane for core stage logs, reports, and errors"
     );
 }
@@ -237,10 +302,7 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job(QString &error
         return std::nullopt;
     }
 
-    const auto codec_value = codec_combo_->currentData().toInt();
-    const auto codec = codec_value == static_cast<int>(utsure::core::media::OutputVideoCodec::h265)
-        ? utsure::core::media::OutputVideoCodec::h265
-        : utsure::core::media::OutputVideoCodec::h264;
+    const auto codec = current_output_codec();
 
     utsure::core::job::EncodeJob job{};
     job.input.main_source_path = qstring_to_path(source_text);
@@ -273,6 +335,10 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job(QString &error
     }
 
     return job;
+}
+
+utsure::core::media::OutputVideoCodec MainWindow::current_output_codec() const {
+    return codec_from_index(codec_combo_->currentData().toInt());
 }
 
 void MainWindow::choose_source_video() {
@@ -348,6 +414,7 @@ void MainWindow::start_encode() {
         return;
     }
 
+    log_view_->clear();
     QString error_message{};
     const auto job = build_job(error_message);
     if (!job.has_value()) {
@@ -356,12 +423,68 @@ void MainWindow::start_encode() {
         return;
     }
 
-    log_view_->clear();
+    append_log_line("[info] Validating inputs before encode.");
+    const auto preflight = utsure::core::job::EncodeJobPreflight::inspect(*job);
+
+    if (preflight.preview_summary.has_value()) {
+        const QString preview_text =
+            to_qstring(utsure::core::job::format_encode_job_preview(*preflight.preview_summary));
+        set_preview_text(preview_text, false);
+        append_log_line("[info] Preview: " + preview_text);
+    } else {
+        set_preview_text("No preview available until the inputs pass validation.", true);
+    }
+
+    for (const auto &issue : preflight.issues) {
+        append_log_line(format_preflight_issue(issue));
+    }
+
+    if (!preflight.can_start_encode()) {
+        const auto first_issue = std::find_if(
+            preflight.issues.begin(),
+            preflight.issues.end(),
+            [](const utsure::core::job::EncodeJobPreflightIssue &issue) {
+                return issue.severity == utsure::core::job::EncodeJobPreflightIssueSeverity::error;
+            }
+        );
+        const QString status_text = first_issue != preflight.issues.end()
+            ? to_qstring(first_issue->message)
+            : "Fix the input issues before starting the encode.";
+        set_status_text(status_text, true);
+        return;
+    }
+
+    if (preflight.requires_output_overwrite_confirmation()) {
+        const auto response = QMessageBox::question(
+            this,
+            "Overwrite Existing Output?",
+            "The selected output file already exists.\n\nDo you want to overwrite it?"
+        );
+        if (response != QMessageBox::Yes) {
+            set_status_text("Encode cancelled before start.", false);
+            append_log_line("[info] Overwrite was declined. The encode did not start.");
+            return;
+        }
+
+        append_log_line("[warning] Existing output confirmed for overwrite.");
+    }
+
     append_log_line("[info] Requested encode job.");
     append_log_line("[info] Source: " + source_path_edit_->text().trimmed());
     append_log_line("[info] Output: " + output_path_edit_->text().trimmed());
-    set_status_text("Starting encode job.", false);
+    set_status_text("Validation passed. Starting encode job.", false);
     runner_controller_->start_job(*job);
+}
+
+void MainWindow::apply_codec_defaults() {
+    const auto codec = current_output_codec();
+    const QSignalBlocker preset_blocker(preset_combo_);
+    const QSignalBlocker crf_blocker(crf_spin_box_);
+
+    preset_combo_->setCurrentText(recommended_preset(codec));
+    preset_combo_->setToolTip(codec_help_text(codec));
+    crf_spin_box_->setValue(recommended_crf(codec));
+    crf_spin_box_->setToolTip(codec_help_text(codec));
 }
 
 void MainWindow::handle_running_changed(const bool running) {
@@ -373,9 +496,11 @@ void MainWindow::handle_running_changed(const bool running) {
     if (running) {
         progress_bar_->setRange(0, 0);
         progress_bar_->setValue(0);
+        progress_bar_->setFormat("Working...");
     } else if (progress_bar_->maximum() == 0) {
         progress_bar_->setRange(0, 1);
         progress_bar_->setValue(0);
+        progress_bar_->setFormat("Ready");
     }
 }
 
@@ -387,8 +512,10 @@ void MainWindow::handle_progress_changed(
     if (total_steps > 0) {
         progress_bar_->setRange(0, total_steps);
         progress_bar_->setValue(current_step);
+        progress_bar_->setFormat(QString("Step %1 of %2").arg(current_step).arg(total_steps));
     } else {
         progress_bar_->setRange(0, 0);
+        progress_bar_->setFormat("Working...");
     }
 
     set_status_text(status_text, false);
@@ -406,13 +533,16 @@ void MainWindow::handle_job_finished(
         } else {
             progress_bar_->setValue(progress_bar_->maximum());
         }
+        progress_bar_->setFormat("Completed");
 
         append_log_line("[info] Encode report:");
     } else if (progress_bar_->maximum() <= 0) {
         progress_bar_->setRange(0, 1);
         progress_bar_->setValue(0);
+        progress_bar_->setFormat("Failed");
         append_log_line("[error] Encode report:");
     } else {
+        progress_bar_->setFormat("Failed");
         append_log_line("[error] Encode report:");
     }
 
@@ -422,6 +552,19 @@ void MainWindow::handle_job_finished(
 
 void MainWindow::append_log_line(const QString &line) {
     log_view_->appendPlainText(line);
+}
+
+void MainWindow::mark_preview_stale() {
+    if (runner_controller_ != nullptr && runner_controller_->is_running()) {
+        return;
+    }
+
+    set_preview_text("Preview updates after input validation.", false);
+}
+
+void MainWindow::set_preview_text(const QString &text, const bool is_error) {
+    preview_label_->setText(text);
+    preview_label_->setStyleSheet(is_error ? "color: #8b0000;" : "color: #444444;");
 }
 
 void MainWindow::set_status_text(const QString &text, const bool is_error) {
