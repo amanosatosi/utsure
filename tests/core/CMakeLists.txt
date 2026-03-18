@@ -69,3 +69,32 @@ add_test(
     NAME utsure.core.media.decode.missing
     COMMAND utsure_core_media_decode_tests --missing "${UTSURE_TEST_MEDIA_DIR}/missing-input.avi"
 )
+
+add_executable(utsure_core_media_encode_tests
+    media_encode_tests.cpp
+)
+
+target_link_libraries(utsure_core_media_encode_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_core_media_encode_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_media_encode_tests)
+
+add_dependencies(utsure_core_media_encode_tests utsure_generate_sample_media)
+
+add_test(
+    NAME utsure.core.media.encode.h264
+    COMMAND utsure_core_media_encode_tests --h264
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/encode-sample-h264.mp4"
+)
+
+add_test(
+    NAME utsure.core.media.encode.h265
+    COMMAND utsure_core_media_encode_tests --h265
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/encode-sample-h265.mp4"
+)

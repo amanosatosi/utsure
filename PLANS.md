@@ -12,6 +12,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [ ] M5 Core project and timeline contracts are ready to resume after decode flow.
 - [ ] M6 Media input inspection is implemented and awaiting CI validation.
 - [ ] M7 Decode and normalized processing flow is implemented and awaiting CI validation.
+- [ ] M9 Software encoding backends are implemented and awaiting CI validation.
 
 ## Active assumptions
 
@@ -25,6 +26,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - `libassmod` is currently treated as a pinned source dependency built into an isolated prefix because it installs as a `libass`-compatible package name rather than a uniquely named `libassmod` package.
 - Media inspection was intentionally pulled ahead of broader project/timeline contracts because those contracts need real stream metadata and explicit cadence fields instead of placeholder assumptions.
 - The decode and normalized processing milestone is also being pulled ahead of the broader project/timeline contracts by explicit user request, but it remains limited to the main source path only.
+- The software encoding backend milestone is also being pulled ahead of the broader project/timeline and session-orchestration milestones by explicit user request, and it remains limited to the main-source decoded video path with minimal codec configuration.
 
 ## Architecture direction
 
@@ -250,29 +252,36 @@ Done criteria:
 - Timeline assembly works for the supported segment combinations.
 - Unsupported combinations fail with explicit diagnostics.
 
-### M9 Add encode session orchestration and first H.264 path
+### M9 Implement software encoding backends
+
+Status: Implemented, pending CI validation
 
 Scope:
-- Introduce the encode session object that drives decode, transform, and encode stages.
-- Add the first working H.264 output path.
-- Keep the orchestration interfaces ready for subtitle burn and H.265 extension.
+- Add minimal software encoding backends for `libx264` and `libx265`.
+- Encode the existing decoded main-source video frame stream into structurally valid outputs.
+- Keep configuration minimal for v1: codec, preset, and CRF.
 
 Likely files/modules:
-- `src/core/encode/`
-- `src/core/adapters/ffmpeg/`
-- `tests/integration/encode/`
+- `src/core/include/utsure/core/media/`
+- `src/core/src/media/`
+- `tests/core/`
+- `scripts/ci/`
 
 Risks:
-- Poor cancellation/progress/error boundaries.
-- Overcoupling the encode path to H.264-specific options.
+- Poor timestamp normalization between decoded frames and encoded packets.
+- Overcoupling the backend implementation to one codec while claiming both.
+- Shipping a path that produces technically writable files but structurally weak outputs.
 
 Validation:
-- End-to-end encode test for a simple main-source-only H.264 output.
-- Verify that the output frame rate matches the main source.
+- End-to-end encode tests for one H.264 and one H.265 sample from the decoded main-source path.
+- Verify that the output files can be inspected and decoded again with coherent video timestamps.
+- Verify that output frame cadence remains tied to the main source.
 
 Done criteria:
-- A minimal H.264 encode completes successfully through the core.
-- Progress and failure states are observable from the orchestration layer.
+- A decoded frame stream can be encoded to H.264.
+- The same path can encode to H.265.
+- Output timestamps remain coherent.
+- Resulting files are structurally valid.
 
 ### M10 Add subtitle renderer adapter and burn-in path
 
@@ -301,26 +310,24 @@ Done criteria:
 
 ### M11 Extend encode support to H.265
 
+Status: Merged into M9 software encoding backends
+
 Scope:
-- Add H.265 output as a first-class encode option.
-- Reuse the encode session architecture from M8 rather than forking it.
-- Keep output configuration and validation shared where possible.
+- This scope was merged into M9 so the first backend milestone covers both H.264 and H.265.
 
 Likely files/modules:
-- `src/core/encode/`
-- `tests/integration/encode/`
+- `src/core/include/utsure/core/media/`
+- `src/core/src/media/`
+- `tests/core/`
 
 Risks:
-- Capability drift between H.264 and H.265 settings.
-- Different codec availability across FFmpeg builds.
+- Capability drift between H.264 and H.265 settings remains a risk inside M9.
 
 Validation:
-- End-to-end H.265 encode test on a simple sample.
-- Verify that H.264 and H.265 share the same core timeline and subtitle paths.
+- Covered by M9 validation.
 
 Done criteria:
-- The core supports both H.264 and H.265 output.
-- Codec selection does not duplicate large parts of the pipeline.
+- Covered by M9 done criteria.
 
 ### M12 Add thin Qt 6 Widgets desktop shell
 
@@ -374,4 +381,4 @@ Done criteria:
 
 ## Immediate next milestone
 
-Define the first project and timeline contracts on top of inspected and decoded media metadata, then re-run CI so M2, M3, M4, M6, and M7 can be closed with real build validation.
+Define the first project and timeline contracts on top of inspected, decoded, and encoded media metadata, then re-run CI so M2, M3, M4, M6, M7, and M9 can be closed with real build validation.

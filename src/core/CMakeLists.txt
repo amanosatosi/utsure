@@ -4,6 +4,7 @@ add_library(utsure_encoder_core STATIC
     src/media/ffmpeg_media_support.cpp
     src/media/media_decode_report.cpp
     src/media/media_decoder.cpp
+    src/media/media_encoder.cpp
     src/media/media_inspector.cpp
     src/media/media_inspection_report.cpp
 )
@@ -20,6 +21,8 @@ target_include_directories(utsure_encoder_core
 target_link_libraries(utsure_encoder_core
     PRIVATE
         utsure::ffmpeg
+        utsure::x264
+        utsure::x265
 )
 
 target_compile_definitions(utsure_encoder_core
