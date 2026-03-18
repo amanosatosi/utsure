@@ -12,11 +12,19 @@ libassmod_prefix="${UTSURE_LIBASSMOD_PREFIX:-${libassmod_root}/prefix}"
 
 mkdir -p "${libassmod_root}"
 
+echo "Using libassmod ref: ${libassmod_ref}"
+
 if [ ! -d "${libassmod_source_dir}/.git" ]; then
-  git clone --branch "${libassmod_ref}" --depth 1 https://github.com/amanosatosi/libassmod.git "${libassmod_source_dir}"
+  if ! git clone --branch "${libassmod_ref}" --depth 1 https://github.com/amanosatosi/libassmod.git "${libassmod_source_dir}"; then
+    echo "Failed to resolve libassmod ref '${libassmod_ref}'. Check .github/workflows/windows-msys2.yml and ensure the ref is quoted as a string."
+    exit 1
+  fi
 else
   git -C "${libassmod_source_dir}" fetch --tags --force origin
-  git -C "${libassmod_source_dir}" checkout --force "${libassmod_ref}"
+  if ! git -C "${libassmod_source_dir}" checkout --force "${libassmod_ref}"; then
+    echo "Failed to resolve libassmod ref '${libassmod_ref}'. Check .github/workflows/windows-msys2.yml and ensure the ref is quoted as a string."
+    exit 1
+  fi
 fi
 
 meson setup "${libassmod_build_dir}" "${libassmod_source_dir}" \
