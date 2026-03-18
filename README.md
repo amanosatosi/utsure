@@ -19,6 +19,8 @@ Implemented so far:
 - A technology-agnostic subtitle renderer/session boundary with timestamped RGBA-oriented overlay contracts.
 - A `libassmod`-backed subtitle burn-in path that renders ASS subtitles onto decoded RGBA frames before final encode.
 
+These milestones are currently covered by the Windows GitHub Actions build and test workflow.
+
 Not implemented yet:
 
 - Audio output encode.

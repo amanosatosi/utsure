@@ -6,15 +6,15 @@ This file is the living execution plan for the repository. Update it when a mile
 
 - [x] M0 Repository inspection completed.
 - [x] M1 Repo scaffolding docs completed.
-- [ ] M2 Project skeleton is implemented and awaiting CI validation.
-- [ ] M3 Core-only build foundation is implemented and awaiting CI validation.
-- [ ] M4 Dependency strategy and adapter seams are implemented and awaiting CI validation.
-- [ ] M5 Core job and configuration contracts are implemented and awaiting CI validation.
-- [ ] M6 Media input inspection is implemented and awaiting CI validation.
-- [ ] M7 Decode and normalized processing flow is implemented and awaiting CI validation.
-- [ ] M9 Software encoding backends are implemented and awaiting CI validation.
-- [ ] M10 Subtitle renderer abstraction is implemented and awaiting CI validation.
-- [ ] M14 libassmod subtitle burn-in is implemented and awaiting CI validation.
+- [x] M2 Project skeleton completed.
+- [x] M3 Core-only build foundation completed.
+- [x] M4 Dependency strategy and adapter seams completed.
+- [x] M5 Core job and configuration contracts completed.
+- [x] M6 Media input inspection completed.
+- [x] M7 Decode and normalized processing flow completed.
+- [x] M9 Software encoding backends completed.
+- [x] M10 Subtitle renderer abstraction completed.
+- [x] M14 libassmod subtitle burn-in completed.
 
 ## Active assumptions
 
@@ -58,7 +58,7 @@ This file is the living execution plan for the repository. Update it when a mile
 
 ### M2 Bootstrap repository layout and root build entry
 
-Status: Implemented, pending CI validation
+Status: Completed
 
 Scope:
 - Create the top-level repository layout needed for source, tests, docs, scripts, and CMake support.
@@ -91,7 +91,7 @@ Done criteria:
 
 ### M3 Establish core-only build and test foundation
 
-Status: Implemented, pending CI validation
+Status: Completed
 
 Scope:
 - Create an empty `encoder-core` target and a minimal test target.
@@ -119,7 +119,7 @@ Done criteria:
 
 ### M4 Define dependency strategy and adapter seams
 
-Status: Implemented, pending CI validation
+Status: Completed
 
 Scope:
 - Decide how the project locates and versions Qt 6, FFmpeg, `libassmod`, `libx264`, and `libx265`.
@@ -148,7 +148,7 @@ Done criteria:
 
 ### M5 Add core job configuration and muxed encode entry point
 
-Status: Implemented, pending CI validation
+Status: Completed
 
 Scope:
 - Introduce the first stable core job/config types for source selection and output settings.
@@ -175,7 +175,7 @@ Done criteria:
 
 ### M6 Implement FFmpeg-based media probing and normalization rules
 
-Status: Implemented, pending CI validation
+Status: Completed
 
 Scope:
 - Add a media probe service that reads stream properties from candidate inputs.
@@ -202,7 +202,7 @@ Done criteria:
 
 ### M7 Implement source decode and normalized processing flow
 
-Status: Implemented, pending CI validation
+Status: Completed
 
 Scope:
 - Add a source decode service that reads the primary video and audio streams selected by the probe layer.
@@ -257,7 +257,7 @@ Done criteria:
 
 ### M9 Implement software encoding backends
 
-Status: Implemented, pending CI validation
+Status: Completed
 
 Scope:
 - Add minimal software encoding backends for `libx264` and `libx265`.
@@ -288,7 +288,7 @@ Done criteria:
 
 ### M10 Add subtitle renderer abstraction and libassmod adapter seam
 
-Status: Implemented, pending CI validation
+Status: Completed
 
 Scope:
 - Introduce the subtitle renderer abstraction and session lifecycle in `encoder-core`.
@@ -317,7 +317,7 @@ Done criteria:
 
 ### M14 Integrate libassmod subtitle burn-in
 
-Status: Implemented, pending CI validation
+Status: Completed
 
 Scope:
 - Implement the `libassmod`-backed subtitle renderer behind the core subtitle abstraction.
@@ -419,4 +419,4 @@ Done criteria:
 
 ## Immediate next milestone
 
-Return to the broader project and timeline contracts before intro/outro and broader subtitle/timeline orchestration, then re-run CI so the implemented milestones can be closed with real build validation.
+Implement M8 timeline assembly for intro, main, and outro on top of the now-validated inspection, decode, encode, job, and subtitle-burn-in foundation.
