@@ -16,6 +16,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M10 Subtitle renderer abstraction completed.
 - [x] M14 libassmod subtitle burn-in completed.
 - [x] M8 Intro/outro timeline composition completed.
+- [x] M12 First usable desktop GUI completed.
 
 ## Active assumptions
 
@@ -378,10 +379,13 @@ Done criteria:
 
 ### M12 Add thin Qt 6 Widgets desktop shell
 
+Status: Completed
+
 Scope:
-- Add the first real desktop window and wire it to the core boundaries.
-- Keep state management, validation, and encode logic out of the GUI layer.
-- Show asset selection, settings entry, progress, and error reporting.
+- Replace the placeholder window with the first usable desktop encode workflow.
+- Keep state management, validation, timeline assembly, and encode logic out of the GUI layer.
+- Show asset selection, settings entry, stage-level progress, logs, and understandable error reporting.
+- Support the current core scope only: main source, optional subtitle burn-in, optional intro/outro, H.264/H.265, preset, CRF, and output path.
 
 Likely files/modules:
 - `src/app/`
@@ -396,10 +400,12 @@ Risks:
 Validation:
 - Application builds and launches on Windows.
 - A basic encode flow can be started from the GUI and delegated to the core.
+- GitHub Actions remains the authoritative compile-and-launch validation environment for this milestone because the local machine does not expose a Qt-capable compiler toolchain.
 
 Done criteria:
 - Qt Widgets shell launches and drives the core successfully.
 - GUI remains thin and does not own timeline or encode policy.
+- The first usable window exposes the minimum controls needed to build and run the supported encode job.
 
 ### M13 Harden correctness, packaging, and portability
 
@@ -428,4 +434,4 @@ Done criteria:
 
 ## Immediate next milestone
 
-Choose the next user-prioritized milestone after M8; likely candidates are the thin Qt 6 Widgets shell in M12, the correctness and packaging pass in M13, or the deferred audio-output encode work that now sits cleanly behind the composed timeline layer.
+M12 is complete. The next milestone is M13 correctness, packaging, and portability work.

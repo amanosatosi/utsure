@@ -22,18 +22,32 @@ int main(int argc, char *argv[]) {
     QApplication::setApplicationVersion(to_qstring(utsure::core::BuildInfo::project_version()));
 
     QCommandLineParser parser;
-    parser.setApplicationDescription("utsure desktop application skeleton");
+    parser.setApplicationDescription("utsure desktop encode job runner");
     parser.addHelpOption();
 
     const QCommandLineOption smokeTestOption(
         "smoke-test",
         "Launch the main window and exit automatically after a short delay."
     );
+    const QCommandLineOption dumpWindowStructureOption(
+        "dump-window-structure",
+        "Print the main window structure to stdout and exit."
+    );
     parser.addOption(smokeTestOption);
+    parser.addOption(dumpWindowStructureOption);
     parser.process(app);
 
     MainWindow mainWindow;
     mainWindow.show();
+
+    if (parser.isSet(dumpWindowStructureOption)) {
+        qInfo().noquote() << mainWindow.window_structure_summary();
+        if (!parser.isSet(smokeTestOption)) {
+            QTimer::singleShot(0, [&app]() {
+                app.quit();
+            });
+        }
+    }
 
     if (parser.isSet(smokeTestOption)) {
         qInfo().noquote() << "Starting utsure GUI smoke test.";

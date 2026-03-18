@@ -8,12 +8,19 @@
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
 using utsure::core::job::EncodeJob;
+using utsure::core::job::EncodeJobLogLevel;
+using utsure::core::job::EncodeJobLogMessage;
+using utsure::core::job::EncodeJobObserver;
+using utsure::core::job::EncodeJobProgress;
 using utsure::core::job::EncodeJobResult;
 using utsure::core::job::EncodeJobRunner;
+using utsure::core::job::EncodeJobRunOptions;
+using utsure::core::job::EncodeJobStage;
 using utsure::core::job::EncodeJobSummary;
 using utsure::core::job::format_encode_job_report;
 using utsure::core::media::DecodedMediaSource;
@@ -30,6 +37,19 @@ int fail(std::string_view message) {
     std::cerr << message << '\n';
     return 1;
 }
+
+struct CollectingObserver final : EncodeJobObserver {
+    std::vector<EncodeJobProgress> progress_updates{};
+    std::vector<EncodeJobLogMessage> log_messages{};
+
+    void on_progress(const EncodeJobProgress &progress) override {
+        progress_updates.push_back(progress);
+    }
+
+    void on_log(const EncodeJobLogMessage &message) override {
+        log_messages.push_back(message);
+    }
+};
 
 std::string format_rational(const Rational &value) {
     if (!value.is_valid()) {
@@ -96,6 +116,45 @@ int assert_decoded_output(const DecodedMediaSource &decoded_output, const std::s
         if (decoded_output.video_frames[index].timestamp.start_microseconds <=
             decoded_output.video_frames[index - 1].timestamp.start_microseconds) {
             return fail("Unexpected burned-output timestamp sequence.");
+        }
+    }
+
+    return 0;
+}
+
+int assert_observer_flow(
+    const CollectingObserver &observer,
+    const int expected_decode_steps
+) {
+    if (observer.progress_updates.empty()) {
+        return fail("The subtitle burn-in observer did not receive any progress updates.");
+    }
+
+    const int expected_total_steps = 1 + expected_decode_steps + 1 + 1 + 1;
+    int subtitle_stage_count = 0;
+
+    if (observer.progress_updates.front().stage != EncodeJobStage::assembling_timeline ||
+        observer.progress_updates.back().stage != EncodeJobStage::completed) {
+        return fail("The subtitle burn-in observer did not report the expected lifecycle stages.");
+    }
+
+    for (const auto &progress : observer.progress_updates) {
+        if (progress.total_steps != expected_total_steps) {
+            return fail("The subtitle burn-in observer reported an unexpected total-step count.");
+        }
+
+        if (progress.stage == EncodeJobStage::burning_in_subtitles) {
+            ++subtitle_stage_count;
+        }
+    }
+
+    if (subtitle_stage_count != 1) {
+        return fail("The subtitle burn-in observer did not report the subtitle stage exactly once.");
+    }
+
+    for (const auto &log_message : observer.log_messages) {
+        if (log_message.level == EncodeJobLogLevel::error) {
+            return fail("The subtitle burn-in observer reported an unexpected error log.");
         }
     }
 
@@ -192,6 +251,7 @@ int run_burn_in_assertion(
     const std::filesystem::path &burned_output_path,
     const OutputVideoCodec codec
 ) {
+    CollectingObserver observer{};
     const EncodeJob plain_job{
         .input = {
             .main_source_path = sample_path
@@ -229,7 +289,10 @@ int run_burn_in_assertion(
         return fail("Plain encode job failed unexpectedly before subtitle comparison.");
     }
 
-    const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job);
+    const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
     if (!burned_job_result.succeeded()) {
         return fail("Subtitle burn-in job failed unexpectedly.");
     }
@@ -253,6 +316,11 @@ int run_burn_in_assertion(
         return fail("Subtitle burn-in did not alter the first output frame.");
     }
 
+    const auto observer_result = assert_observer_flow(observer, 1);
+    if (observer_result != 0) {
+        return observer_result;
+    }
+
     std::cout << build_validation_report(
         *burned_job_result.encode_job_summary,
         *plain_output_decode.decoded_media_source,
@@ -269,6 +337,7 @@ int run_timeline_burn_in_assertion(
     const std::filesystem::path &plain_output_path,
     const std::filesystem::path &burned_output_path
 ) {
+    CollectingObserver observer{};
     const EncodeJob plain_job{
         .input = {
             .intro_source_path = intro_path,
@@ -306,7 +375,10 @@ int run_timeline_burn_in_assertion(
     };
 
     const EncodeJobResult plain_job_result = EncodeJobRunner::run(plain_job);
-    const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job);
+    const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
     if (!plain_job_result.succeeded() || !burned_job_result.succeeded()) {
         return fail("Timeline subtitle burn-in jobs failed unexpectedly.");
     }
@@ -346,6 +418,11 @@ int run_timeline_burn_in_assertion(
 
     if (!frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 24U)) {
         return fail("Timeline subtitle burn-in did not change the first main-segment frame.");
+    }
+
+    const auto observer_result = assert_observer_flow(observer, 3);
+    if (observer_result != 0) {
+        return observer_result;
     }
 
     std::cout << "timeline.intro.frame0.changed=no\n";

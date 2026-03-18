@@ -33,4 +33,4 @@ ctest --test-dir build --output-on-failure
 export QT_PLUGIN_PATH="/ucrt64/share/qt6/plugins"
 export QT_QPA_PLATFORM="offscreen"
 
-./build/src/app/utsure.exe --smoke-test
+./build/src/app/utsure.exe --dump-window-structure --smoke-test

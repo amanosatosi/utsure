@@ -11,6 +11,40 @@
 
 namespace utsure::core::job {
 
+enum class EncodeJobStage : std::uint8_t {
+    assembling_timeline = 0,
+    decoding_segment,
+    burning_in_subtitles,
+    composing_timeline,
+    encoding_output,
+    completed
+};
+
+enum class EncodeJobLogLevel : std::uint8_t {
+    info = 0,
+    error
+};
+
+struct EncodeJobProgress final {
+    EncodeJobStage stage{EncodeJobStage::assembling_timeline};
+    int current_step{0};
+    int total_steps{0};
+    std::string message{};
+};
+
+struct EncodeJobLogMessage final {
+    EncodeJobLogLevel level{EncodeJobLogLevel::info};
+    std::string message{};
+};
+
+class EncodeJobObserver {
+public:
+    virtual ~EncodeJobObserver() = default;
+
+    virtual void on_progress(const EncodeJobProgress &progress);
+    virtual void on_log(const EncodeJobLogMessage &message);
+};
+
 struct EncodeJobInput final {
     std::optional<std::filesystem::path> intro_source_path{};
     std::filesystem::path main_source_path{};
@@ -65,12 +99,17 @@ struct EncodeJobResult final {
     [[nodiscard]] bool succeeded() const noexcept;
 };
 
+struct EncodeJobRunOptions final {
+    media::DecodeNormalizationPolicy decode_normalization_policy{};
+    EncodeJobObserver *observer{nullptr};
+};
+
 class EncodeJobRunner final {
 public:
-    [[nodiscard]] static EncodeJobResult run(
-        const EncodeJob &job,
-        const media::DecodeNormalizationPolicy &decode_normalization_policy = {}
-    ) noexcept;
+    [[nodiscard]] static EncodeJobResult run(const EncodeJob &job, const EncodeJobRunOptions &options = {}) noexcept;
 };
+
+[[nodiscard]] const char *to_string(EncodeJobStage stage) noexcept;
+[[nodiscard]] const char *to_string(EncodeJobLogLevel level) noexcept;
 
 }  // namespace utsure::core::job

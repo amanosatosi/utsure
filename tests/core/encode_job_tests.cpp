@@ -7,12 +7,19 @@
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 
 using utsure::core::job::EncodeJob;
+using utsure::core::job::EncodeJobLogLevel;
+using utsure::core::job::EncodeJobLogMessage;
+using utsure::core::job::EncodeJobObserver;
+using utsure::core::job::EncodeJobProgress;
 using utsure::core::job::EncodeJobResult;
 using utsure::core::job::EncodeJobRunner;
+using utsure::core::job::EncodeJobRunOptions;
+using utsure::core::job::EncodeJobStage;
 using utsure::core::job::EncodeJobSummary;
 using utsure::core::job::format_encode_job_report;
 using utsure::core::media::DecodedMediaSource;
@@ -26,6 +33,19 @@ int fail(std::string_view message) {
     std::cerr << message << '\n';
     return 1;
 }
+
+struct CollectingObserver final : EncodeJobObserver {
+    std::vector<EncodeJobProgress> progress_updates{};
+    std::vector<EncodeJobLogMessage> log_messages{};
+
+    void on_progress(const EncodeJobProgress &progress) override {
+        progress_updates.push_back(progress);
+    }
+
+    void on_log(const EncodeJobLogMessage &message) override {
+        log_messages.push_back(message);
+    }
+};
 
 std::string format_rational(const Rational &value) {
     if (!value.is_valid()) {
@@ -146,6 +166,73 @@ int assert_timeline_summary(const EncodeJobSummary &summary) {
     return 0;
 }
 
+int assert_observer_flow(
+    const CollectingObserver &observer,
+    const int expected_decode_steps,
+    const bool expect_subtitle_burn
+) {
+    if (observer.progress_updates.empty()) {
+        return fail("The encode-job observer did not receive any progress updates.");
+    }
+
+    const int expected_total_steps = 1 + expected_decode_steps + (expect_subtitle_burn ? 1 : 0) + 1 + 1;
+    if (observer.progress_updates.front().stage != EncodeJobStage::assembling_timeline) {
+        return fail("The first observed encode-job stage was not timeline assembly.");
+    }
+
+    if (observer.progress_updates.back().stage != EncodeJobStage::completed) {
+        return fail("The final observed encode-job stage was not completion.");
+    }
+
+    int decode_stage_count = 0;
+    int subtitle_stage_count = 0;
+    int previous_step = 0;
+
+    for (const auto &progress : observer.progress_updates) {
+        if (progress.total_steps != expected_total_steps) {
+            return fail("The encode-job observer reported an unexpected total-step count.");
+        }
+
+        if (progress.current_step < previous_step || progress.current_step > (previous_step + 1)) {
+            return fail("The encode-job observer reported an unexpected step progression.");
+        }
+
+        if (progress.stage == EncodeJobStage::decoding_segment) {
+            ++decode_stage_count;
+        }
+
+        if (progress.stage == EncodeJobStage::burning_in_subtitles) {
+            ++subtitle_stage_count;
+        }
+
+        previous_step = progress.current_step;
+    }
+
+    if (decode_stage_count != expected_decode_steps) {
+        return fail("The encode-job observer reported an unexpected number of decode stages.");
+    }
+
+    if (subtitle_stage_count != (expect_subtitle_burn ? 1 : 0)) {
+        return fail("The encode-job observer reported an unexpected subtitle-burn stage count.");
+    }
+
+    if (observer.progress_updates.back().current_step != expected_total_steps) {
+        return fail("The encode-job observer did not report completion at the final step.");
+    }
+
+    if (observer.log_messages.empty()) {
+        return fail("The encode-job observer did not receive any log messages.");
+    }
+
+    for (const auto &log_message : observer.log_messages) {
+        if (log_message.level == EncodeJobLogLevel::error) {
+            return fail("The encode-job observer reported an unexpected error log for a passing job.");
+        }
+    }
+
+    return 0;
+}
+
 std::string build_validation_report(
     const EncodeJobSummary &encode_job_summary,
     const DecodedMediaSource &decoded_output
@@ -168,6 +255,7 @@ int run_main_only_job_assertion(
     const OutputVideoCodec codec,
     const std::string_view expected_codec_name
 ) {
+    CollectingObserver observer{};
     const EncodeJob job{
         .input = {
             .main_source_path = sample_path
@@ -182,7 +270,10 @@ int run_main_only_job_assertion(
         }
     };
 
-    const EncodeJobResult job_result = EncodeJobRunner::run(job);
+    const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
     if (!job_result.succeeded()) {
         const std::string error_message =
             "Encode job failed unexpectedly: " +
@@ -219,6 +310,11 @@ int run_main_only_job_assertion(
         return summary_result;
     }
 
+    const auto observer_result = assert_observer_flow(observer, 1, false);
+    if (observer_result != 0) {
+        return observer_result;
+    }
+
     std::cout << build_validation_report(
         *job_result.encode_job_summary,
         *output_decode_result.decoded_media_source
@@ -232,6 +328,7 @@ int run_timeline_h264_assertion(
     const std::filesystem::path &outro_path,
     const std::filesystem::path &output_path
 ) {
+    CollectingObserver observer{};
     const EncodeJob job{
         .input = {
             .intro_source_path = intro_path,
@@ -248,7 +345,10 @@ int run_timeline_h264_assertion(
         }
     };
 
-    const EncodeJobResult job_result = EncodeJobRunner::run(job);
+    const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
     if (!job_result.succeeded()) {
         const std::string error_message =
             "Timeline encode job failed unexpectedly: " +
@@ -290,6 +390,11 @@ int run_timeline_h264_assertion(
 
     if (job_result.encode_job_summary->encoded_media_summary.output_info.primary_video_stream->codec_name != "h264") {
         return fail("Unexpected intro/main/outro encoded video codec.");
+    }
+
+    const auto observer_result = assert_observer_flow(observer, 3, false);
+    if (observer_result != 0) {
+        return observer_result;
     }
 
     std::cout << build_validation_report(

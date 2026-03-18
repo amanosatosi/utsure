@@ -1,6 +1,10 @@
 qt_standard_project_setup()
 
 qt_add_executable(utsure_encoder_app WIN32
+    encode_job_runner_controller.cpp
+    encode_job_runner_controller.hpp
+    encode_job_runner_worker.cpp
+    encode_job_runner_worker.hpp
     main.cpp
     main_window.cpp
     main_window.hpp
