@@ -22,6 +22,14 @@ std::string format_path_leaf(const std::filesystem::path &path) {
     return path.lexically_normal().string();
 }
 
+std::string format_optional_path_leaf(const std::optional<std::filesystem::path> &path) {
+    if (!path.has_value()) {
+        return {};
+    }
+
+    return format_path_leaf(*path);
+}
+
 std::string format_rational(const media::Rational &value) {
     if (!value.is_valid()) {
         return "unknown";
@@ -35,11 +43,20 @@ std::string format_rational(const media::Rational &value) {
 std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary) {
     std::ostringstream report;
 
+    report << "job.input.intro.present=" << (encode_job_summary.job.input.intro_source_path.has_value() ? "yes" : "no") << '\n';
+    if (encode_job_summary.job.input.intro_source_path.has_value()) {
+        report << "job.input.intro=" << format_optional_path_leaf(encode_job_summary.job.input.intro_source_path) << '\n';
+    }
     report << "job.input.main_source=" << format_path_leaf(encode_job_summary.job.input.main_source_path) << '\n';
+    report << "job.input.outro.present=" << (encode_job_summary.job.input.outro_source_path.has_value() ? "yes" : "no") << '\n';
+    if (encode_job_summary.job.input.outro_source_path.has_value()) {
+        report << "job.input.outro=" << format_optional_path_leaf(encode_job_summary.job.input.outro_source_path) << '\n';
+    }
     report << "job.subtitles.present=" << (encode_job_summary.job.subtitles.has_value() ? "yes" : "no") << '\n';
     if (encode_job_summary.job.subtitles.has_value()) {
         report << "job.subtitles.path=" << format_path_leaf(encode_job_summary.job.subtitles->subtitle_path) << '\n';
         report << "job.subtitles.format_hint=" << encode_job_summary.job.subtitles->format_hint << '\n';
+        report << "job.subtitles.timing_mode=" << timeline::to_string(encode_job_summary.job.subtitles->timing_mode) << '\n';
     }
     report << "job.output.path=" << format_path_leaf(encode_job_summary.job.output.output_path) << '\n';
     report << "job.output.video.codec=" << media::to_string(encode_job_summary.job.output.video.codec) << '\n';
@@ -73,6 +90,17 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
 
     report << "decoded.video_frames=" << encode_job_summary.decoded_video_frame_count << '\n';
     report << "decoded.audio_blocks=" << encode_job_summary.decoded_audio_block_count << '\n';
+    report << "timeline.segment_count=" << encode_job_summary.timeline_summary.segments.size() << '\n';
+    report << "timeline.output.video_time_base="
+           << format_rational(encode_job_summary.timeline_summary.output_video_time_base) << '\n';
+    report << "timeline.output.frame_rate="
+           << format_rational(encode_job_summary.timeline_summary.output_frame_rate) << '\n';
+    report << "timeline.output.audio.present="
+           << (encode_job_summary.timeline_summary.output_audio_time_base.has_value() ? "yes" : "no") << '\n';
+    if (encode_job_summary.timeline_summary.output_audio_time_base.has_value()) {
+        report << "timeline.output.audio_time_base="
+               << format_rational(*encode_job_summary.timeline_summary.output_audio_time_base) << '\n';
+    }
     report << "subtitles.burned_video_frames=" << encode_job_summary.subtitled_video_frame_count << '\n';
     report << "output.container=" << encode_job_summary.encoded_media_summary.output_info.container_format_name << '\n';
     report << "output.encoded_video_frames=" << encode_job_summary.encoded_media_summary.encoded_video_frame_count
@@ -91,6 +119,21 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
 
     report << "output.audio.present="
            << (encode_job_summary.encoded_media_summary.output_info.primary_audio_stream.has_value() ? "yes" : "no");
+
+    for (std::size_t index = 0; index < encode_job_summary.timeline_summary.segments.size(); ++index) {
+        const auto &segment = encode_job_summary.timeline_summary.segments[index];
+        report << '\n';
+        report << "timeline.segment[" << index << "].kind=" << timeline::to_string(segment.kind) << '\n';
+        report << "timeline.segment[" << index << "].path=" << format_path_leaf(segment.source_path) << '\n';
+        report << "timeline.segment[" << index << "].start_us=" << segment.start_microseconds << '\n';
+        report << "timeline.segment[" << index << "].duration_us=" << segment.duration_microseconds << '\n';
+        report << "timeline.segment[" << index << "].video_frames=" << segment.video_frame_count << '\n';
+        report << "timeline.segment[" << index << "].audio_blocks=" << segment.audio_block_count << '\n';
+        report << "timeline.segment[" << index << "].subtitles="
+               << (segment.subtitles_enabled ? "yes" : "no") << '\n';
+        report << "timeline.segment[" << index << "].inserted_silence="
+               << (segment.inserted_silence ? "yes" : "no");
+    }
 
     return report.str();
 }

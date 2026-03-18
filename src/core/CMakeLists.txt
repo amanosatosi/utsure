@@ -12,6 +12,7 @@ add_library(utsure_encoder_core STATIC
     src/media/media_inspection_report.cpp
     src/subtitles/subtitle_burn_in.cpp
     src/subtitles/subtitle_renderer.cpp
+    src/timeline/timeline.cpp
 )
 
 add_library(utsure::encoder_core ALIAS utsure_encoder_core)

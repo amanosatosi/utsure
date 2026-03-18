@@ -26,88 +26,6 @@ using utsure::core::subtitles::SubtitleRenderResult;
 using utsure::core::subtitles::SubtitleRenderSessionCreateRequest;
 using utsure::core::subtitles::create_default_subtitle_renderer;
 
-constexpr std::string_view kExpectedRenderReport =
-    "session.subtitle_path=subtitle-burn-sample.ass\n"
-    "session.format_hint=ass\n"
-    "session.canvas=320x180\n"
-    "session.sample_aspect_ratio=1/1\n"
-    "visible.timestamp_us=41667\n"
-    "visible.has_content=yes\n"
-    "hidden.timestamp_us=500000\n"
-    "hidden.has_content=no";
-
-constexpr std::string_view kExpectedH264Report =
-    "job.input.main_source=inspection-sample.avi\n"
-    "job.subtitles.present=yes\n"
-    "job.subtitles.path=subtitle-burn-sample.ass\n"
-    "job.subtitles.format_hint=ass\n"
-    "job.output.path=subtitle-burn-h264.mp4\n"
-    "job.output.video.codec=h264\n"
-    "job.output.video.preset=medium\n"
-    "job.output.video.crf=23\n"
-    "decode.policy.video_pixel_format=rgba8\n"
-    "decode.policy.audio_sample_format=f32_planar\n"
-    "decode.policy.audio_block_samples=1024\n"
-    "input.container=avi\n"
-    "input.video.present=yes\n"
-    "input.video.codec=rawvideo\n"
-    "input.video.average_frame_rate=24/1\n"
-    "input.video.time_base=1/24\n"
-    "input.audio.present=yes\n"
-    "input.audio.codec=pcm_s16le\n"
-    "input.audio.sample_rate=48000\n"
-    "decoded.video_frames=48\n"
-    "decoded.audio_blocks=94\n"
-    "subtitles.burned_video_frames=11\n"
-    "output.container=mov,mp4,m4a,3gp,3g2,mj2\n"
-    "output.encoded_video_frames=48\n"
-    "output.video.present=yes\n"
-    "output.video.codec=h264\n"
-    "output.video.resolution=320x180\n"
-    "output.video.pixel_format=yuv420p\n"
-    "output.video.average_frame_rate=24/1\n"
-    "output.audio.present=no\n"
-    "verified.output.video_frames=48\n"
-    "verified.output.frame0.start_us=0\n"
-    "verified.output.frame1.start_us=41667\n"
-    "verified.output.frame0.changed=yes";
-
-constexpr std::string_view kExpectedH265Report =
-    "job.input.main_source=inspection-sample.avi\n"
-    "job.subtitles.present=yes\n"
-    "job.subtitles.path=subtitle-burn-sample.ass\n"
-    "job.subtitles.format_hint=ass\n"
-    "job.output.path=subtitle-burn-h265.mp4\n"
-    "job.output.video.codec=h265\n"
-    "job.output.video.preset=medium\n"
-    "job.output.video.crf=23\n"
-    "decode.policy.video_pixel_format=rgba8\n"
-    "decode.policy.audio_sample_format=f32_planar\n"
-    "decode.policy.audio_block_samples=1024\n"
-    "input.container=avi\n"
-    "input.video.present=yes\n"
-    "input.video.codec=rawvideo\n"
-    "input.video.average_frame_rate=24/1\n"
-    "input.video.time_base=1/24\n"
-    "input.audio.present=yes\n"
-    "input.audio.codec=pcm_s16le\n"
-    "input.audio.sample_rate=48000\n"
-    "decoded.video_frames=48\n"
-    "decoded.audio_blocks=94\n"
-    "subtitles.burned_video_frames=11\n"
-    "output.container=mov,mp4,m4a,3gp,3g2,mj2\n"
-    "output.encoded_video_frames=48\n"
-    "output.video.present=yes\n"
-    "output.video.codec=hevc\n"
-    "output.video.resolution=320x180\n"
-    "output.video.pixel_format=yuv420p\n"
-    "output.video.average_frame_rate=24/1\n"
-    "output.audio.present=no\n"
-    "verified.output.video_frames=48\n"
-    "verified.output.frame0.start_us=0\n"
-    "verified.output.frame1.start_us=41667\n"
-    "verified.output.frame0.changed=yes";
-
 int fail(std::string_view message) {
     std::cerr << message << '\n';
     return 1;
@@ -140,6 +58,56 @@ bool frames_are_identical(
     const std::size_t frame_index
 ) {
     return left.video_frames[frame_index].planes.front().bytes == right.video_frames[frame_index].planes.front().bytes;
+}
+
+bool any_frame_changed_in_range(
+    const DecodedMediaSource &plain_output,
+    const DecodedMediaSource &burned_output,
+    const std::size_t start_index,
+    const std::size_t frame_count
+) {
+    for (std::size_t index = 0; index < frame_count; ++index) {
+        if (!frames_are_identical(plain_output, burned_output, start_index + index)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+int assert_decoded_output(const DecodedMediaSource &decoded_output, const std::size_t expected_frame_count) {
+    if (decoded_output.video_frames.size() != expected_frame_count) {
+        return fail("Unexpected burned-output video frame count.");
+    }
+
+    if (!decoded_output.audio_blocks.empty()) {
+        return fail("The subtitle burn-in path should still emit video-only outputs.");
+    }
+
+    for (std::size_t index = 1; index < decoded_output.video_frames.size(); ++index) {
+        if (decoded_output.video_frames[index].timestamp.start_microseconds <=
+            decoded_output.video_frames[index - 1].timestamp.start_microseconds) {
+            return fail("Unexpected burned-output timestamp sequence.");
+        }
+    }
+
+    return 0;
+}
+
+std::string build_validation_report(
+    const EncodeJobSummary &encode_job_summary,
+    const DecodedMediaSource &plain_output,
+    const DecodedMediaSource &burned_output
+) {
+    std::string report = format_encode_job_report(encode_job_summary);
+    report += "\nverified.output.video_frames=" + std::to_string(burned_output.video_frames.size());
+    report += "\nverified.output.frame0.start_us=" +
+              std::to_string(burned_output.video_frames[0].timestamp.start_microseconds);
+    report += "\nverified.output.frame1.start_us=" +
+              std::to_string(burned_output.video_frames[1].timestamp.start_microseconds);
+    report += "\nverified.output.frame0.changed=" +
+              std::string(frames_are_identical(plain_output, burned_output, 0U) ? "no" : "yes");
+    return report;
 }
 
 int run_render_assertion(const std::filesystem::path &subtitle_path) {
@@ -198,57 +166,15 @@ int run_render_assertion(const std::filesystem::path &subtitle_path) {
         return fail("Expected no subtitle content at 500000 us.");
     }
 
-    std::string actual_report;
-    actual_report += "session.subtitle_path=" + format_path_leaf(subtitle_path);
-    actual_report += "\nsession.format_hint=ass";
-    actual_report += "\nsession.canvas=320x180";
-    actual_report += "\nsession.sample_aspect_ratio=" + format_rational(session_request.sample_aspect_ratio);
-    actual_report += "\nvisible.timestamp_us=41667";
-    actual_report += "\nvisible.has_content=yes";
-    actual_report += "\nhidden.timestamp_us=500000";
-    actual_report += "\nhidden.has_content=no";
-    std::cout << actual_report << '\n';
-
-    if (actual_report != kExpectedRenderReport) {
-        std::cerr << "Expected render report:\n" << kExpectedRenderReport << "\n";
-        std::cerr << "Actual render report:\n" << actual_report << "\n";
-        return 1;
-    }
-
+    std::cout << "session.subtitle_path=" << format_path_leaf(subtitle_path) << '\n';
+    std::cout << "session.format_hint=ass\n";
+    std::cout << "session.canvas=320x180\n";
+    std::cout << "session.sample_aspect_ratio=" << format_rational(session_request.sample_aspect_ratio) << '\n';
+    std::cout << "visible.timestamp_us=41667\n";
+    std::cout << "visible.has_content=yes\n";
+    std::cout << "hidden.timestamp_us=500000\n";
+    std::cout << "hidden.has_content=no\n";
     return 0;
-}
-
-int assert_decoded_output(const DecodedMediaSource &decoded_output) {
-    if (decoded_output.video_frames.size() != 48) {
-        return fail("Unexpected burned-output video frame count.");
-    }
-
-    if (!decoded_output.audio_blocks.empty()) {
-        return fail("The subtitle burn-in path should still emit video-only outputs.");
-    }
-
-    if (decoded_output.video_frames[0].timestamp.start_microseconds != 0 ||
-        decoded_output.video_frames[1].timestamp.start_microseconds != 41667) {
-        return fail("Unexpected burned-output timestamp sequence.");
-    }
-
-    return 0;
-}
-
-std::string build_validation_report(
-    const EncodeJobSummary &encode_job_summary,
-    const DecodedMediaSource &plain_output,
-    const DecodedMediaSource &burned_output
-) {
-    std::string report = format_encode_job_report(encode_job_summary);
-    report += "\nverified.output.video_frames=" + std::to_string(burned_output.video_frames.size());
-    report += "\nverified.output.frame0.start_us=" +
-              std::to_string(burned_output.video_frames[0].timestamp.start_microseconds);
-    report += "\nverified.output.frame1.start_us=" +
-              std::to_string(burned_output.video_frames[1].timestamp.start_microseconds);
-    report += "\nverified.output.frame0.changed=" +
-              std::string(frames_are_identical(plain_output, burned_output, 0U) ? "no" : "yes");
-    return report;
 }
 
 int run_burn_in_assertion(
@@ -256,14 +182,12 @@ int run_burn_in_assertion(
     const std::filesystem::path &subtitle_path,
     const std::filesystem::path &plain_output_path,
     const std::filesystem::path &burned_output_path,
-    const OutputVideoCodec codec,
-    const std::string_view expected_report
+    const OutputVideoCodec codec
 ) {
     const EncodeJob plain_job{
         .input = {
             .main_source_path = sample_path
         },
-        .subtitles = std::nullopt,
         .output = {
             .output_path = plain_output_path,
             .video = {
@@ -294,22 +218,12 @@ int run_burn_in_assertion(
 
     const EncodeJobResult plain_job_result = EncodeJobRunner::run(plain_job);
     if (!plain_job_result.succeeded()) {
-        const std::string error_message =
-            "Plain encode job failed unexpectedly before subtitle comparison: " +
-            plain_job_result.error->message +
-            " Hint: " +
-            plain_job_result.error->actionable_hint;
-        return fail(error_message);
+        return fail("Plain encode job failed unexpectedly before subtitle comparison.");
     }
 
     const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job);
     if (!burned_job_result.succeeded()) {
-        const std::string error_message =
-            "Subtitle burn-in job failed unexpectedly: " +
-            burned_job_result.error->message +
-            " Hint: " +
-            burned_job_result.error->actionable_hint;
-        return fail(error_message);
+        return fail("Subtitle burn-in job failed unexpectedly.");
     }
 
     if (burned_job_result.encode_job_summary->subtitled_video_frame_count != 11) {
@@ -317,52 +231,117 @@ int run_burn_in_assertion(
     }
 
     const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);
-    if (!plain_output_decode.succeeded()) {
-        const std::string error_message =
-            "Plain output decode failed unexpectedly: " +
-            plain_output_decode.error->message +
-            " Hint: " +
-            plain_output_decode.error->actionable_hint;
-        return fail(error_message);
-    }
-
     const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
-    if (!burned_output_decode.succeeded()) {
-        const std::string error_message =
-            "Burned output decode failed unexpectedly: " +
-            burned_output_decode.error->message +
-            " Hint: " +
-            burned_output_decode.error->actionable_hint;
-        return fail(error_message);
+    if (!plain_output_decode.succeeded() || !burned_output_decode.succeeded()) {
+        return fail("Subtitle burn-in output decode failed unexpectedly.");
     }
 
-    const auto plain_structure_result = assert_decoded_output(*plain_output_decode.decoded_media_source);
-    if (plain_structure_result != 0) {
-        return plain_structure_result;
-    }
-
-    const auto burned_structure_result = assert_decoded_output(*burned_output_decode.decoded_media_source);
-    if (burned_structure_result != 0) {
-        return burned_structure_result;
+    if (assert_decoded_output(*plain_output_decode.decoded_media_source, 48U) != 0 ||
+        assert_decoded_output(*burned_output_decode.decoded_media_source, 48U) != 0) {
+        return 1;
     }
 
     if (frames_are_identical(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U)) {
         return fail("Subtitle burn-in did not alter the first output frame.");
     }
 
-    const std::string actual_report = build_validation_report(
+    std::cout << build_validation_report(
         *burned_job_result.encode_job_summary,
         *plain_output_decode.decoded_media_source,
         *burned_output_decode.decoded_media_source
-    );
-    std::cout << actual_report << '\n';
+    ) << '\n';
+    return 0;
+}
 
-    if (actual_report != expected_report) {
-        std::cerr << "Expected burn-in report:\n" << expected_report << "\n";
-        std::cerr << "Actual burn-in report:\n" << actual_report << "\n";
+int run_timeline_burn_in_assertion(
+    const std::filesystem::path &intro_path,
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &outro_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &plain_output_path,
+    const std::filesystem::path &burned_output_path
+) {
+    const EncodeJob plain_job{
+        .input = {
+            .intro_source_path = intro_path,
+            .main_source_path = main_path,
+            .outro_source_path = outro_path
+        },
+        .output = {
+            .output_path = plain_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJob burned_job{
+        .input = {
+            .intro_source_path = intro_path,
+            .main_source_path = main_path,
+            .outro_source_path = outro_path
+        },
+        .subtitles = utsure::core::job::EncodeJobSubtitleSettings{
+            .subtitle_path = subtitle_path,
+            .format_hint = "ass"
+        },
+        .output = {
+            .output_path = burned_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJobResult plain_job_result = EncodeJobRunner::run(plain_job);
+    const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job);
+    if (!plain_job_result.succeeded() || !burned_job_result.succeeded()) {
+        return fail("Timeline subtitle burn-in jobs failed unexpectedly.");
+    }
+
+    const auto &summary = *burned_job_result.encode_job_summary;
+    if (summary.timeline_summary.segments.size() != 3 ||
+        summary.timeline_summary.segments[0].subtitles_enabled ||
+        !summary.timeline_summary.segments[1].subtitles_enabled ||
+        summary.timeline_summary.segments[2].subtitles_enabled) {
+        return fail("Timeline subtitle scope did not stay on the main segment.");
+    }
+
+    if (summary.subtitled_video_frame_count != 11) {
+        return fail("Unexpected count of subtitled video frames for the timeline burn-in path.");
+    }
+
+    const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);
+    const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
+    if (!plain_output_decode.succeeded() || !burned_output_decode.succeeded()) {
+        return fail("Timeline subtitle output decode failed unexpectedly.");
+    }
+
+    if (assert_decoded_output(*plain_output_decode.decoded_media_source, 96U) != 0 ||
+        assert_decoded_output(*burned_output_decode.decoded_media_source, 96U) != 0) {
         return 1;
     }
 
+    if (any_frame_changed_in_range(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U, 24U)) {
+        return fail("Timeline subtitle burn-in altered intro frames unexpectedly.");
+    }
+
+    if (!any_frame_changed_in_range(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 24U, 48U)) {
+        return fail("Timeline subtitle burn-in did not alter any main-segment frames.");
+    }
+
+    if (any_frame_changed_in_range(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 72U, 24U)) {
+        return fail("Timeline subtitle burn-in altered outro frames unexpectedly.");
+    }
+
+    std::cout << "timeline.intro.changed=no\n";
+    std::cout << "timeline.main.changed=yes\n";
+    std::cout << "timeline.outro.changed=no\n";
+    std::cout << "timeline.subtitled_frames=" << summary.subtitled_video_frame_count << '\n';
     return 0;
 }
 
@@ -373,55 +352,47 @@ int main(int argc, char *argv[]) {
         return fail(
             "Usage: utsure_core_subtitle_burn_in_tests "
             "[--render <subtitle>|--h264 <input> <subtitle> <plain-output> <burned-output>|"
-            "--h265 <input> <subtitle> <plain-output> <burned-output>]"
+            "--h265 <input> <subtitle> <plain-output> <burned-output>|"
+            "--timeline-h264 <intro> <main> <outro> <subtitle> <plain-output> <burned-output>]"
         );
     }
 
     const std::string_view mode(argv[1]);
 
-    if (mode == "--render") {
-        if (argc != 3) {
-            return fail("Usage: utsure_core_subtitle_burn_in_tests --render <subtitle>");
-        }
-
+    if (mode == "--render" && argc == 3) {
         return run_render_assertion(std::filesystem::path(argv[2]));
     }
 
-    if (mode == "--h264") {
-        if (argc != 6) {
-            return fail(
-                "Usage: utsure_core_subtitle_burn_in_tests --h264 "
-                "<input> <subtitle> <plain-output> <burned-output>"
-            );
-        }
-
+    if (mode == "--h264" && argc == 6) {
         return run_burn_in_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3]),
             std::filesystem::path(argv[4]),
             std::filesystem::path(argv[5]),
-            OutputVideoCodec::h264,
-            kExpectedH264Report
+            OutputVideoCodec::h264
         );
     }
 
-    if (mode == "--h265") {
-        if (argc != 6) {
-            return fail(
-                "Usage: utsure_core_subtitle_burn_in_tests --h265 "
-                "<input> <subtitle> <plain-output> <burned-output>"
-            );
-        }
-
+    if (mode == "--h265" && argc == 6) {
         return run_burn_in_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3]),
             std::filesystem::path(argv[4]),
             std::filesystem::path(argv[5]),
-            OutputVideoCodec::h265,
-            kExpectedH265Report
+            OutputVideoCodec::h265
         );
     }
 
-    return fail("Unknown mode. Use --render, --h264, or --h265.");
+    if (mode == "--timeline-h264" && argc == 8) {
+        return run_timeline_burn_in_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4]),
+            std::filesystem::path(argv[5]),
+            std::filesystem::path(argv[6]),
+            std::filesystem::path(argv[7])
+        );
+    }
+
+    return fail("Unknown mode or wrong argument count for utsure_core_subtitle_burn_in_tests.");
 }

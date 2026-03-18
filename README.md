@@ -18,14 +18,13 @@ Implemented so far:
 - A core job/config layer that drives inspect -> decode -> muxed video encode without introducing GUI-bound settings types.
 - A technology-agnostic subtitle renderer/session boundary with timestamped RGBA-oriented overlay contracts.
 - A `libassmod`-backed subtitle burn-in path that renders ASS subtitles onto decoded RGBA frames before final encode.
+- A core timeline layer that assembles intro/main/outro segments, preserves the main clip cadence, stitches aligned normalized audio, and feeds the existing encode-job path.
 
 These milestones are currently covered by the Windows GitHub Actions build and test workflow.
 
 Not implemented yet:
 
 - Audio output encode.
-- Timeline assembly.
-- Intro/outro handling.
 - Broader timeline, subtitle, and audio-capable encode session orchestration.
 
 ## Layout
@@ -45,8 +44,8 @@ The repository is set up to build in GitHub Actions on Windows. The workflow:
 2. Builds a pinned `libassmod` source dependency into an isolated prefix.
 3. Audits configure-time dependency discovery.
 4. Configures the project with CMake.
-5. Builds `utsure_encoder_core`, `utsure_encoder_app`, and the core media inspection, decode, encode, job-level encode, subtitle-renderer abstraction, and subtitle burn-in test executables.
-6. Generates deterministic sample media and subtitle files and runs the core inspection, decode, encode, job-level encode, subtitle-renderer abstraction, and subtitle burn-in tests.
+5. Builds `utsure_encoder_core`, `utsure_encoder_app`, and the core media inspection, decode, encode, timeline, job-level encode, subtitle-renderer abstraction, and subtitle burn-in test executables.
+6. Generates deterministic sample media and subtitle files and runs the core inspection, decode, encode, timeline, job-level encode, subtitle-renderer abstraction, and subtitle burn-in tests.
 7. Launches the Qt app in offscreen smoke-test mode.
 
 See:

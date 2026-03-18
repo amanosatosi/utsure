@@ -15,6 +15,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M9 Software encoding backends completed.
 - [x] M10 Subtitle renderer abstraction completed.
 - [x] M14 libassmod subtitle burn-in completed.
+- [x] M8 Intro/outro timeline composition completed.
 
 ## Active assumptions
 
@@ -32,6 +33,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The muxed-output job/config milestone is also being pulled ahead of broader timeline and session modeling by explicit user request, and it remains limited to main-source video-only output settings.
 - The subtitle renderer abstraction milestone is also being pulled ahead of timeline assembly and subtitle burn-in integration by explicit user request, and it remains limited to a technology-agnostic renderer boundary plus timestamped RGBA-oriented render contracts.
 - The libassmod subtitle burn-in milestone is also being pulled ahead of intro/outro and broader timeline work by explicit user request, and it remains limited to main-source ASS subtitle burn-in before final encode.
+- The timeline composition milestone now includes ordered intro/main/outro segment assembly, decoded-stream stitching with aligned normalized audio, and encode-job integration while the output backend remains video-only.
 
 ## Architecture direction
 
@@ -233,10 +235,14 @@ Done criteria:
 
 ### M8 Assemble timeline segments for intro, main, and outro
 
+Status: Completed
+
 Scope:
 - Build the timeline assembler that converts probed assets into an ordered output plan.
 - Normalize or reject unsupported segment combinations according to the rules from M6.
 - Keep intro/outro handling generic rather than branching around the main source path.
+- Stitch decoded segment video and normalized audio into one composed timeline before subtitle burn-in and final encode.
+- Keep subtitle timing explicit so the default behavior targets only the main segment, with an opt-in mode for full-output timeline timing later.
 
 Likely files/modules:
 - `src/core/timeline/`
@@ -250,10 +256,13 @@ Risks:
 Validation:
 - Unit tests cover main-only, intro+main, main+outro, and intro+main+outro cases.
 - Tests verify that output frame rate remains tied to the main source.
+- Tests verify that the default subtitle scope stays confined to the main segment when intro/outro clips are present.
+- GitHub Actions remains the authoritative compile-and-run validation environment for this milestone because the local machine does not expose a usable C++ compiler toolchain.
 
 Done criteria:
 - Timeline assembly works for the supported segment combinations.
 - Unsupported combinations fail with explicit diagnostics.
+- The encode-job path can emit intro+main+outro output video while keeping the stitched normalized-audio timeline aligned in-core for the later audio-output milestone.
 
 ### M9 Implement software encoding backends
 
@@ -419,4 +428,4 @@ Done criteria:
 
 ## Immediate next milestone
 
-Implement M8 timeline assembly for intro, main, and outro on top of the now-validated inspection, decode, encode, job, and subtitle-burn-in foundation.
+Choose the next user-prioritized milestone after M8; likely candidates are the thin Qt 6 Widgets shell in M12, the correctness and packaging pass in M13, or the deferred audio-output encode work that now sits cleanly behind the composed timeline layer.

@@ -2,6 +2,7 @@
 
 #include "utsure/core/media/media_encoder.hpp"
 #include "utsure/core/media/media_info.hpp"
+#include "utsure/core/timeline/timeline.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -11,12 +12,15 @@
 namespace utsure::core::job {
 
 struct EncodeJobInput final {
+    std::optional<std::filesystem::path> intro_source_path{};
     std::filesystem::path main_source_path{};
+    std::optional<std::filesystem::path> outro_source_path{};
 };
 
 struct EncodeJobSubtitleSettings final {
     std::filesystem::path subtitle_path{};
     std::string format_hint{"ass"};
+    timeline::SubtitleTimingMode timing_mode{timeline::SubtitleTimingMode::main_segment_only};
 };
 
 struct EncodeJobVideoOutputSettings final {
@@ -39,6 +43,7 @@ struct EncodeJob final {
 struct EncodeJobSummary final {
     EncodeJob job{};
     media::MediaSourceInfo inspected_input_info{};
+    timeline::TimelineCompositionSummary timeline_summary{};
     media::DecodeNormalizationPolicy decode_normalization_policy{};
     std::int64_t decoded_video_frame_count{0};
     std::int64_t decoded_audio_block_count{0};

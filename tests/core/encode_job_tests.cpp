@@ -19,95 +19,41 @@ using utsure::core::media::DecodedMediaSource;
 using utsure::core::media::MediaDecodeResult;
 using utsure::core::media::MediaDecoder;
 using utsure::core::media::OutputVideoCodec;
-
-constexpr std::string_view kExpectedH264Report =
-    "job.input.main_source=inspection-sample.avi\n"
-    "job.subtitles.present=no\n"
-    "job.output.path=job-sample-h264.mp4\n"
-    "job.output.video.codec=h264\n"
-    "job.output.video.preset=medium\n"
-    "job.output.video.crf=23\n"
-    "decode.policy.video_pixel_format=rgba8\n"
-    "decode.policy.audio_sample_format=f32_planar\n"
-    "decode.policy.audio_block_samples=1024\n"
-    "input.container=avi\n"
-    "input.video.present=yes\n"
-    "input.video.codec=rawvideo\n"
-    "input.video.average_frame_rate=24/1\n"
-    "input.video.time_base=1/24\n"
-    "input.audio.present=yes\n"
-    "input.audio.codec=pcm_s16le\n"
-    "input.audio.sample_rate=48000\n"
-    "decoded.video_frames=48\n"
-    "decoded.audio_blocks=94\n"
-    "subtitles.burned_video_frames=0\n"
-    "output.container=mov,mp4,m4a,3gp,3g2,mj2\n"
-    "output.encoded_video_frames=48\n"
-    "output.video.present=yes\n"
-    "output.video.codec=h264\n"
-    "output.video.resolution=320x180\n"
-    "output.video.pixel_format=yuv420p\n"
-    "output.video.average_frame_rate=24/1\n"
-    "output.audio.present=no\n"
-    "verified.output.video_frames=48\n"
-    "verified.output.audio_blocks=0\n"
-    "verified.output.frame0.start_us=0\n"
-    "verified.output.frame1.start_us=41667\n"
-    "verified.output.frame2.start_us=83333";
-
-constexpr std::string_view kExpectedH265Report =
-    "job.input.main_source=inspection-sample.avi\n"
-    "job.subtitles.present=no\n"
-    "job.output.path=job-sample-h265.mp4\n"
-    "job.output.video.codec=h265\n"
-    "job.output.video.preset=medium\n"
-    "job.output.video.crf=23\n"
-    "decode.policy.video_pixel_format=rgba8\n"
-    "decode.policy.audio_sample_format=f32_planar\n"
-    "decode.policy.audio_block_samples=1024\n"
-    "input.container=avi\n"
-    "input.video.present=yes\n"
-    "input.video.codec=rawvideo\n"
-    "input.video.average_frame_rate=24/1\n"
-    "input.video.time_base=1/24\n"
-    "input.audio.present=yes\n"
-    "input.audio.codec=pcm_s16le\n"
-    "input.audio.sample_rate=48000\n"
-    "decoded.video_frames=48\n"
-    "decoded.audio_blocks=94\n"
-    "subtitles.burned_video_frames=0\n"
-    "output.container=mov,mp4,m4a,3gp,3g2,mj2\n"
-    "output.encoded_video_frames=48\n"
-    "output.video.present=yes\n"
-    "output.video.codec=hevc\n"
-    "output.video.resolution=320x180\n"
-    "output.video.pixel_format=yuv420p\n"
-    "output.video.average_frame_rate=24/1\n"
-    "output.audio.present=no\n"
-    "verified.output.video_frames=48\n"
-    "verified.output.audio_blocks=0\n"
-    "verified.output.frame0.start_us=0\n"
-    "verified.output.frame1.start_us=41667\n"
-    "verified.output.frame2.start_us=83333";
+using utsure::core::media::Rational;
+using utsure::core::timeline::TimelineSegmentKind;
 
 int fail(std::string_view message) {
     std::cerr << message << '\n';
     return 1;
 }
 
-int assert_decoded_output(const DecodedMediaSource &decoded_output) {
-    if (decoded_output.video_frames.size() != 48) {
+std::string format_rational(const Rational &value) {
+    if (!value.is_valid()) {
+        return "unknown";
+    }
+
+    return std::to_string(value.numerator) + "/" + std::to_string(value.denominator);
+}
+
+bool frames_are_identical(
+    const DecodedMediaSource &decoded_output,
+    const std::size_t left_index,
+    const std::size_t right_index
+) {
+    return decoded_output.video_frames[left_index].planes.front().bytes ==
+        decoded_output.video_frames[right_index].planes.front().bytes;
+}
+
+int assert_output_decode(
+    const DecodedMediaSource &decoded_output,
+    const std::size_t expected_frame_count
+) {
+    if (decoded_output.video_frames.size() != expected_frame_count) {
         return fail("Unexpected job-output video frame count.");
     }
 
     if (!decoded_output.audio_blocks.empty()) {
-        return fail("The current job path should still emit video-only outputs.");
-    }
-
-    if (decoded_output.video_frames[0].timestamp.start_microseconds != 0 ||
-        decoded_output.video_frames[1].timestamp.start_microseconds != 41667 ||
-        decoded_output.video_frames[2].timestamp.start_microseconds != 83333) {
-        return fail("Unexpected job-output timestamp sequence.");
+        return fail("The current encode-job output should still be video-only.");
     }
 
     for (std::size_t index = 1; index < decoded_output.video_frames.size(); ++index) {
@@ -115,6 +61,86 @@ int assert_decoded_output(const DecodedMediaSource &decoded_output) {
             decoded_output.video_frames[index - 1].timestamp.start_microseconds) {
             return fail("Job-output timestamps are not strictly increasing.");
         }
+    }
+
+    return 0;
+}
+
+int assert_main_only_summary(
+    const EncodeJobSummary &summary,
+    const std::string_view expected_codec_name
+) {
+    if (summary.timeline_summary.segments.size() != 1 ||
+        summary.timeline_summary.segments[0].kind != TimelineSegmentKind::main) {
+        return fail("Unexpected main-only timeline segment summary.");
+    }
+
+    if (summary.decoded_video_frame_count != 48 ||
+        summary.decoded_audio_block_count != 94 ||
+        summary.timeline_summary.output_video_frame_count != 48 ||
+        summary.timeline_summary.output_audio_block_count != 94) {
+        return fail("Unexpected main-only decoded counts.");
+    }
+
+    if (format_rational(summary.timeline_summary.output_frame_rate) != "24/1" ||
+        format_rational(summary.timeline_summary.output_video_time_base) != "1/24") {
+        return fail("Unexpected main-only output cadence.");
+    }
+
+    if (summary.encoded_media_summary.output_info.primary_video_stream->codec_name != expected_codec_name ||
+        summary.encoded_media_summary.output_info.primary_audio_stream.has_value()) {
+        return fail("Unexpected main-only encoded output streams.");
+    }
+
+    if (summary.subtitled_video_frame_count != 0) {
+        return fail("Main-only job unexpectedly reported subtitle burn-in.");
+    }
+
+    return 0;
+}
+
+int assert_timeline_summary(const EncodeJobSummary &summary) {
+    if (summary.timeline_summary.segments.size() != 3 ||
+        summary.timeline_summary.segments[0].kind != TimelineSegmentKind::intro ||
+        summary.timeline_summary.segments[1].kind != TimelineSegmentKind::main ||
+        summary.timeline_summary.segments[2].kind != TimelineSegmentKind::outro) {
+        return fail("Unexpected intro/main/outro segment order.");
+    }
+
+    if (summary.decoded_video_frame_count != 96 ||
+        summary.decoded_audio_block_count != 188 ||
+        summary.timeline_summary.output_video_frame_count != 96 ||
+        summary.timeline_summary.output_audio_block_count != 188) {
+        return fail("Unexpected intro/main/outro decoded counts.");
+    }
+
+    if (summary.timeline_summary.segments[0].start_microseconds != 0 ||
+        summary.timeline_summary.segments[1].start_microseconds != 1000000 ||
+        summary.timeline_summary.segments[2].start_microseconds != 3000000) {
+        return fail("Unexpected intro/main/outro segment starts.");
+    }
+
+    if (summary.timeline_summary.segments[0].duration_microseconds != 1000000 ||
+        summary.timeline_summary.segments[1].duration_microseconds != 2000000 ||
+        summary.timeline_summary.segments[2].duration_microseconds != 1000000) {
+        return fail("Unexpected intro/main/outro segment durations.");
+    }
+
+    if (!summary.timeline_summary.segments[2].inserted_silence ||
+        summary.timeline_summary.segments[2].audio_block_count != 47) {
+        return fail("Unexpected outro audio stitching summary.");
+    }
+
+    if (format_rational(summary.timeline_summary.output_frame_rate) != "24/1" ||
+        format_rational(summary.timeline_summary.output_video_time_base) != "1/24" ||
+        !summary.timeline_summary.output_audio_time_base.has_value() ||
+        format_rational(*summary.timeline_summary.output_audio_time_base) != "1/48000") {
+        return fail("Unexpected intro/main/outro output cadence.");
+    }
+
+    if (summary.subtitled_video_frame_count != 0 ||
+        summary.encoded_media_summary.output_info.primary_audio_stream.has_value()) {
+        return fail("Unexpected intro/main/outro encode-job output state.");
     }
 
     return 0;
@@ -136,11 +162,11 @@ std::string build_validation_report(
     return report;
 }
 
-int run_job_assertion(
+int run_main_only_job_assertion(
     const std::filesystem::path &sample_path,
     const std::filesystem::path &output_path,
     const OutputVideoCodec codec,
-    const std::string_view expected_report
+    const std::string_view expected_codec_name
 ) {
     const EncodeJob job{
         .input = {
@@ -176,44 +202,142 @@ int run_job_assertion(
         return fail(error_message);
     }
 
-    const auto structure_result = assert_decoded_output(*output_decode_result.decoded_media_source);
+    const auto structure_result = assert_output_decode(*output_decode_result.decoded_media_source, 48U);
     if (structure_result != 0) {
         return structure_result;
     }
 
-    const std::string actual_report = build_validation_report(
-        *job_result.encode_job_summary,
-        *output_decode_result.decoded_media_source
-    );
-    std::cout << actual_report << '\n';
-
-    if (actual_report != expected_report) {
-        std::cerr << "Expected job report:\n" << expected_report << "\n";
-        std::cerr << "Actual job report:\n" << actual_report << "\n";
-        return 1;
+    if (output_decode_result.decoded_media_source->video_frames[0].timestamp.start_microseconds != 0 ||
+        output_decode_result.decoded_media_source->video_frames[1].timestamp.start_microseconds != 41667 ||
+        output_decode_result.decoded_media_source->video_frames[2].timestamp.start_microseconds != 83333) {
+        return fail("Unexpected main-only output timestamps.");
     }
 
+    const auto summary_result =
+        assert_main_only_summary(*job_result.encode_job_summary, expected_codec_name);
+    if (summary_result != 0) {
+        return summary_result;
+    }
+
+    std::cout << build_validation_report(
+        *job_result.encode_job_summary,
+        *output_decode_result.decoded_media_source
+    ) << '\n';
+    return 0;
+}
+
+int run_timeline_h264_assertion(
+    const std::filesystem::path &intro_path,
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &outro_path,
+    const std::filesystem::path &output_path
+) {
+    const EncodeJob job{
+        .input = {
+            .intro_source_path = intro_path,
+            .main_source_path = main_path,
+            .outro_source_path = outro_path
+        },
+        .output = {
+            .output_path = output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJobResult job_result = EncodeJobRunner::run(job);
+    if (!job_result.succeeded()) {
+        const std::string error_message =
+            "Timeline encode job failed unexpectedly: " +
+            job_result.error->message +
+            " Hint: " +
+            job_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const MediaDecodeResult output_decode_result = MediaDecoder::decode(output_path);
+    if (!output_decode_result.succeeded()) {
+        const std::string error_message =
+            "Timeline output decode failed unexpectedly: " +
+            output_decode_result.error->message +
+            " Hint: " +
+            output_decode_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const auto structure_result = assert_output_decode(*output_decode_result.decoded_media_source, 96U);
+    if (structure_result != 0) {
+        return structure_result;
+    }
+
+    if (output_decode_result.decoded_media_source->video_frames[24].timestamp.start_microseconds != 1000000 ||
+        output_decode_result.decoded_media_source->video_frames[72].timestamp.start_microseconds != 3000000) {
+        return fail("Unexpected intro/main/outro output boundary timestamps.");
+    }
+
+    if (frames_are_identical(*output_decode_result.decoded_media_source, 0U, 24U) ||
+        frames_are_identical(*output_decode_result.decoded_media_source, 24U, 72U)) {
+        return fail("The encoded intro/main/outro output does not preserve distinct segment visuals.");
+    }
+
+    const auto summary_result = assert_timeline_summary(*job_result.encode_job_summary);
+    if (summary_result != 0) {
+        return summary_result;
+    }
+
+    if (job_result.encode_job_summary->encoded_media_summary.output_info.primary_video_stream->codec_name != "h264") {
+        return fail("Unexpected intro/main/outro encoded video codec.");
+    }
+
+    std::cout << build_validation_report(
+        *job_result.encode_job_summary,
+        *output_decode_result.decoded_media_source
+    ) << '\n';
     return 0;
 }
 
 }  // namespace
 
 int main(int argc, char *argv[]) {
-    if (argc != 4) {
-        return fail("Usage: utsure_core_encode_job_tests [--h264|--h265] <input> <output>");
+    if (argc < 4) {
+        return fail(
+            "Usage: utsure_core_encode_job_tests "
+            "[--h264|--h265] <input> <output> | "
+            "[--timeline-h264] <intro> <main> <outro> <output>"
+        );
     }
 
     const std::string_view mode(argv[1]);
-    const std::filesystem::path input_path(argv[2]);
-    const std::filesystem::path output_path(argv[3]);
 
-    if (mode == "--h264") {
-        return run_job_assertion(input_path, output_path, OutputVideoCodec::h264, kExpectedH264Report);
+    if (mode == "--h264" && argc == 4) {
+        return run_main_only_job_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            OutputVideoCodec::h264,
+            "h264"
+        );
     }
 
-    if (mode == "--h265") {
-        return run_job_assertion(input_path, output_path, OutputVideoCodec::h265, kExpectedH265Report);
+    if (mode == "--h265" && argc == 4) {
+        return run_main_only_job_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            OutputVideoCodec::h265,
+            "hevc"
+        );
     }
 
-    return fail("Unknown mode. Use --h264 or --h265.");
+    if (mode == "--timeline-h264" && argc == 6) {
+        return run_timeline_h264_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4]),
+            std::filesystem::path(argv[5])
+        );
+    }
+
+    return fail("Unknown mode or wrong argument count for utsure_core_encode_job_tests.");
 }

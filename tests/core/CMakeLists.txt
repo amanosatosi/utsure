@@ -2,6 +2,9 @@ find_program(UTSURE_FFMPEG_EXECUTABLE NAMES ffmpeg REQUIRED)
 
 set(UTSURE_TEST_MEDIA_DIR "${CMAKE_CURRENT_BINARY_DIR}/media")
 set(UTSURE_SAMPLE_MEDIA_FILE "${UTSURE_TEST_MEDIA_DIR}/inspection-sample.avi")
+set(UTSURE_TIMELINE_INTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-intro.avi")
+set(UTSURE_TIMELINE_OUTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-outro.avi")
+set(UTSURE_TIMELINE_BAD_FPS_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-bad-fps.avi")
 set(UTSURE_SUBTITLE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-sample.ass")
 
 file(MAKE_DIRECTORY "${UTSURE_TEST_MEDIA_DIR}")
@@ -24,7 +27,51 @@ add_custom_command(
     VERBATIM
 )
 
-add_custom_target(utsure_generate_sample_media DEPENDS "${UTSURE_SAMPLE_MEDIA_FILE}")
+add_custom_command(
+    OUTPUT "${UTSURE_TIMELINE_INTRO_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "color=c=red:size=320x180:rate=24"
+        -f lavfi -i "sine=frequency=600:sample_rate=48000:duration=1"
+        -t 1
+        -c:v rawvideo
+        -pix_fmt yuv420p
+        -c:a pcm_s16le
+        "${UTSURE_TIMELINE_INTRO_FILE}"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${UTSURE_TIMELINE_OUTRO_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "color=c=blue:size=320x180:rate=24"
+        -t 1
+        -c:v rawvideo
+        -pix_fmt yuv420p
+        "${UTSURE_TIMELINE_OUTRO_FILE}"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${UTSURE_TIMELINE_BAD_FPS_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "color=c=yellow:size=320x180:rate=30"
+        -f lavfi -i "sine=frequency=900:sample_rate=48000:duration=1"
+        -t 1
+        -c:v rawvideo
+        -pix_fmt yuv420p
+        -c:a pcm_s16le
+        "${UTSURE_TIMELINE_BAD_FPS_FILE}"
+    VERBATIM
+)
+
+add_custom_target(
+    utsure_generate_sample_media
+    DEPENDS
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TIMELINE_INTRO_FILE}"
+        "${UTSURE_TIMELINE_OUTRO_FILE}"
+        "${UTSURE_TIMELINE_BAD_FPS_FILE}"
+)
 
 add_executable(utsure_core_media_inspection_tests
     media_inspection_tests.cpp
@@ -134,6 +181,73 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/job-sample-h265.mp4"
 )
 
+add_test(
+    NAME utsure.core.job.encode.timeline.h264
+    COMMAND utsure_core_encode_job_tests --timeline-h264
+        "${UTSURE_TIMELINE_INTRO_FILE}"
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TIMELINE_OUTRO_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-timeline-h264.mp4"
+)
+
+add_executable(utsure_core_timeline_tests
+    timeline_tests.cpp
+)
+
+target_link_libraries(utsure_core_timeline_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_core_timeline_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_timeline_tests)
+
+add_dependencies(utsure_core_timeline_tests utsure_generate_sample_media)
+
+add_test(
+    NAME utsure.core.timeline.main_only
+    COMMAND utsure_core_timeline_tests --main-only
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+)
+
+add_test(
+    NAME utsure.core.timeline.intro_main
+    COMMAND utsure_core_timeline_tests --intro-main
+        "${UTSURE_TIMELINE_INTRO_FILE}"
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+)
+
+add_test(
+    NAME utsure.core.timeline.main_outro
+    COMMAND utsure_core_timeline_tests --main-outro
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TIMELINE_OUTRO_FILE}"
+)
+
+add_test(
+    NAME utsure.core.timeline.intro_main_outro
+    COMMAND utsure_core_timeline_tests --intro-main-outro
+        "${UTSURE_TIMELINE_INTRO_FILE}"
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TIMELINE_OUTRO_FILE}"
+)
+
+add_test(
+    NAME utsure.core.timeline.subtitle_scope
+    COMMAND utsure_core_timeline_tests --subtitle-scope
+        "${UTSURE_TIMELINE_INTRO_FILE}"
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TIMELINE_OUTRO_FILE}"
+)
+
+add_test(
+    NAME utsure.core.timeline.mismatch_fps
+    COMMAND utsure_core_timeline_tests --mismatch-fps
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TIMELINE_BAD_FPS_FILE}"
+)
+
 add_executable(utsure_core_subtitle_renderer_tests
     subtitle_renderer_tests.cpp
 )
@@ -193,4 +307,15 @@ add_test(
         "${UTSURE_SUBTITLE_SAMPLE_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-plain-h265.mp4"
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-h265.mp4"
+)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.timeline.h264
+    COMMAND utsure_core_subtitle_burn_in_tests --timeline-h264
+        "${UTSURE_TIMELINE_INTRO_FILE}"
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TIMELINE_OUTRO_FILE}"
+        "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/timeline-subtitle-plain-h264.mp4"
+        "${UTSURE_TEST_MEDIA_DIR}/timeline-subtitle-burn-h264.mp4"
 )
