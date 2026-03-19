@@ -7,11 +7,23 @@ set(UTSURE_TIMELINE_INTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-intro.avi")
 set(UTSURE_TIMELINE_OUTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-outro.avi")
 set(UTSURE_TIMELINE_BAD_FPS_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-bad-fps.avi")
 set(UTSURE_SUBTITLE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-sample.ass")
+set(UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-gradient-sample.ass")
+set(UTSURE_SUBTITLE_IMG_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-img-sample.ass")
 
 file(MAKE_DIRECTORY "${UTSURE_TEST_MEDIA_DIR}")
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-sample.ass"
     "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+    COPYONLY
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-gradient-sample.ass"
+    "${UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE}"
+    COPYONLY
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-img-sample.ass"
+    "${UTSURE_SUBTITLE_IMG_SAMPLE_FILE}"
     COPYONLY
 )
 
@@ -354,6 +366,29 @@ add_test(
     COMMAND utsure_core_subtitle_renderer_tests --error
 )
 
+add_executable(utsure_core_subtitle_bitmap_compositor_tests
+    subtitle_bitmap_compositor_tests.cpp
+)
+
+target_link_libraries(utsure_core_subtitle_bitmap_compositor_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_include_directories(utsure_core_subtitle_bitmap_compositor_tests
+    PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/core/src"
+)
+
+target_compile_features(utsure_core_subtitle_bitmap_compositor_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_subtitle_bitmap_compositor_tests)
+
+add_test(
+    NAME utsure.core.subtitles.compositor.premultiplied_rgba
+    COMMAND utsure_core_subtitle_bitmap_compositor_tests --premultiplied
+)
+
 add_executable(utsure_core_subtitle_burn_in_tests
     subtitle_burn_in_tests.cpp
 )
@@ -375,12 +410,31 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.subtitles.libassmod.render.gradient_rgba
+    COMMAND utsure_core_subtitle_burn_in_tests --render-gradient "${UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE}"
+)
+
+add_test(
+    NAME utsure.core.subtitles.libassmod.render.img_unsupported
+    COMMAND utsure_core_subtitle_burn_in_tests --render-unsupported-img "${UTSURE_SUBTITLE_IMG_SAMPLE_FILE}"
+)
+
+add_test(
     NAME utsure.core.subtitles.burn_in.h264
     COMMAND utsure_core_subtitle_burn_in_tests --h264
         "${UTSURE_SAMPLE_MEDIA_FILE}"
         "${UTSURE_SUBTITLE_SAMPLE_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-plain-h264.mp4"
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-h264.mp4"
+)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.gradient.h264
+    COMMAND utsure_core_subtitle_burn_in_tests --h264
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/subtitle-gradient-plain-h264.mp4"
+        "${UTSURE_TEST_MEDIA_DIR}/subtitle-gradient-burn-h264.mp4"
 )
 
 add_test(

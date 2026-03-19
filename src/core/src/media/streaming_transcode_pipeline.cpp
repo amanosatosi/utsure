@@ -1,6 +1,7 @@
 #include "streaming_transcode_pipeline.hpp"
 
 #include "ffmpeg_media_support.hpp"
+#include "../subtitles/subtitle_bitmap_compositor.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 
 extern "C" {
@@ -853,69 +854,6 @@ DecodedAudioSamples build_audio_block(
     };
 }
 
-void composite_bitmap_into_frame(
-    DecodedVideoFrame &video_frame,
-    const subtitles::SubtitleBitmap &bitmap
-) {
-    if (bitmap.pixel_format != subtitles::SubtitleBitmapPixelFormat::rgba8_premultiplied) {
-        throw std::runtime_error("Only premultiplied rgba8 subtitle bitmaps are supported for streaming burn-in.");
-    }
-
-    auto &plane = video_frame.planes.front();
-    if (plane.line_stride_bytes <= 0 || bitmap.line_stride_bytes < (bitmap.width * 4)) {
-        throw std::runtime_error("Streaming burn-in received an invalid plane or bitmap stride.");
-    }
-
-    const int clipped_left = std::max(0, bitmap.origin_x);
-    const int clipped_top = std::max(0, bitmap.origin_y);
-    const int clipped_right = std::min(video_frame.width, bitmap.origin_x + bitmap.width);
-    const int clipped_bottom = std::min(video_frame.height, bitmap.origin_y + bitmap.height);
-    if (clipped_left >= clipped_right || clipped_top >= clipped_bottom) {
-        return;
-    }
-
-    for (int destination_y = clipped_top; destination_y < clipped_bottom; ++destination_y) {
-        const int source_y = destination_y - bitmap.origin_y;
-        auto *destination_row = plane.bytes.data() +
-            static_cast<std::size_t>(destination_y) * static_cast<std::size_t>(plane.line_stride_bytes);
-        const auto *source_row = bitmap.bytes.data() +
-            static_cast<std::size_t>(source_y) * static_cast<std::size_t>(bitmap.line_stride_bytes);
-
-        for (int destination_x = clipped_left; destination_x < clipped_right; ++destination_x) {
-            const int source_x = destination_x - bitmap.origin_x;
-            const auto source_offset = static_cast<std::size_t>(source_x) * 4U;
-            const auto destination_offset = static_cast<std::size_t>(destination_x) * 4U;
-
-            const std::uint8_t source_alpha = source_row[source_offset + 3U];
-            if (source_alpha == 0U) {
-                continue;
-            }
-
-            const std::uint8_t inverse_alpha = static_cast<std::uint8_t>(255U - source_alpha);
-
-            for (std::size_t channel = 0; channel < 3U; ++channel) {
-                const std::uint8_t source_value = source_row[source_offset + channel];
-                const std::uint8_t destination_value = destination_row[destination_offset + channel];
-                const std::uint16_t blended_value = static_cast<std::uint16_t>(source_value) +
-                    static_cast<std::uint16_t>(
-                        (static_cast<std::uint16_t>(destination_value) * inverse_alpha + 127U) / 255U
-                    );
-                destination_row[destination_offset + channel] =
-                    static_cast<std::uint8_t>(std::min<std::uint16_t>(255U, blended_value));
-            }
-
-            destination_row[destination_offset + 3U] = 255U;
-        }
-    }
-}
-
-bool is_rgba_frame_layout_supported(const DecodedVideoFrame &video_frame) {
-    return video_frame.pixel_format == NormalizedVideoPixelFormat::rgba8 &&
-        video_frame.planes.size() == 1 &&
-        video_frame.width > 0 &&
-        video_frame.height > 0;
-}
-
 bool maybe_composite_subtitles(
     DecodedVideoFrame &video_frame,
     subtitles::SubtitleRenderSession *subtitle_session,
@@ -931,7 +869,7 @@ bool maybe_composite_subtitles(
         throw std::runtime_error("Streaming subtitle burn-in requires an active subtitle render session.");
     }
 
-    if (!is_rgba_frame_layout_supported(video_frame)) {
+    if (!subtitles::detail::is_rgba_frame_layout_supported(video_frame)) {
         throw std::runtime_error("Streaming subtitle burn-in requires rgba8 decoded frames with a single plane.");
     }
 
@@ -950,7 +888,7 @@ bool maybe_composite_subtitles(
     }
 
     for (const auto &bitmap : render_result.rendered_frame->bitmaps) {
-        composite_bitmap_into_frame(video_frame, bitmap);
+        subtitles::detail::composite_bitmap_into_frame(video_frame, bitmap);
     }
 
     return true;
@@ -1436,7 +1374,7 @@ public:
 
 private:
     FrameHandle build_encoded_video_frame(const DecodedVideoFrame &decoded_frame) {
-        if (!is_rgba_frame_layout_supported(decoded_frame)) {
+        if (!subtitles::detail::is_rgba_frame_layout_supported(decoded_frame)) {
             throw std::runtime_error("The streaming encoder currently only supports rgba8 decoded frames.");
         }
 
@@ -1967,7 +1905,7 @@ void validate_video_frame_for_segment(
     const Rational &output_video_time_base,
     std::optional<std::int64_t> &previous_pts_in_output_time_base
 ) {
-    if (!is_rgba_frame_layout_supported(frame)) {
+    if (!subtitles::detail::is_rgba_frame_layout_supported(frame)) {
         throw std::runtime_error(
             "The " + std::string(timeline::to_string(kind)) +
             " segment contains an unsupported decoded video frame layout."

@@ -41,6 +41,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The timeline composition milestone now includes ordered intro/main/outro segment assembly, decoded-stream stitching with aligned normalized audio, and encode-job integration while the output backend remains video-only.
 - The hardening and handoff milestone is limited to validation coverage for the current pipeline, practical build/setup notes, packaging and release guidance, and a clearer roadmap split between near-term and later work.
 - The current milestone is limited to replacing the full-clip decoded buffering path with a bounded-memory streaming pipeline while preserving cadence rules, subtitle burn-in behavior, intro/outro sequencing, and streamed A/V output.
+- The current M16 slice is limited to migrating the libassmod subtitle adapter from the legacy `ASS_Image` path to the fork's RGBA-capable render path where required, while preserving the existing renderer abstraction, timestamp rules, and streaming subtitle burn-in flow.
 
 ## Architecture direction
 
@@ -504,6 +505,11 @@ Scope:
 Scope change:
 - M16 originally landed with a working streaming video path but regressed the older audible-output expectation by dropping audio after decode/resample.
 - M16 now explicitly includes restoring incremental audio encode and mux support, plus clear failures when an audio-bearing timeline cannot be emitted correctly.
+- The current M16 slice also includes upgrading the libassmod-backed subtitle adapter so RGBA-only features such as gradient color/alpha tags render through the correct RGBA API path without leaking libassmod-specific behavior into unrelated pipeline code.
+
+Current slice status:
+- Completed: libassmod RGBA subtitle rendering migration for gradient-capable scripts and shared premultiplied-RGBA subtitle composition.
+- Deferred: host-side `\img` resource registration remains outside this slice, and `\img` scripts now fail explicitly until that registration path exists.
 
 Likely files/modules:
 - `src/core/include/utsure/core/job/`
@@ -526,6 +532,7 @@ Validation:
 - Verify that memory-heavy 1080p jobs are no longer rejected by duration-scaled decoded-memory estimates.
 - Verify that audio-bearing inputs produce muxed outputs with an expected audio stream and coherent durations.
 - Document the new stage flow, queue limits, where decoded/composited frame memory is released, and where audio frames/packets are released.
+- Verify the subtitle adapter against one normal ASS sample plus one RGBA-only subtitle sample that depends on libassmod gradient rendering, and include `\img` coverage if the host-side image registration path is wired in this slice.
 
 Done criteria:
 - Encode orchestration no longer scales decoded-memory usage with full clip duration.

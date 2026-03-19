@@ -4,10 +4,14 @@ extern "C" {
 #include <ass/ass.h>
 }
 
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -49,6 +53,20 @@ struct TrackDeleter final {
 };
 
 using TrackHandle = std::unique_ptr<ASS_Track, TrackDeleter>;
+
+enum class SessionRenderMode : std::uint8_t {
+    legacy_ass_image = 0,
+    auto_rgba
+};
+
+struct ScriptFeatureScan final {
+    bool references_tag_images{false};
+};
+
+struct LoadedTrack final {
+    TrackHandle track{};
+    SessionRenderMode render_mode{SessionRenderMode::legacy_ass_image};
+};
 
 std::string path_to_utf8_string(const std::filesystem::path &path) {
 #if defined(_WIN32)
@@ -102,6 +120,35 @@ double choose_pixel_aspect_ratio(const media::Rational &sample_aspect_ratio) {
         static_cast<double>(sample_aspect_ratio.denominator);
 }
 
+ScriptFeatureScan scan_script_features(const std::filesystem::path &subtitle_path) {
+    std::ifstream stream(subtitle_path, std::ios::binary);
+    if (!stream) {
+        throw std::runtime_error(
+            "Failed to open subtitle script '" + subtitle_path.lexically_normal().string() +
+            "' for libassmod feature scanning."
+        );
+    }
+
+    std::string script_text(
+        std::istreambuf_iterator<char>(stream),
+        std::istreambuf_iterator<char>()
+    );
+    std::transform(script_text.begin(), script_text.end(), script_text.begin(), [](const unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+
+    const bool references_tag_images =
+        script_text.find("\\img(") != std::string::npos ||
+        script_text.find("\\1img(") != std::string::npos ||
+        script_text.find("\\2img(") != std::string::npos ||
+        script_text.find("\\3img(") != std::string::npos ||
+        script_text.find("\\4img(") != std::string::npos;
+
+    return ScriptFeatureScan{
+        .references_tag_images = references_tag_images
+    };
+}
+
 LibraryHandle create_library() {
     LibraryHandle library(ass_library_init());
     if (!library) {
@@ -131,7 +178,7 @@ RendererHandle create_renderer(
     return renderer;
 }
 
-TrackHandle load_track(
+LoadedTrack load_track(
     ASS_Library &library,
     const SubtitleRenderSessionCreateRequest &request
 ) {
@@ -143,7 +190,14 @@ TrackHandle load_track(
         );
     }
 
-    return track;
+    const auto render_mode = ass_track_has_rgba(track.get()) != 0
+        ? SessionRenderMode::auto_rgba
+        : SessionRenderMode::legacy_ass_image;
+
+    return LoadedTrack{
+        .track = std::move(track),
+        .render_mode = render_mode
+    };
 }
 
 std::optional<SubtitleBitmap> convert_ass_image(const ASS_Image &image) {
@@ -199,34 +253,104 @@ std::optional<SubtitleBitmap> convert_ass_image(const ASS_Image &image) {
     };
 }
 
+std::optional<SubtitleBitmap> convert_ass_image_rgba(const ASS_ImageRGBA &image) {
+    if (image.w <= 0 || image.h <= 0 || image.rgba == nullptr || image.stride < (image.w * 4)) {
+        return std::nullopt;
+    }
+
+    const int line_stride_bytes = image.w * 4;
+    std::vector<std::uint8_t> bytes(
+        static_cast<std::size_t>(line_stride_bytes) * static_cast<std::size_t>(image.h),
+        0U
+    );
+
+    for (int row = 0; row < image.h; ++row) {
+        const auto *source_row = image.rgba + static_cast<std::size_t>(row) * static_cast<std::size_t>(image.stride);
+        auto *destination_row = bytes.data() +
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(line_stride_bytes);
+        std::copy_n(source_row, line_stride_bytes, destination_row);
+    }
+
+    return SubtitleBitmap{
+        .origin_x = image.dst_x,
+        .origin_y = image.dst_y,
+        .width = image.w,
+        .height = image.h,
+        .pixel_format = SubtitleBitmapPixelFormat::rgba8_premultiplied,
+        .line_stride_bytes = line_stride_bytes,
+        .bytes = std::move(bytes)
+    };
+}
+
+std::vector<SubtitleBitmap> convert_ass_image_list(ASS_Image *images) {
+    std::vector<SubtitleBitmap> bitmaps{};
+    for (ASS_Image *image = images; image != nullptr; image = image->next) {
+        const auto bitmap = convert_ass_image(*image);
+        if (bitmap.has_value()) {
+            bitmaps.push_back(*bitmap);
+        }
+    }
+
+    return bitmaps;
+}
+
+std::vector<SubtitleBitmap> convert_ass_image_rgba_list(ASS_ImageRGBA *images) {
+    std::vector<SubtitleBitmap> bitmaps{};
+    for (ASS_ImageRGBA *image = images; image != nullptr; image = image->next) {
+        const auto bitmap = convert_ass_image_rgba(*image);
+        if (bitmap.has_value()) {
+            bitmaps.push_back(*bitmap);
+        }
+    }
+
+    return bitmaps;
+}
+
 class LibassmodSubtitleRenderSession final : public SubtitleRenderSession {
 public:
     LibassmodSubtitleRenderSession(
         SubtitleRenderSessionCreateRequest create_request,
         std::string subtitle_path_string,
+        SessionRenderMode render_mode,
         LibraryHandle library,
         RendererHandle renderer,
         TrackHandle track
     )
         : create_request_(std::move(create_request)),
           subtitle_path_string_(std::move(subtitle_path_string)),
+          render_mode_(render_mode),
           library_(std::move(library)),
           renderer_(std::move(renderer)),
           track_(std::move(track)) {
+    }
+
+    ~LibassmodSubtitleRenderSession() override {
+        if (renderer_) {
+            ass_clear_tag_images(renderer_.get());
+        }
     }
 
     [[nodiscard]] SubtitleRenderResult render(const SubtitleRenderRequest &request) noexcept override {
         try {
             int detect_change = 0;
             const long long timestamp_milliseconds = static_cast<long long>(request.timestamp_microseconds / 1000);
-            ASS_Image *images = ass_render_frame(renderer_.get(), track_.get(), timestamp_milliseconds, &detect_change);
-
             std::vector<SubtitleBitmap> bitmaps{};
-            for (ASS_Image *image = images; image != nullptr; image = image->next) {
-                const auto bitmap = convert_ass_image(*image);
-                if (bitmap.has_value()) {
-                    bitmaps.push_back(*bitmap);
-                }
+            // Keep plain ASS scripts on the legacy list path, but let libassmod switch RGBA-capable
+            // tracks to premultiplied tiles on the frames that actually require them.
+            if (render_mode_ == SessionRenderMode::legacy_ass_image) {
+                ASS_Image *images =
+                    ass_render_frame(renderer_.get(), track_.get(), timestamp_milliseconds, &detect_change);
+                bitmaps = convert_ass_image_list(images);
+            } else {
+                ASS_RenderResult render_result =
+                    ass_render_frame_auto(renderer_.get(), track_.get(), timestamp_milliseconds, &detect_change);
+                const bool frame_requires_rgba =
+                    render_result.use_rgba != 0 ||
+                    (ass_frame_needs_rgba(renderer_.get()) != 0 && render_result.imgs_rgba != nullptr);
+                bitmaps = frame_requires_rgba
+                    ? convert_ass_image_rgba_list(render_result.imgs_rgba)
+                    : convert_ass_image_list(render_result.imgs);
+                ass_render_result_free(&render_result);
             }
 
             return SubtitleRenderResult{
@@ -250,6 +374,7 @@ public:
 private:
     SubtitleRenderSessionCreateRequest create_request_{};
     std::string subtitle_path_string_{};
+    SessionRenderMode render_mode_{SessionRenderMode::legacy_ass_image};
     LibraryHandle library_{};
     RendererHandle renderer_{};
     TrackHandle track_{};
@@ -306,15 +431,26 @@ public:
 
             auto library = create_library();
             auto renderer = create_renderer(*library, request);
-            auto track = load_track(*library, request);
+            const auto script_feature_scan = scan_script_features(normalized_path);
+            if (script_feature_scan.references_tag_images) {
+                return make_session_error(
+                    request,
+                    "The subtitle script uses libassmod \\img tags, but this build does not register host-side RGBA "
+                    "image resources.",
+                    "Remove \\img usage or add the libassmod tag-image registration path before burn-in."
+                );
+            }
+
+            auto loaded_track = load_track(*library, request);
 
             return SubtitleRenderSessionResult{
                 .session = std::make_unique<LibassmodSubtitleRenderSession>(
                     request,
                     normalized_path.string(),
+                    loaded_track.render_mode,
                     std::move(library),
                     std::move(renderer),
-                    std::move(track)
+                    std::move(loaded_track.track)
                 ),
                 .error = std::nullopt
             };

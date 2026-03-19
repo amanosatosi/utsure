@@ -3,7 +3,9 @@
 #include "utsure/core/media/media_decoder.hpp"
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -104,6 +106,45 @@ bool frame_changed(
     return !frames_are_identical(plain_output, burned_output, frame_index);
 }
 
+bool has_opaque_color_variation(const utsure::core::subtitles::RenderedSubtitleFrame &rendered_frame) {
+    for (const auto &bitmap : rendered_frame.bitmaps) {
+        if (bitmap.pixel_format != utsure::core::subtitles::SubtitleBitmapPixelFormat::rgba8_premultiplied ||
+            bitmap.line_stride_bytes < (bitmap.width * 4)) {
+            continue;
+        }
+
+        bool found_opaque_pixel = false;
+        std::array<std::uint8_t, 3> first_opaque_color{};
+        for (int row = 0; row < bitmap.height; ++row) {
+            const auto *source_row = bitmap.bytes.data() +
+                static_cast<std::size_t>(row) * static_cast<std::size_t>(bitmap.line_stride_bytes);
+            for (int column = 0; column < bitmap.width; ++column) {
+                const auto offset = static_cast<std::size_t>(column) * 4U;
+                if (source_row[offset + 3U] < 250U) {
+                    continue;
+                }
+
+                const std::array<std::uint8_t, 3> color{
+                    source_row[offset + 0U],
+                    source_row[offset + 1U],
+                    source_row[offset + 2U]
+                };
+                if (!found_opaque_pixel) {
+                    first_opaque_color = color;
+                    found_opaque_pixel = true;
+                    continue;
+                }
+
+                if (color != first_opaque_color) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
 int assert_decoded_output(
     const DecodedMediaSource &decoded_output,
     const std::size_t expected_frame_count,
@@ -186,7 +227,10 @@ std::string build_validation_report(
     return report;
 }
 
-int run_render_assertion(const std::filesystem::path &subtitle_path) {
+int run_render_assertion(
+    const std::filesystem::path &subtitle_path,
+    const bool expect_opaque_color_variation = false
+) {
     auto subtitle_renderer = create_default_subtitle_renderer();
     if (!subtitle_renderer) {
         return fail("The default subtitle renderer could not be created.");
@@ -242,14 +286,50 @@ int run_render_assertion(const std::filesystem::path &subtitle_path) {
         return fail("Expected no subtitle content at 500000 us.");
     }
 
+    if (expect_opaque_color_variation &&
+        !has_opaque_color_variation(*visible_result.rendered_frame)) {
+        return fail("Expected the RGBA gradient sample to contain multiple opaque colors in one rendered frame.");
+    }
+
     std::cout << "session.subtitle_path=" << format_path_leaf(subtitle_path) << '\n';
     std::cout << "session.format_hint=ass\n";
     std::cout << "session.canvas=320x180\n";
     std::cout << "session.sample_aspect_ratio=" << format_rational(session_request.sample_aspect_ratio) << '\n';
     std::cout << "visible.timestamp_us=41667\n";
     std::cout << "visible.has_content=yes\n";
+    if (expect_opaque_color_variation) {
+        std::cout << "visible.opaque_color_variation=yes\n";
+    }
     std::cout << "hidden.timestamp_us=500000\n";
     std::cout << "hidden.has_content=no\n";
+    return 0;
+}
+
+int run_unsupported_img_render_assertion(const std::filesystem::path &subtitle_path) {
+    auto subtitle_renderer = create_default_subtitle_renderer();
+    if (!subtitle_renderer) {
+        return fail("The default subtitle renderer could not be created.");
+    }
+
+    const SubtitleRenderSessionCreateRequest session_request{
+        .subtitle_path = subtitle_path,
+        .format_hint = "ass",
+        .canvas_width = 320,
+        .canvas_height = 180,
+        .sample_aspect_ratio = Rational{1, 1}
+    };
+
+    auto session_result = subtitle_renderer->create_session(session_request);
+    if (session_result.succeeded() || !session_result.error.has_value()) {
+        return fail("The unsupported libassmod img subtitle sample unexpectedly created a render session.");
+    }
+
+    if (session_result.error->message.find("\\img") == std::string::npos) {
+        return fail("The unsupported libassmod img subtitle sample did not report an img-specific error.");
+    }
+
+    std::cout << session_result.error->message << '\n';
+    std::cout << session_result.error->actionable_hint << '\n';
     return 0;
 }
 
@@ -544,7 +624,8 @@ int main(int argc, char *argv[]) {
     if (argc < 3) {
         return fail(
             "Usage: utsure_core_subtitle_burn_in_tests "
-            "[--render <subtitle>|--h264 <input> <subtitle> <plain-output> <burned-output>|"
+            "[--render <subtitle>|--render-gradient <subtitle>|--render-unsupported-img <subtitle>|"
+            "--h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--h265 <input> <subtitle> <plain-output> <burned-output>|"
             "--timeline-h264 <intro> <main> <outro> <subtitle> <plain-output> <burned-output>|"
             "--timeline-full-h264 <intro> <main> <outro> <subtitle> <plain-output> <burned-output>]"
@@ -555,6 +636,14 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--render" && argc == 3) {
         return run_render_assertion(std::filesystem::path(argv[2]));
+    }
+
+    if (mode == "--render-gradient" && argc == 3) {
+        return run_render_assertion(std::filesystem::path(argv[2]), true);
+    }
+
+    if (mode == "--render-unsupported-img" && argc == 3) {
+        return run_unsupported_img_render_assertion(std::filesystem::path(argv[2]));
     }
 
     if (mode == "--h264" && argc == 6) {
