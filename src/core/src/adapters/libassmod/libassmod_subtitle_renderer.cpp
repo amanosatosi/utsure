@@ -129,10 +129,10 @@ ScriptFeatureScan scan_script_features(const std::filesystem::path &subtitle_pat
         );
     }
 
-    std::string script_text(
+    std::string script_text{
         std::istreambuf_iterator<char>(stream),
         std::istreambuf_iterator<char>()
-    );
+    };
     std::transform(script_text.begin(), script_text.end(), script_text.begin(), [](const unsigned char value) {
         return static_cast<char>(std::tolower(value));
     });
