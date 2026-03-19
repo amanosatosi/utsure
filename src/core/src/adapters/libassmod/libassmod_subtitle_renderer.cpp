@@ -54,18 +54,8 @@ struct TrackDeleter final {
 
 using TrackHandle = std::unique_ptr<ASS_Track, TrackDeleter>;
 
-enum class SessionRenderMode : std::uint8_t {
-    legacy_ass_image = 0,
-    auto_rgba
-};
-
 struct ScriptFeatureScan final {
     bool references_tag_images{false};
-};
-
-struct LoadedTrack final {
-    TrackHandle track{};
-    SessionRenderMode render_mode{SessionRenderMode::legacy_ass_image};
 };
 
 std::string path_to_utf8_string(const std::filesystem::path &path) {
@@ -178,7 +168,7 @@ RendererHandle create_renderer(
     return renderer;
 }
 
-LoadedTrack load_track(
+TrackHandle load_track(
     ASS_Library &library,
     const SubtitleRenderSessionCreateRequest &request
 ) {
@@ -190,67 +180,7 @@ LoadedTrack load_track(
         );
     }
 
-    const auto render_mode = ass_track_has_rgba(track.get()) != 0
-        ? SessionRenderMode::auto_rgba
-        : SessionRenderMode::legacy_ass_image;
-
-    return LoadedTrack{
-        .track = std::move(track),
-        .render_mode = render_mode
-    };
-}
-
-std::optional<SubtitleBitmap> convert_ass_image(const ASS_Image &image) {
-    if (image.w <= 0 || image.h <= 0 || image.bitmap == nullptr) {
-        return std::nullopt;
-    }
-
-    const std::uint8_t red = static_cast<std::uint8_t>((image.color >> 24) & 0xFFU);
-    const std::uint8_t green = static_cast<std::uint8_t>((image.color >> 16) & 0xFFU);
-    const std::uint8_t blue = static_cast<std::uint8_t>((image.color >> 8) & 0xFFU);
-    const std::uint8_t transparency = static_cast<std::uint8_t>(image.color & 0xFFU);
-    const std::uint8_t opacity = static_cast<std::uint8_t>(255U - transparency);
-
-    const int line_stride_bytes = image.w * 4;
-    std::vector<std::uint8_t> bytes(
-        static_cast<std::size_t>(line_stride_bytes) * static_cast<std::size_t>(image.h),
-        0U
-    );
-
-    for (int row = 0; row < image.h; ++row) {
-        const auto *source_row = image.bitmap + static_cast<std::size_t>(row) * static_cast<std::size_t>(image.stride);
-        auto *destination_row = bytes.data() +
-            static_cast<std::size_t>(row) * static_cast<std::size_t>(line_stride_bytes);
-
-        for (int column = 0; column < image.w; ++column) {
-            const std::uint8_t mask_alpha = source_row[column];
-            const std::uint8_t final_alpha = static_cast<std::uint8_t>(
-                (static_cast<std::uint16_t>(mask_alpha) * static_cast<std::uint16_t>(opacity) + 127U) / 255U
-            );
-            const auto destination_offset = static_cast<std::size_t>(column) * 4U;
-
-            destination_row[destination_offset + 0U] = static_cast<std::uint8_t>(
-                (static_cast<std::uint16_t>(red) * static_cast<std::uint16_t>(final_alpha) + 127U) / 255U
-            );
-            destination_row[destination_offset + 1U] = static_cast<std::uint8_t>(
-                (static_cast<std::uint16_t>(green) * static_cast<std::uint16_t>(final_alpha) + 127U) / 255U
-            );
-            destination_row[destination_offset + 2U] = static_cast<std::uint8_t>(
-                (static_cast<std::uint16_t>(blue) * static_cast<std::uint16_t>(final_alpha) + 127U) / 255U
-            );
-            destination_row[destination_offset + 3U] = final_alpha;
-        }
-    }
-
-    return SubtitleBitmap{
-        .origin_x = image.dst_x,
-        .origin_y = image.dst_y,
-        .width = image.w,
-        .height = image.h,
-        .pixel_format = SubtitleBitmapPixelFormat::rgba8_premultiplied,
-        .line_stride_bytes = line_stride_bytes,
-        .bytes = std::move(bytes)
-    };
+    return track;
 }
 
 std::optional<SubtitleBitmap> convert_ass_image_rgba(const ASS_ImageRGBA &image) {
@@ -282,18 +212,6 @@ std::optional<SubtitleBitmap> convert_ass_image_rgba(const ASS_ImageRGBA &image)
     };
 }
 
-std::vector<SubtitleBitmap> convert_ass_image_list(ASS_Image *images) {
-    std::vector<SubtitleBitmap> bitmaps{};
-    for (ASS_Image *image = images; image != nullptr; image = image->next) {
-        const auto bitmap = convert_ass_image(*image);
-        if (bitmap.has_value()) {
-            bitmaps.push_back(*bitmap);
-        }
-    }
-
-    return bitmaps;
-}
-
 std::vector<SubtitleBitmap> convert_ass_image_rgba_list(ASS_ImageRGBA *images) {
     std::vector<SubtitleBitmap> bitmaps{};
     for (ASS_ImageRGBA *image = images; image != nullptr; image = image->next) {
@@ -311,14 +229,12 @@ public:
     LibassmodSubtitleRenderSession(
         SubtitleRenderSessionCreateRequest create_request,
         std::string subtitle_path_string,
-        SessionRenderMode render_mode,
         LibraryHandle library,
         RendererHandle renderer,
         TrackHandle track
     )
         : create_request_(std::move(create_request)),
           subtitle_path_string_(std::move(subtitle_path_string)),
-          render_mode_(render_mode),
           library_(std::move(library)),
           renderer_(std::move(renderer)),
           track_(std::move(track)) {
@@ -334,24 +250,10 @@ public:
         try {
             int detect_change = 0;
             const long long timestamp_milliseconds = static_cast<long long>(request.timestamp_microseconds / 1000);
-            std::vector<SubtitleBitmap> bitmaps{};
-            // Keep plain ASS scripts on the legacy list path, but let libassmod switch RGBA-capable
-            // tracks to premultiplied tiles on the frames that actually require them.
-            if (render_mode_ == SessionRenderMode::legacy_ass_image) {
-                ASS_Image *images =
-                    ass_render_frame(renderer_.get(), track_.get(), timestamp_milliseconds, &detect_change);
-                bitmaps = convert_ass_image_list(images);
-            } else {
-                ASS_RenderResult render_result =
-                    ass_render_frame_auto(renderer_.get(), track_.get(), timestamp_milliseconds, &detect_change);
-                const bool frame_requires_rgba =
-                    render_result.use_rgba != 0 ||
-                    (ass_frame_needs_rgba(renderer_.get()) != 0 && render_result.imgs_rgba != nullptr);
-                bitmaps = frame_requires_rgba
-                    ? convert_ass_image_rgba_list(render_result.imgs_rgba)
-                    : convert_ass_image_list(render_result.imgs);
-                ass_render_result_free(&render_result);
-            }
+            ASS_ImageRGBA *images_rgba =
+                ass_render_frame_rgba(renderer_.get(), track_.get(), timestamp_milliseconds, &detect_change);
+            std::vector<SubtitleBitmap> bitmaps = convert_ass_image_rgba_list(images_rgba);
+            ass_free_images_rgba(images_rgba);
 
             return SubtitleRenderResult{
                 .rendered_frame = RenderedSubtitleFrame{
@@ -374,7 +276,6 @@ public:
 private:
     SubtitleRenderSessionCreateRequest create_request_{};
     std::string subtitle_path_string_{};
-    SessionRenderMode render_mode_{SessionRenderMode::legacy_ass_image};
     LibraryHandle library_{};
     RendererHandle renderer_{};
     TrackHandle track_{};
@@ -441,16 +342,15 @@ public:
                 );
             }
 
-            auto loaded_track = load_track(*library, request);
+            auto track = load_track(*library, request);
 
             return SubtitleRenderSessionResult{
                 .session = std::make_unique<LibassmodSubtitleRenderSession>(
                     request,
                     normalized_path.string(),
-                    loaded_track.render_mode,
                     std::move(library),
                     std::move(renderer),
-                    std::move(loaded_track.track)
+                    std::move(track)
                 ),
                 .error = std::nullopt
             };

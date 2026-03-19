@@ -42,6 +42,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The hardening and handoff milestone is limited to validation coverage for the current pipeline, practical build/setup notes, packaging and release guidance, and a clearer roadmap split between near-term and later work.
 - The current milestone is limited to replacing the full-clip decoded buffering path with a bounded-memory streaming pipeline while preserving cadence rules, subtitle burn-in behavior, intro/outro sequencing, and streamed A/V output.
 - The current M16 slice is limited to migrating the libassmod subtitle adapter from the legacy `ASS_Image` path to the fork's RGBA-capable render path where required, while preserving the existing renderer abstraction, timestamp rules, and streaming subtitle burn-in flow.
+- The current M16 subtitle-rendering slice now prefers the libassmod RGBA API unconditionally inside the adapter so gradient and other per-pixel effects are not exposed to legacy `ASS_Image` fallback behavior.
 
 ## Architecture direction
 
@@ -506,6 +507,7 @@ Scope change:
 - M16 originally landed with a working streaming video path but regressed the older audible-output expectation by dropping audio after decode/resample.
 - M16 now explicitly includes restoring incremental audio encode and mux support, plus clear failures when an audio-bearing timeline cannot be emitted correctly.
 - The current M16 slice also includes upgrading the libassmod-backed subtitle adapter so RGBA-only features such as gradient color/alpha tags render through the correct RGBA API path without leaking libassmod-specific behavior into unrelated pipeline code.
+- Scope update: the adapter now uses libassmod's RGBA rendering path for all subtitle frames instead of mixing legacy and RGBA render calls.
 
 Current slice status:
 - Completed: libassmod RGBA subtitle rendering migration for gradient-capable scripts and shared premultiplied-RGBA subtitle composition.
