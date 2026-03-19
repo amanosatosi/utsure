@@ -24,6 +24,7 @@ struct VideoStreamInfo final {
     std::string codec_name{};
     int width{0};
     int height{0};
+    Rational sample_aspect_ratio{1, 1};
     std::string pixel_format_name{"unknown"};
     Rational average_frame_rate{};
     TimestampInfo timestamps{};

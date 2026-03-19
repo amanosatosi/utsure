@@ -15,10 +15,11 @@ Implemented so far:
 - FFmpeg-based primary stream inspection into structured core metadata.
 - Main-source decode into normalized internal video frame and audio sample objects with explicit timestamps.
 - Main-source software video encode backends for `libx264` and `libx265` with minimal codec, preset, and CRF settings.
-- A core job/config layer that drives inspect -> decode -> muxed video encode without introducing GUI-bound settings types.
+- A core job/config layer that drives inspect -> bounded-memory streaming transcode -> muxed video encode without introducing GUI-bound settings types.
 - A technology-agnostic subtitle renderer/session boundary with timestamped RGBA-oriented overlay contracts.
 - A `libassmod`-backed subtitle burn-in path that renders ASS subtitles onto decoded RGBA frames before final encode.
 - A core timeline layer that assembles intro/main/outro segments, preserves the main clip cadence, stitches aligned normalized audio, and feeds the existing encode-job path.
+- A bounded-memory streaming encode path that demuxes, decodes, composites, encodes, and muxes incrementally instead of buffering full decoded clips in memory.
 - A first usable Qt 6 Widgets window for selecting source/subtitle/intro/outro assets, choosing H.264 or H.265 with preset and CRF, setting an output path, starting the encode, and viewing progress, logs, and errors.
 
 These milestones are currently covered by the Windows GitHub Actions build and test workflow.
@@ -35,6 +36,7 @@ Start here when picking up the repository:
 - `docs/setup/windows-msys2.md`: supported local setup, build, test, and packaging commands
 - `docs/release/windows-portable.md`: current packaging and release expectations for the Windows bundle
 - `docs/roadmap.md`: near-term versus later work
+- `docs/architecture/streaming-transcode-pipeline.md`: active streaming-pipeline data flow, queue limits, and lifetime rules
 
 ## Layout
 

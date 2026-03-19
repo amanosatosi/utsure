@@ -206,8 +206,8 @@ add_test(
 )
 
 add_test(
-    NAME utsure.core.job.encode.working_set_too_large
-    COMMAND utsure_core_encode_job_tests --working-set-too-large
+    NAME utsure.core.job.encode.streaming_memory_budget
+    COMMAND utsure_core_encode_job_tests --streaming-memory-budget
         "${UTSURE_MEMORY_HEAVY_MAIN_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/job-memory-heavy.mp4"
 )
@@ -267,8 +267,8 @@ add_test(
 )
 
 add_test(
-    NAME utsure.core.job.preflight.working_set_too_large
-    COMMAND utsure_core_encode_job_preflight_tests --working-set-too-large
+    NAME utsure.core.job.preflight.streaming_memory_budget
+    COMMAND utsure_core_encode_job_preflight_tests --streaming-memory-budget
         "${UTSURE_MEMORY_HEAVY_MAIN_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/preflight-memory-heavy.mp4"
 )

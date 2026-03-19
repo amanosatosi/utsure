@@ -292,7 +292,7 @@ void validate_subtitle_session(
         .format_hint = job.subtitles->format_hint,
         .canvas_width = video_stream.width,
         .canvas_height = video_stream.height,
-        .sample_aspect_ratio = media::Rational{1, 1}
+        .sample_aspect_ratio = video_stream.sample_aspect_ratio
     });
     if (!session_result.succeeded()) {
         append_issue(

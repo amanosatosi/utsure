@@ -545,6 +545,19 @@ void validate_video_compatibility(
         );
     }
 
+    if (main_video.sample_aspect_ratio.is_valid() &&
+        candidate_video.sample_aspect_ratio.is_valid() &&
+        !rationals_equal(candidate_video.sample_aspect_ratio, main_video.sample_aspect_ratio)) {
+        throw std::runtime_error(
+            "The " + std::string(to_string(kind)) + " segment sample aspect ratio " +
+            std::to_string(candidate_video.sample_aspect_ratio.numerator) + "/" +
+            std::to_string(candidate_video.sample_aspect_ratio.denominator) +
+            " does not match the main segment sample aspect ratio " +
+            std::to_string(main_video.sample_aspect_ratio.numerator) + "/" +
+            std::to_string(main_video.sample_aspect_ratio.denominator) + "."
+        );
+    }
+
     if (!rational_is_positive(candidate_video.average_frame_rate)) {
         throw std::runtime_error(
             "The " + std::string(to_string(kind)) + " segment does not expose a usable average frame rate."
@@ -948,6 +961,7 @@ DecodedMediaSource build_composed_media_source(
             .codec_name = main_video_stream.codec_name,
             .width = video_cadence.width,
             .height = video_cadence.height,
+            .sample_aspect_ratio = video_cadence.sample_aspect_ratio,
             .pixel_format_name = "rgba",
             .average_frame_rate = timeline_plan.output_frame_rate,
             .timestamps = {

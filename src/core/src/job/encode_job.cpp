@@ -1,9 +1,7 @@
 #include "utsure/core/job/encode_job.hpp"
 
 #include "encode_job_working_set_guard.hpp"
-#include "../subtitles/subtitle_burn_in.hpp"
-#include "utsure/core/media/media_decoder.hpp"
-#include "utsure/core/media/media_inspector.hpp"
+#include "../media/streaming_transcode_pipeline.hpp"
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 #include "utsure/core/timeline/timeline.hpp"
 
@@ -12,7 +10,6 @@
 #include <optional>
 #include <string>
 #include <utility>
-#include <vector>
 
 namespace utsure::core::job {
 
@@ -136,20 +133,6 @@ timeline::TimelineAssemblyRequest build_timeline_request(const EncodeJob &job) {
     };
 }
 
-EncodeJobResult make_segment_decode_error(
-    const EncodeJob &job,
-    const timeline::TimelineSegmentKind kind,
-    const media::MediaDecodeError &error,
-    EncodeJobTelemetry *telemetry = nullptr
-) {
-    return make_error(
-        job,
-        "Failed to decode the " + std::string(timeline::to_string(kind)) + " segment. " + error.message,
-        error.actionable_hint,
-        telemetry
-    );
-}
-
 std::string format_segment_log_message(
     const timeline::TimelineSegmentKind kind,
     const std::filesystem::path &source_path
@@ -159,7 +142,7 @@ std::string format_segment_log_message(
 }
 
 std::string format_encode_log_message(const EncodeJob &job) {
-    return "Encoding the composed output as " + std::string(media::to_string(job.output.video.codec)) +
+    return "Encoding the streaming output as " + std::string(media::to_string(job.output.video.codec)) +
         " with preset '" + job.output.video.preset + "' and CRF " + std::to_string(job.output.video.crf) + ".";
 }
 
@@ -248,9 +231,6 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             );
         }
 
-        std::vector<media::DecodedMediaSource> decoded_segments{};
-        decoded_segments.reserve(timeline_plan.segments.size());
-        std::int64_t subtitled_video_frame_count = 0;
         std::unique_ptr<subtitles::SubtitleRenderer> subtitle_renderer{};
 
         const auto ensure_subtitle_renderer = [&]() -> std::optional<EncodeJobResult> {
@@ -278,127 +258,61 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                 "Decoding the " + std::string(timeline::to_string(segment_plan.kind)) + " segment."
             );
             notify_log(telemetry, EncodeJobLogLevel::info, format_segment_log_message(segment_plan.kind, segment_plan.source_path));
-
-            const auto decode_result = media::MediaDecoder::decode(
-                segment_plan.source_path,
-                options.decode_normalization_policy
-            );
-            if (!decode_result.succeeded()) {
-                return make_segment_decode_error(job, segment_plan.kind, *decode_result.error, &telemetry);
-            }
-
-            media::DecodedMediaSource decoded_segment = *decode_result.decoded_media_source;
-
-            if (job.subtitles.has_value() &&
-                job.subtitles->timing_mode == timeline::SubtitleTimingMode::main_segment_only &&
-                segment_plan.kind == timeline::TimelineSegmentKind::main) {
-                notify_progress(
-                    telemetry,
-                    EncodeJobStage::burning_in_subtitles,
-                    "Burning subtitles into the main segment."
-                );
-                notify_log(
-                    telemetry,
-                    EncodeJobLogLevel::info,
-                    "Applying subtitle burn-in to the main segment."
-                );
-
-                if (auto renderer_error = ensure_subtitle_renderer(); renderer_error.has_value()) {
-                    return *renderer_error;
-                }
-
-                const auto burn_in_result = subtitles::burn_in::apply(
-                    decoded_segment,
-                    *subtitle_renderer,
-                    *job.subtitles
-                );
-                if (!burn_in_result.succeeded()) {
-                    return make_error(
-                        job,
-                        burn_in_result.error->message,
-                        burn_in_result.error->actionable_hint,
-                        &telemetry
-                    );
-                }
-
-                decoded_segment = std::move(burn_in_result.output->decoded_media_source);
-                subtitled_video_frame_count = burn_in_result.output->subtitled_video_frame_count;
-            }
-
-            decoded_segments.push_back(std::move(decoded_segment));
         }
 
-        notify_progress(
-            telemetry,
-            EncodeJobStage::composing_timeline,
-            "Composing the decoded segments into one output timeline."
-        );
-        notify_log(telemetry, EncodeJobLogLevel::info, "Composing the decoded intro/main/outro timeline.");
-
-        const auto timeline_composition_result = timeline::TimelineComposer::compose(timeline_plan, decoded_segments);
-        if (!timeline_composition_result.succeeded()) {
-            return make_error(
-                job,
-                timeline_composition_result.error->message,
-                timeline_composition_result.error->actionable_hint,
-                &telemetry
-            );
-        }
-
-        media::DecodedMediaSource media_source_for_encode =
-            timeline_composition_result.output->decoded_media_source;
-
-        if (job.subtitles.has_value() &&
-            job.subtitles->timing_mode == timeline::SubtitleTimingMode::full_output_timeline) {
+        if (job.subtitles.has_value()) {
             notify_progress(
                 telemetry,
                 EncodeJobStage::burning_in_subtitles,
-                "Burning subtitles into the composed output timeline."
+                "Rendering and compositing subtitles per frame during streaming encode."
             );
             notify_log(
                 telemetry,
                 EncodeJobLogLevel::info,
-                "Applying subtitle burn-in to the composed output timeline."
+                "Preparing the subtitle renderer for streaming frame composition."
             );
 
             if (auto renderer_error = ensure_subtitle_renderer(); renderer_error.has_value()) {
                 return *renderer_error;
             }
-
-            const auto burn_in_result = subtitles::burn_in::apply(
-                media_source_for_encode,
-                *subtitle_renderer,
-                *job.subtitles
-            );
-            if (!burn_in_result.succeeded()) {
-                return make_error(
-                    job,
-                    burn_in_result.error->message,
-                    burn_in_result.error->actionable_hint,
-                    &telemetry
-                );
-            }
-
-            media_source_for_encode = std::move(burn_in_result.output->decoded_media_source);
-            subtitled_video_frame_count = burn_in_result.output->subtitled_video_frame_count;
         }
 
         notify_progress(
             telemetry,
-            EncodeJobStage::encoding_output,
-            "Encoding the final output file."
+            EncodeJobStage::composing_timeline,
+            "Streaming intro/main/outro segments through the bounded-memory pipeline."
         );
-        notify_log(telemetry, EncodeJobLogLevel::info, format_encode_log_message(job));
+        notify_log(
+            telemetry,
+            EncodeJobLogLevel::info,
+            "Streaming demux, decode, subtitle/composite, encode, and mux stages with bounded queues."
+        );
 
-        const auto encode_result = media::MediaEncoder::encode(
-            media_source_for_encode,
-            build_media_encode_request(job)
+        notify_log(
+            telemetry,
+            EncodeJobLogLevel::info,
+            format_encode_log_message(job)
         );
-        if (!encode_result.succeeded()) {
+        notify_progress(
+            telemetry,
+            EncodeJobStage::encoding_output,
+            "Encoding and muxing the final output file incrementally."
+        );
+
+        const auto streaming_result = media::streaming::StreamingTranscoder::transcode(
+            media::streaming::StreamingTranscodeRequest{
+                .timeline_plan = &timeline_plan,
+                .subtitle_settings = &job.subtitles,
+                .media_encode_request = build_media_encode_request(job),
+                .normalization_policy = options.decode_normalization_policy,
+                .subtitle_renderer = subtitle_renderer.get()
+            }
+        );
+        if (!streaming_result.succeeded()) {
             return make_error(
                 job,
-                encode_result.error->message,
-                encode_result.error->actionable_hint,
+                streaming_result.error->message,
+                streaming_result.error->actionable_hint,
                 &telemetry
             );
         }
@@ -407,7 +321,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             telemetry,
             EncodeJobLogLevel::info,
             "Encode job completed successfully. Output written to '" +
-                encode_result.encoded_media_summary->output_path.lexically_normal().string() + "'."
+                streaming_result.summary->encoded_media_summary.output_path.lexically_normal().string() + "'."
         );
         notify_final_progress(telemetry, "Encode completed successfully.");
 
@@ -415,12 +329,12 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             .encode_job_summary = EncodeJobSummary{
                 .job = job,
                 .inspected_input_info = timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info,
-                .timeline_summary = timeline_composition_result.output->timeline_summary,
-                .decode_normalization_policy = media_source_for_encode.normalization_policy,
-                .decoded_video_frame_count = static_cast<std::int64_t>(media_source_for_encode.video_frames.size()),
-                .decoded_audio_block_count = static_cast<std::int64_t>(media_source_for_encode.audio_blocks.size()),
-                .subtitled_video_frame_count = subtitled_video_frame_count,
-                .encoded_media_summary = *encode_result.encoded_media_summary
+                .timeline_summary = streaming_result.summary->timeline_summary,
+                .decode_normalization_policy = options.decode_normalization_policy,
+                .decoded_video_frame_count = streaming_result.summary->decoded_video_frame_count,
+                .decoded_audio_block_count = streaming_result.summary->decoded_audio_block_count,
+                .subtitled_video_frame_count = streaming_result.summary->subtitled_video_frame_count,
+                .encoded_media_summary = streaming_result.summary->encoded_media_summary
             },
             .error = std::nullopt
         };

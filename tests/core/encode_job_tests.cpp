@@ -1,6 +1,7 @@
 #include "utsure/core/job/encode_job.hpp"
 #include "utsure/core/job/encode_job_report.hpp"
 #include "utsure/core/media/media_decoder.hpp"
+#include "utsure/core/media/media_inspector.hpp"
 
 #include <cstddef>
 #include <filesystem>
@@ -25,6 +26,8 @@ using utsure::core::job::format_encode_job_report;
 using utsure::core::media::DecodedMediaSource;
 using utsure::core::media::MediaDecodeResult;
 using utsure::core::media::MediaDecoder;
+using utsure::core::media::MediaInspectionResult;
+using utsure::core::media::MediaInspector;
 using utsure::core::media::OutputVideoCodec;
 using utsure::core::media::Rational;
 using utsure::core::timeline::TimelineSegmentKind;
@@ -233,23 +236,21 @@ int assert_observer_flow(
     return 0;
 }
 
-int assert_working_set_blocked_observer_flow(const CollectingObserver &observer) {
+int assert_streaming_memory_observer_flow(const CollectingObserver &observer) {
     if (observer.progress_updates.empty()) {
-        return fail("The memory-heavy encode job did not report any progress.");
+        return fail("The streaming-memory encode job did not report any progress.");
     }
 
     if (observer.progress_updates.front().stage != EncodeJobStage::assembling_timeline) {
-        return fail("The memory-heavy encode job did not start at timeline assembly.");
+        return fail("The streaming-memory encode job did not start at timeline assembly.");
     }
 
-    for (const auto &progress : observer.progress_updates) {
-        if (progress.stage == EncodeJobStage::decoding_segment) {
-            return fail("The memory-heavy encode job should have been rejected before decode started.");
-        }
+    if (observer.progress_updates.back().stage != EncodeJobStage::completed) {
+        return fail("The streaming-memory encode job did not report completion.");
     }
 
     if (observer.log_messages.empty()) {
-        return fail("The memory-heavy encode job did not report any log messages.");
+        return fail("The streaming-memory encode job did not report any log messages.");
     }
 
     return 0;
@@ -426,7 +427,7 @@ int run_timeline_h264_assertion(
     return 0;
 }
 
-int run_working_set_too_large_assertion(
+int run_streaming_memory_budget_assertion(
     const std::filesystem::path &main_path,
     const std::filesystem::path &output_path
 ) {
@@ -449,25 +450,42 @@ int run_working_set_too_large_assertion(
         .decode_normalization_policy = {},
         .observer = &observer
     });
-    if (job_result.succeeded() || !job_result.error.has_value()) {
-        return fail("A memory-heavy encode job succeeded unexpectedly.");
+    if (!job_result.succeeded()) {
+        const std::string error_message =
+            "The streaming-memory encode job failed unexpectedly: " +
+            job_result.error->message +
+            " Hint: " +
+            job_result.error->actionable_hint;
+        return fail(error_message);
     }
 
-    if (job_result.error->message.find("estimated to require about") == std::string::npos) {
-        return fail("The memory-heavy encode job did not report the working-set estimate.");
+    const auto &summary = *job_result.encode_job_summary;
+    if (summary.decoded_video_frame_count != 192 ||
+        summary.timeline_summary.output_video_frame_count != 192 ||
+        summary.decoded_audio_block_count != 0 ||
+        summary.subtitled_video_frame_count != 0) {
+        return fail("Unexpected counts for the streaming-memory encode job.");
     }
 
-    if (assert_working_set_blocked_observer_flow(observer) != 0) {
+    if (!summary.encoded_media_summary.output_info.primary_video_stream.has_value() ||
+        summary.encoded_media_summary.output_info.primary_video_stream->width != 1920 ||
+        summary.encoded_media_summary.output_info.primary_video_stream->height != 1080 ||
+        summary.encoded_media_summary.output_info.primary_audio_stream.has_value()) {
+        return fail("Unexpected output streams for the streaming-memory encode job.");
+    }
+
+    const MediaInspectionResult inspection_result = MediaInspector::inspect(output_path);
+    if (!inspection_result.succeeded()) {
+        return fail("The streaming-memory output could not be inspected.");
+    }
+
+    if (assert_streaming_memory_observer_flow(observer) != 0) {
         return 1;
     }
 
-    std::error_code filesystem_error;
-    if (std::filesystem::exists(output_path, filesystem_error) && !filesystem_error) {
-        return fail("The memory-heavy encode job should not have created an output file.");
-    }
-
-    std::cout << job_result.error->message << '\n';
-    std::cout << job_result.error->actionable_hint << '\n';
+    std::cout << "streaming_memory_budget=passed\n";
+    std::cout << "output.video.resolution=1920x1080\n";
+    std::cout << "output.encoded_video_frames=" << summary.encoded_media_summary.encoded_video_frame_count << '\n';
     return 0;
 }
 
@@ -479,7 +497,7 @@ int main(int argc, char *argv[]) {
             "Usage: utsure_core_encode_job_tests "
             "[--h264|--h265] <input> <output> | "
             "[--timeline-h264] <intro> <main> <outro> <output> | "
-            "[--working-set-too-large] <input> <output>"
+            "[--streaming-memory-budget] <input> <output>"
         );
     }
 
@@ -512,8 +530,8 @@ int main(int argc, char *argv[]) {
         );
     }
 
-    if (mode == "--working-set-too-large" && argc == 4) {
-        return run_working_set_too_large_assertion(
+    if (mode == "--streaming-memory-budget" && argc == 4) {
+        return run_streaming_memory_budget_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3])
         );
