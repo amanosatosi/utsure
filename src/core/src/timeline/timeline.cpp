@@ -486,15 +486,15 @@ MediaInspectionResult inspect_segment(
 }
 
 Rational choose_output_video_time_base(const media::VideoStreamInfo &video_stream) {
-    if (rational_is_positive(video_stream.timestamps.time_base)) {
-        return video_stream.timestamps.time_base;
-    }
-
     if (rational_is_positive(video_stream.average_frame_rate)) {
         return Rational{
             .numerator = video_stream.average_frame_rate.denominator,
             .denominator = video_stream.average_frame_rate.numerator
         };
+    }
+
+    if (rational_is_positive(video_stream.timestamps.time_base)) {
+        return video_stream.timestamps.time_base;
     }
 
     throw std::runtime_error("The main video stream does not expose a usable time base for timeline composition.");

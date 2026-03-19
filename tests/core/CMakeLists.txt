@@ -6,6 +6,7 @@ set(UTSURE_MEMORY_HEAVY_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/memory-heavy-main.mp
 set(UTSURE_TIMELINE_INTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-intro.avi")
 set(UTSURE_TIMELINE_OUTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-outro.avi")
 set(UTSURE_TIMELINE_BAD_FPS_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-bad-fps.avi")
+set(UTSURE_NTSC_COARSE_TIMEBASE_FILE "${UTSURE_TEST_MEDIA_DIR}/ntsc-coarse-timebase.mp4")
 set(UTSURE_SUBTITLE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-sample.ass")
 set(UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-gradient-sample.ass")
 set(UTSURE_SUBTITLE_IMG_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-img-sample.ass")
@@ -90,6 +91,23 @@ add_custom_command(
     VERBATIM
 )
 
+add_custom_command(
+    OUTPUT "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "testsrc=size=320x180:rate=24000/1001"
+        -f lavfi -i "sine=frequency=1000:sample_rate=48000:duration=3"
+        -frames:v 48
+        -c:v libx264
+        -preset ultrafast
+        -pix_fmt yuv420p
+        -video_track_timescale 1000
+        -c:a aac
+        -b:a 128k
+        -shortest
+        "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
+    VERBATIM
+)
+
 add_custom_target(
     utsure_generate_sample_media
     DEPENDS
@@ -98,6 +116,7 @@ add_custom_target(
         "${UTSURE_TIMELINE_INTRO_FILE}"
         "${UTSURE_TIMELINE_OUTRO_FILE}"
         "${UTSURE_TIMELINE_BAD_FPS_FILE}"
+        "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
 )
 
 add_executable(utsure_core_media_inspection_tests
@@ -222,6 +241,13 @@ add_test(
     COMMAND utsure_core_encode_job_tests --streaming-memory-budget
         "${UTSURE_MEMORY_HEAVY_MAIN_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/job-memory-heavy.mp4"
+)
+
+add_test(
+    NAME utsure.core.job.encode.ntsc_coarse_timebase
+    COMMAND utsure_core_encode_job_tests --coarse-timebase-ntsc
+        "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-ntsc-coarse-timebase.mp4"
 )
 
 add_executable(utsure_core_encode_job_preflight_tests

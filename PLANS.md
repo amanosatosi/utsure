@@ -43,6 +43,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current milestone is limited to replacing the full-clip decoded buffering path with a bounded-memory streaming pipeline while preserving cadence rules, subtitle burn-in behavior, intro/outro sequencing, and streamed A/V output.
 - The current M16 slice is limited to migrating the libassmod subtitle adapter from the legacy `ASS_Image` path to the fork's RGBA-capable render path where required, while preserving the existing renderer abstraction, timestamp rules, and streaming subtitle burn-in flow.
 - The current M16 subtitle-rendering slice now prefers the libassmod RGBA API unconditionally inside the adapter so gradient and other per-pixel effects are not exposed to legacy `ASS_Image` fallback behavior.
+- The current M16 hardening slice also includes fixing cadence validation for real-world CFR sources whose container stream time base is too coarse to represent the authoritative frame rate exactly.
 
 ## Architecture direction
 
@@ -508,9 +509,11 @@ Scope change:
 - M16 now explicitly includes restoring incremental audio encode and mux support, plus clear failures when an audio-bearing timeline cannot be emitted correctly.
 - The current M16 slice also includes upgrading the libassmod-backed subtitle adapter so RGBA-only features such as gradient color/alpha tags render through the correct RGBA API path without leaking libassmod-specific behavior into unrelated pipeline code.
 - Scope update: the adapter now uses libassmod's RGBA rendering path for all subtitle frames instead of mixing legacy and RGBA render calls.
+- Scope update: output video time-base selection now favors the exact inverse main-source frame rate over coarse container stream time bases so CFR validation does not reject normal 24000/1001 material.
 
 Current slice status:
 - Completed: libassmod RGBA subtitle rendering migration for gradient-capable scripts and shared premultiplied-RGBA subtitle composition.
+- Completed: cadence-safe output video time-base selection plus regression coverage for CFR sources whose stream time base is coarser than the authoritative main-source frame rate.
 - Deferred: host-side `\img` resource registration remains outside this slice, and `\img` scripts now fail explicitly until that registration path exists.
 
 Likely files/modules:
@@ -533,6 +536,7 @@ Validation:
 - Build and run the focused core encode/preflight tests that exercise main-only, intro/main/outro, and subtitle cases.
 - Verify that memory-heavy 1080p jobs are no longer rejected by duration-scaled decoded-memory estimates.
 - Verify that audio-bearing inputs produce muxed outputs with an expected audio stream and coherent durations.
+- Verify one 24000/1001 sample whose input stream time base is forced to `1/1000`, and confirm the timeline still uses `1001/24000` for CFR validation.
 - Document the new stage flow, queue limits, where decoded/composited frame memory is released, and where audio frames/packets are released.
 - Verify the subtitle adapter against one normal ASS sample plus one RGBA-only subtitle sample that depends on libassmod gradient rendering, and include `\img` coverage if the host-side image registration path is wired in this slice.
 

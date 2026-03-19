@@ -508,6 +508,83 @@ int run_streaming_memory_budget_assertion(
     return 0;
 }
 
+int run_coarse_timebase_ntsc_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &output_path
+) {
+    const MediaInspectionResult input_inspection_result = MediaInspector::inspect(main_path);
+    if (!input_inspection_result.succeeded() ||
+        !input_inspection_result.media_source_info->primary_video_stream.has_value()) {
+        return fail("The coarse-timebase NTSC sample could not be inspected.");
+    }
+
+    const auto &input_video_stream = *input_inspection_result.media_source_info->primary_video_stream;
+    if (format_rational(input_video_stream.average_frame_rate) != "24000/1001" ||
+        format_rational(input_video_stream.timestamps.time_base) != "1/1000") {
+        return fail("The coarse-timebase NTSC sample does not expose the expected input cadence metadata.");
+    }
+
+    CollectingObserver observer{};
+    const EncodeJob job{
+        .input = {
+            .main_source_path = main_path
+        },
+        .output = {
+            .output_path = output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!job_result.succeeded()) {
+        const std::string error_message =
+            "The coarse-timebase NTSC encode job failed unexpectedly: " +
+            job_result.error->message +
+            " Hint: " +
+            job_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const auto &summary = *job_result.encode_job_summary;
+    if (format_rational(summary.timeline_summary.output_frame_rate) != "24000/1001" ||
+        format_rational(summary.timeline_summary.output_video_time_base) != "1001/24000") {
+        return fail("Unexpected coarse-timebase NTSC output cadence.");
+    }
+
+    const MediaDecodeResult output_decode_result = MediaDecoder::decode(output_path);
+    if (!output_decode_result.succeeded()) {
+        const std::string error_message =
+            "The coarse-timebase NTSC output decode failed unexpectedly: " +
+            output_decode_result.error->message +
+            " Hint: " +
+            output_decode_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const auto structure_result = assert_output_decode(*output_decode_result.decoded_media_source, 48U, true);
+    if (structure_result != 0) {
+        return structure_result;
+    }
+
+    const auto observer_result = assert_observer_flow(observer, 1, false);
+    if (observer_result != 0) {
+        return observer_result;
+    }
+
+    std::cout << build_validation_report(
+        *job_result.encode_job_summary,
+        *output_decode_result.decoded_media_source
+    ) << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -516,7 +593,8 @@ int main(int argc, char *argv[]) {
             "Usage: utsure_core_encode_job_tests "
             "[--h264|--h265] <input> <output> | "
             "[--timeline-h264] <intro> <main> <outro> <output> | "
-            "[--streaming-memory-budget] <input> <output>"
+            "[--streaming-memory-budget] <input> <output> | "
+            "[--coarse-timebase-ntsc] <input> <output>"
         );
     }
 
@@ -551,6 +629,13 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--streaming-memory-budget" && argc == 4) {
         return run_streaming_memory_budget_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
+        );
+    }
+
+    if (mode == "--coarse-timebase-ntsc" && argc == 4) {
+        return run_coarse_timebase_ntsc_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3])
         );
