@@ -111,7 +111,6 @@ struct SwrContextDeleter final {
 
 using SwrContextHandle = std::unique_ptr<SwrContext, SwrContextDeleter>;
 
-constexpr std::uint64_t kEstimatedPacketSlotBytes = 128ULL * 1024ULL;
 constexpr std::uint64_t kInFlightRgbaSurfaceCount = 1ULL;
 constexpr std::uint64_t kEncoderWorkingSurfaceCount = 2ULL;
 
@@ -166,6 +165,67 @@ public:
 private:
     std::size_t max_depth_{0};
     std::deque<T> queue_{};
+};
+
+class BoundedPacketByteQueue final {
+public:
+    explicit BoundedPacketByteQueue(const std::size_t max_bytes)
+        : max_bytes_(max_bytes) {
+        if (max_bytes_ == 0U) {
+            throw std::runtime_error("Bounded packet queues require a positive byte budget.");
+        }
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return queue_.empty();
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return queue_.size();
+    }
+
+    [[nodiscard]] std::size_t queued_bytes() const noexcept {
+        return queued_bytes_;
+    }
+
+    [[nodiscard]] bool can_push(const AVPacket &packet) const noexcept {
+        const auto packet_bytes = packet_queue_bytes(packet);
+        return packet_bytes <= (max_bytes_ - queued_bytes_);
+    }
+
+    void push(PacketHandle packet) {
+        if (!packet) {
+            throw std::runtime_error("A null packet was pushed into a bounded packet queue.");
+        }
+
+        const auto packet_bytes = packet_queue_bytes(*packet);
+        if (packet_bytes > (max_bytes_ - queued_bytes_)) {
+            throw std::runtime_error("A streaming packet queue exceeded its configured byte budget.");
+        }
+
+        queued_bytes_ += packet_bytes;
+        queue_.push_back(std::move(packet));
+    }
+
+    PacketHandle pop() {
+        if (queue_.empty()) {
+            throw std::runtime_error("A streaming packet queue was popped while empty.");
+        }
+
+        PacketHandle packet = std::move(queue_.front());
+        queue_.pop_front();
+        queued_bytes_ -= packet_queue_bytes(*packet);
+        return packet;
+    }
+
+private:
+    [[nodiscard]] static std::size_t packet_queue_bytes(const AVPacket &packet) noexcept {
+        return static_cast<std::size_t>(std::max(packet.size, 0));
+    }
+
+    std::size_t max_bytes_{0};
+    std::size_t queued_bytes_{0};
+    std::deque<PacketHandle> queue_{};
 };
 
 struct TimestampSeed final {
@@ -386,12 +446,9 @@ std::optional<PipelineMemoryBudget> build_memory_budget(
         return std::nullopt;
     }
 
-    std::uint64_t compressed_audio_packet_reserve_bytes = 0;
-    if (!checked_mul_u64(
-            static_cast<std::uint64_t>(queue_limits.audio_packet_queue_depth),
-            kEstimatedPacketSlotBytes,
-            compressed_audio_packet_reserve_bytes) ||
-        !checked_add_u64(
+    const std::uint64_t compressed_audio_packet_reserve_bytes =
+        static_cast<std::uint64_t>(queue_limits.audio_packet_queue_byte_budget);
+    if (!checked_add_u64(
             estimated_peak_bytes,
             compressed_audio_packet_reserve_bytes,
             estimated_peak_bytes)) {
@@ -2016,9 +2073,9 @@ SegmentProcessResult process_segment(
         }
     }
 
-    // Audio packets can briefly outrun video cadence in normal interleaving, so keep only a small
-    // compressed-packet cushion rather than letting decoded audio blocks grow without bound.
-    BoundedQueue<PacketHandle> pending_audio_packet_queue(queue_limits.audio_packet_queue_depth);
+    // Audio packets can briefly outrun video cadence in normal interleaving, so cap the compressed
+    // packet reserve by total bytes rather than raw packet count.
+    BoundedPacketByteQueue pending_audio_packet_queue(queue_limits.audio_packet_queue_byte_budget);
     BoundedQueue<DecodedAudioSamples> decoded_audio_queue(queue_limits.decoded_audio_block_queue_depth);
 
     const auto &main_video_stream =
@@ -2316,14 +2373,14 @@ SegmentProcessResult process_segment(
             receive_video_frames();
         } else if (resources.audio_decoder &&
                    demux_packet->stream_index == segment_plan.inspected_source_info.primary_audio_stream->stream_index) {
-            if (pending_audio_packet_queue.full()) {
+            if (!pending_audio_packet_queue.can_push(*demux_packet)) {
                 drain_audio_queue(false);
                 flush_pending_audio_packets();
             }
 
-            if (pending_audio_packet_queue.full()) {
+            if (!pending_audio_packet_queue.can_push(*demux_packet)) {
                 throw std::runtime_error(
-                    "The streaming audio pipeline exhausted its compressed-audio packet queue before video cadence advanced."
+                    "The streaming audio pipeline exhausted its compressed-audio byte budget before video cadence advanced."
                 );
             }
 

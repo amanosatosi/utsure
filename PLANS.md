@@ -46,6 +46,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M16 slice is limited to migrating the libassmod subtitle adapter from the legacy `ASS_Image` path to the fork's RGBA-capable render path where required, while preserving the existing renderer abstraction, timestamp rules, and streaming subtitle burn-in flow.
 - The current M16 subtitle-rendering slice now prefers the libassmod RGBA API unconditionally inside the adapter so gradient and other per-pixel effects are not exposed to legacy `ASS_Image` fallback behavior.
 - The current M16 hardening slice also includes fixing cadence validation for real-world CFR sources whose container stream time base is too coarse to represent the authoritative frame rate exactly.
+- The current M16 hardening slice also includes byte-budgeting the pending compressed-audio reserve so normal audio-heavy interleaving does not fail before video cadence advances.
 
 ## Architecture direction
 

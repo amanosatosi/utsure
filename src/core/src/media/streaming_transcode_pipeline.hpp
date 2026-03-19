@@ -13,7 +13,7 @@
 namespace utsure::core::media::streaming {
 
 struct PipelineQueueLimits final {
-    std::size_t audio_packet_queue_depth{32};
+    std::size_t audio_packet_queue_byte_budget{4U * 1024U * 1024U};
     std::size_t decoded_audio_block_queue_depth{8};
 };
 

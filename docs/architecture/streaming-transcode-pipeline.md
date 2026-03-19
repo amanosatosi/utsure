@@ -39,7 +39,7 @@ Decoded media from earlier segments is never retained after that segment has cle
 
 The current bounded state comes from `media::streaming::kDefaultPipelineQueueLimits`:
 
-- Pending compressed audio packet queue: `32`
+- Pending compressed audio packet byte budget: `4 MiB`
 - Decoded normalized audio block queue: `8`
 
 Video is now a direct synchronous path inside the single-threaded loop:
@@ -53,7 +53,7 @@ Video is now a direct synchronous path inside the single-threaded loop:
 
 There is no longer a separate bounded queue for video packets, decoded video frames, composited video frames, or encoded mux packets in the active path.
 
-The compressed-audio packet queue exists only to prevent audio decode from outrunning the video-timed audio budget when interleaved packet order temporarily favors audio.
+The compressed-audio packet reserve exists only to prevent audio decode from outrunning the video-timed audio budget when interleaved packet order temporarily favors audio.
 
 ## Allocation And Release
 
@@ -151,7 +151,7 @@ Current estimate formula:
 - `+ rgba_frame_bytes` subtitle scratch when subtitles are enabled
 - `2 * yuv420_frame_bytes` for encoder-side working surfaces
 - `decoded_audio_block_queue * audio_block_bytes`
-- `audio_packet_queue * 128 KiB` compressed-audio reserve
+- compressed-audio packet byte budget
 - `1 * audio_block_bytes` for the audio encoder carry buffer
 
 That keeps peak memory proportional to resolution plus the small bounded audio queues, not to total clip length.
