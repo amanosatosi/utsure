@@ -13,8 +13,8 @@
 namespace utsure::core::media::streaming {
 
 struct PipelineQueueLimits final {
-    std::size_t audio_packet_queue_byte_budget{4U * 1024U * 1024U};
     std::size_t decoded_audio_block_queue_depth{8};
+    std::int64_t startup_audio_preroll_microseconds{250000};
 };
 
 inline constexpr PipelineQueueLimits kDefaultPipelineQueueLimits{};
@@ -25,7 +25,6 @@ struct PipelineMemoryBudget final {
     std::uint64_t subtitle_scratch_bytes{0};
     std::uint64_t encoder_yuv420_frame_bytes{0};
     std::uint64_t normalized_audio_block_bytes{0};
-    std::uint64_t compressed_audio_packet_reserve_bytes{0};
     std::uint64_t audio_encoder_carry_bytes{0};
     std::uint64_t estimated_peak_bytes{0};
 };

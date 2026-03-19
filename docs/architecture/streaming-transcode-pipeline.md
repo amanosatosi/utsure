@@ -39,8 +39,8 @@ Decoded media from earlier segments is never retained after that segment has cle
 
 The current bounded state comes from `media::streaming::kDefaultPipelineQueueLimits`:
 
-- Pending compressed audio packet byte budget: `4 MiB`
 - Decoded normalized audio block queue: `8`
+- Startup audio preroll before the first written video frame: `250 ms`
 
 Video is now a direct synchronous path inside the single-threaded loop:
 
@@ -53,14 +53,20 @@ Video is now a direct synchronous path inside the single-threaded loop:
 
 There is no longer a separate bounded queue for video packets, decoded video frames, composited video frames, or encoded mux packets in the active path.
 
-The compressed-audio packet reserve exists only to prevent audio decode from outrunning the known video timeline when interleaved packet order temporarily favors audio.
-Audio release now tracks the greater of:
+Audio flow control now uses timestamp horizons in a common microsecond time base:
 
-- video frames already emitted onto the output timeline
-- the furthest video packet timeline already demuxed into the decoder
+- written video horizon: video frames already emitted onto the output timeline
+- known video horizon: the furthest video packet timeline already demuxed into the decoder
+- written audio horizon: audio blocks already emitted onto the output timeline
+- buffered decoded-audio horizon: decoded audio blocks plus any resampled-but-not-yet-queued samples
 
-That keeps startup decoder delay and B-frame reordering from stalling audio progress behind an artificial zero-frame budget.
-When the demuxed-video horizon is temporarily ahead of emitted output frames, the non-final drain still keeps one normalized audio block buffered so the segment-end trim can absorb small timestamp skew.
+Non-final audio drain is allowed only while the next audio block would stay within the allowed audio horizon.
+That horizon is:
+
+- `250 ms` during startup before the first written video frame
+- otherwise the known video horizon
+
+When buffered decoded audio has already reached that horizon, audio decode pauses, compressed audio packets remain pending, and the loop keeps draining downstream work until video advances.
 
 ## Allocation And Release
 
@@ -80,7 +86,7 @@ For each decoded audio frame:
 
 1. `avcodec_receive_frame(...)` fills a reusable FFmpeg audio decode frame.
 2. `resample_audio_frame(...)` converts it to planar-float channel vectors.
-3. Normalized samples accumulate into bounded decoded-audio blocks.
+3. Normalized samples accumulate into bounded decoded-audio blocks, while any partial resample tail stays in the per-segment pending channel vectors.
 4. When enough output-timeline audio budget exists, a rebased `DecodedAudioSamples` block is built and passed to the audio encoder.
 5. `StreamingOutputSession::build_encoded_audio_frame(...)` allocates an encoder input frame, copies planar floats into FFmpeg-owned buffers, sends it to the encoder, and releases it after the send/drain step.
 6. Encoded audio packets are muxed immediately and unreffed immediately.
@@ -158,10 +164,9 @@ Current estimate formula:
 - `+ rgba_frame_bytes` subtitle scratch when subtitles are enabled
 - `2 * yuv420_frame_bytes` for encoder-side working surfaces
 - `decoded_audio_block_queue * audio_block_bytes`
-- compressed-audio packet byte budget
 - `1 * audio_block_bytes` for the audio encoder carry buffer
 
-That keeps peak memory proportional to resolution plus the small bounded audio queues, not to total clip length.
+That keeps peak memory proportional to resolution plus the bounded decoded-audio queue, not to total clip length.
 
 ## GitHub Actions Validation
 
@@ -179,6 +184,7 @@ The Windows GitHub Actions job should verify:
 - Host-side `\img` resource registration is still not wired. Scripts that reference `\img` fail explicitly during subtitle-session creation.
 - The active output audio encoder is AAC-only.
 - Hardware-accelerated decode/encode is not part of this slice.
+- Extremely pathological muxes with unusually long front-loaded audio packet runs can still enlarge the pending compressed-audio backlog until video packets are demuxed, although decoded-audio memory remains bounded by the normalized queue depth.
 
 ## Maintenance Notes
 
@@ -188,4 +194,4 @@ When changing this pipeline:
 - do not reintroduce vectors of whole decoded segments into the active job path
 - keep subtitle rendering on the frame path, not as a pre-rendered clip transform
 - keep segment sequencing generic so intro/main/outro all use the same pipeline code
-- if queue depths or packet reserves change, update both `kDefaultPipelineQueueLimits` and the memory-budget explanation above
+- if queue depths or startup timing thresholds change, update both `kDefaultPipelineQueueLimits` and the memory-budget explanation above

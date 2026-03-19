@@ -167,67 +167,6 @@ private:
     std::deque<T> queue_{};
 };
 
-class BoundedPacketByteQueue final {
-public:
-    explicit BoundedPacketByteQueue(const std::size_t max_bytes)
-        : max_bytes_(max_bytes) {
-        if (max_bytes_ == 0U) {
-            throw std::runtime_error("Bounded packet queues require a positive byte budget.");
-        }
-    }
-
-    [[nodiscard]] bool empty() const noexcept {
-        return queue_.empty();
-    }
-
-    [[nodiscard]] std::size_t size() const noexcept {
-        return queue_.size();
-    }
-
-    [[nodiscard]] std::size_t queued_bytes() const noexcept {
-        return queued_bytes_;
-    }
-
-    [[nodiscard]] bool can_push(const AVPacket &packet) const noexcept {
-        const auto packet_bytes = packet_queue_bytes(packet);
-        return packet_bytes <= (max_bytes_ - queued_bytes_);
-    }
-
-    void push(PacketHandle packet) {
-        if (!packet) {
-            throw std::runtime_error("A null packet was pushed into a bounded packet queue.");
-        }
-
-        const auto packet_bytes = packet_queue_bytes(*packet);
-        if (packet_bytes > (max_bytes_ - queued_bytes_)) {
-            throw std::runtime_error("A streaming packet queue exceeded its configured byte budget.");
-        }
-
-        queued_bytes_ += packet_bytes;
-        queue_.push_back(std::move(packet));
-    }
-
-    PacketHandle pop() {
-        if (queue_.empty()) {
-            throw std::runtime_error("A streaming packet queue was popped while empty.");
-        }
-
-        PacketHandle packet = std::move(queue_.front());
-        queue_.pop_front();
-        queued_bytes_ -= packet_queue_bytes(*packet);
-        return packet;
-    }
-
-private:
-    [[nodiscard]] static std::size_t packet_queue_bytes(const AVPacket &packet) noexcept {
-        return static_cast<std::size_t>(std::max(packet.size, 0));
-    }
-
-    std::size_t max_bytes_{0};
-    std::size_t queued_bytes_{0};
-    std::deque<PacketHandle> queue_{};
-};
-
 struct TimestampSeed final {
     std::int64_t source_pts{0};
     TimestampOrigin origin{TimestampOrigin::stream_cursor};
@@ -446,15 +385,6 @@ std::optional<PipelineMemoryBudget> build_memory_budget(
         return std::nullopt;
     }
 
-    const std::uint64_t compressed_audio_packet_reserve_bytes =
-        static_cast<std::uint64_t>(queue_limits.audio_packet_queue_byte_budget);
-    if (!checked_add_u64(
-            estimated_peak_bytes,
-            compressed_audio_packet_reserve_bytes,
-            estimated_peak_bytes)) {
-        return std::nullopt;
-    }
-
     std::uint64_t audio_encoder_carry_bytes = 0;
     if (!checked_mul_u64(*audio_block_bytes, 1U, audio_encoder_carry_bytes) ||
         !checked_add_u64(estimated_peak_bytes, audio_encoder_carry_bytes, estimated_peak_bytes)) {
@@ -467,7 +397,6 @@ std::optional<PipelineMemoryBudget> build_memory_budget(
         .subtitle_scratch_bytes = subtitle_scratch_bytes,
         .encoder_yuv420_frame_bytes = *yuv420_frame_bytes,
         .normalized_audio_block_bytes = *audio_block_bytes,
-        .compressed_audio_packet_reserve_bytes = compressed_audio_packet_reserve_bytes,
         .audio_encoder_carry_bytes = audio_encoder_carry_bytes,
         .estimated_peak_bytes = estimated_peak_bytes
     };
@@ -2046,7 +1975,6 @@ SegmentProcessResult process_segment(
     std::int64_t emitted_audio_samples = 0;
     std::int64_t decoded_segment_audio_samples = 0;
     std::int64_t emitted_segment_audio_samples = 0;
-    std::int64_t observed_video_audio_sample_budget = 0;
     std::optional<std::int64_t> previous_video_pts_in_output_time_base{};
 
     if (resources.audio_decoder) {
@@ -2088,10 +2016,19 @@ SegmentProcessResult process_segment(
         }
     }
 
-    // Audio packets can briefly outrun video cadence in normal interleaving, so cap the compressed
-    // packet reserve by total bytes rather than raw packet count.
-    BoundedPacketByteQueue pending_audio_packet_queue(queue_limits.audio_packet_queue_byte_budget);
+    // Audio packets can briefly outrun video cadence in normal interleaving, so keep them pending
+    // until the decoded audio horizon has room to advance on the shared output timeline.
+    std::deque<PacketHandle> pending_audio_packet_queue{};
     BoundedQueue<DecodedAudioSamples> decoded_audio_queue(queue_limits.decoded_audio_block_queue_depth);
+    std::int64_t queued_decoded_audio_samples = 0;
+    std::int64_t known_video_horizon_microseconds = 0;
+    std::optional<std::int64_t> first_known_video_source_pts{};
+    std::optional<std::int64_t> last_written_video_pts{};
+    std::optional<std::int64_t> last_written_audio_pts{};
+
+    if (queue_limits.startup_audio_preroll_microseconds < 0) {
+        throw std::runtime_error("The streaming audio startup preroll must not be negative.");
+    }
 
     const auto &main_video_stream =
         *timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info.primary_video_stream;
@@ -2108,7 +2045,7 @@ SegmentProcessResult process_segment(
         );
     };
 
-    const auto update_observed_video_audio_sample_budget = [&](const AVPacket &video_packet) {
+    const auto update_known_video_timeline = [&](const AVPacket &video_packet) {
         if (!timeline_plan.output_audio_stream.has_value()) {
             return;
         }
@@ -2118,27 +2055,96 @@ SegmentProcessResult process_segment(
             return;
         }
 
+        if (!first_known_video_source_pts.has_value()) {
+            first_known_video_source_pts = *packet_timestamp;
+        }
+
         const auto packet_duration_pts = video_packet.duration > 0 ? video_packet.duration : fallback_video_duration_pts;
         const auto packet_end_pts = *packet_timestamp + packet_duration_pts;
         if (packet_end_pts <= segment_video_start_pts) {
             return;
         }
 
-        observed_video_audio_sample_budget = std::max(
-            observed_video_audio_sample_budget,
+        known_video_horizon_microseconds = std::max(
+            known_video_horizon_microseconds,
             rescale_value(
                 packet_end_pts - segment_video_start_pts,
                 segment_plan.inspected_source_info.primary_video_stream->timestamps.time_base,
-                timeline_plan.output_audio_stream->timestamps.time_base
+                Rational{1, AV_TIME_BASE}
             )
         );
     };
 
-    const auto expected_segment_audio_samples_for_available_video = [&]() -> std::int64_t {
-        return std::max(
-            expected_segment_audio_samples_for_emitted_video(),
-            observed_video_audio_sample_budget
+    const auto pending_resampled_audio_samples = [&]() -> std::int64_t {
+        if (pending_audio_channels.empty()) {
+            return 0;
+        }
+
+        return static_cast<std::int64_t>(pending_audio_channels.front().size());
+    };
+
+    const auto audio_samples_to_microseconds = [&](const std::int64_t samples) -> std::int64_t {
+        if (!timeline_plan.output_audio_stream.has_value() || samples <= 0) {
+            return 0;
+        }
+
+        return rescale_value(
+            samples,
+            timeline_plan.output_audio_stream->timestamps.time_base,
+            Rational{1, AV_TIME_BASE}
         );
+    };
+
+    const auto written_video_horizon_microseconds = [&]() -> std::int64_t {
+        return rescale_value(
+            result.segment_summary.video_frame_count * video_output_plan.frame_duration_pts,
+            timeline_plan.output_video_time_base,
+            Rational{1, AV_TIME_BASE}
+        );
+    };
+
+    const auto shared_video_horizon_microseconds = [&]() -> std::int64_t {
+        return std::max(written_video_horizon_microseconds(), known_video_horizon_microseconds);
+    };
+
+    const auto written_audio_horizon_microseconds = [&]() -> std::int64_t {
+        if (!last_written_audio_pts.has_value()) {
+            return 0;
+        }
+
+        return audio_samples_to_microseconds(emitted_segment_audio_samples);
+    };
+
+    const auto buffered_decoded_audio_microseconds = [&]() -> std::int64_t {
+        return audio_samples_to_microseconds(queued_decoded_audio_samples + pending_resampled_audio_samples());
+    };
+
+    const auto allowed_audio_horizon_microseconds = [&]() -> std::int64_t {
+        if (!last_written_video_pts.has_value()) {
+            if (first_known_video_source_pts.has_value()) {
+                return std::max(
+                    queue_limits.startup_audio_preroll_microseconds,
+                    shared_video_horizon_microseconds()
+                );
+            }
+
+            return queue_limits.startup_audio_preroll_microseconds;
+        }
+
+        return shared_video_horizon_microseconds();
+    };
+
+    const auto audio_decode_should_wait = [&]() -> bool {
+        if (!timeline_plan.output_audio_stream.has_value()) {
+            return false;
+        }
+
+        if (decoded_audio_queue.full()) {
+            return true;
+        }
+
+        return (written_audio_horizon_microseconds() + buffered_decoded_audio_microseconds()) >=
+            allowed_audio_horizon_microseconds();
     };
 
     const auto emit_output_audio_block = [&](
@@ -2164,6 +2170,7 @@ SegmentProcessResult process_segment(
             output_channels
         );
         output_session.push_audio_block(output_block);
+        last_written_audio_pts = next_output_audio_pts;
         next_output_audio_pts += samples_to_emit;
         emitted_segment_audio_samples += samples_to_emit;
         ++result.segment_summary.audio_block_count;
@@ -2205,39 +2212,39 @@ SegmentProcessResult process_segment(
                 );
             }
 
-            const auto emitted_video_audio_budget = expected_segment_audio_samples_for_emitted_video();
-            const auto available_video_audio_budget = expected_segment_audio_samples_for_available_video();
-            auto available_segment_samples = available_video_audio_budget - emitted_segment_audio_samples;
-            if (!final_drain &&
-                available_video_audio_budget > emitted_video_audio_budget &&
-                normalization_policy.audio_block_samples > 0) {
-                available_segment_samples = std::max<std::int64_t>(
-                    0,
-                    available_segment_samples - normalization_policy.audio_block_samples
-                );
-            }
-            if (available_segment_samples <= 0) {
-                if (!final_drain) {
+            if (!final_drain) {
+                const auto next_audio_horizon_microseconds =
+                    written_audio_horizon_microseconds() + audio_samples_to_microseconds(ready_block.samples_per_channel);
+                if (next_audio_horizon_microseconds > allowed_audio_horizon_microseconds()) {
                     break;
                 }
-
-                auto dropped_block = decoded_audio_queue.pop();
-                decoded_segment_audio_samples += dropped_block.samples_per_channel;
-                continue;
-            }
-
-            if (!final_drain &&
-                ready_block.samples_per_channel > available_segment_samples) {
-                break;
             }
 
             auto emitted_block = decoded_audio_queue.pop();
+            queued_decoded_audio_samples -= emitted_block.samples_per_channel;
             decoded_segment_audio_samples += emitted_block.samples_per_channel;
-            const int samples_to_emit = static_cast<int>(std::min<std::int64_t>(
-                emitted_block.samples_per_channel,
-                available_segment_samples
-            ));
-            emit_output_audio_block(emitted_block, samples_to_emit, false);
+
+            if (!final_drain) {
+                emit_output_audio_block(emitted_block, emitted_block.samples_per_channel, false);
+                continue;
+            }
+
+            const auto available_segment_samples =
+                expected_segment_audio_samples_for_emitted_video() - emitted_segment_audio_samples;
+            if (available_segment_samples <= 0) {
+                continue;
+            }
+
+            if (emitted_block.samples_per_channel > available_segment_samples) {
+                emit_output_audio_block(
+                    emitted_block,
+                    static_cast<int>(available_segment_samples),
+                    false
+                );
+                break;
+            }
+
+            emit_output_audio_block(emitted_block, emitted_block.samples_per_channel, false);
         }
     };
 
@@ -2279,6 +2286,7 @@ SegmentProcessResult process_segment(
         video_frame.sample_aspect_ratio = video_output_plan.sample_aspect_ratio;
 
         output_session.push_frame(video_frame);
+        last_written_video_pts = next_output_video_pts;
         ++result.segment_summary.video_frame_count;
         ++result.decoded_video_frame_count;
         ++next_output_frame_index;
@@ -2289,18 +2297,18 @@ SegmentProcessResult process_segment(
         }
     };
 
-    const auto stage_audio_block = [&](DecodedAudioSamples audio_block) {
+    const auto enqueue_audio_block = [&](DecodedAudioSamples audio_block, const bool allow_final_drain) -> bool {
         if (decoded_audio_queue.full()) {
-            drain_audio_queue(false);
+            drain_audio_queue(allow_final_drain);
         }
 
         if (decoded_audio_queue.full()) {
-            throw std::runtime_error(
-                "The streaming audio pipeline exhausted its decoded-audio queue before video cadence advanced."
-            );
+            return false;
         }
 
+        queued_decoded_audio_samples += audio_block.samples_per_channel;
         decoded_audio_queue.push(std::move(audio_block));
+        return true;
     };
 
     const auto emit_ready_audio_blocks = [&]() {
@@ -2309,6 +2317,13 @@ SegmentProcessResult process_segment(
         }
 
         while (static_cast<int>(pending_audio_channels.front().size()) >= normalization_policy.audio_block_samples) {
+            if (decoded_audio_queue.full()) {
+                drain_audio_queue(false);
+                if (decoded_audio_queue.full()) {
+                    return;
+                }
+            }
+
             std::vector<std::vector<float>> block_channels(
                 pending_audio_channels.size(),
                 std::vector<float>(static_cast<std::size_t>(normalization_policy.audio_block_samples))
@@ -2321,14 +2336,20 @@ SegmentProcessResult process_segment(
                 pending.erase(pending.begin(), pending.begin() + normalization_policy.audio_block_samples);
             }
 
-            stage_audio_block(build_audio_block(
-                *segment_plan.inspected_source_info.primary_audio_stream,
-                result.segment_summary.audio_block_count + static_cast<std::int64_t>(decoded_audio_queue.size()),
-                first_output_source_pts,
-                emitted_audio_samples,
-                normalization_policy.audio_block_samples,
-                block_channels
-            ));
+            if (!enqueue_audio_block(
+                    build_audio_block(
+                        *segment_plan.inspected_source_info.primary_audio_stream,
+                        result.segment_summary.audio_block_count + static_cast<std::int64_t>(decoded_audio_queue.size()),
+                        first_output_source_pts,
+                        emitted_audio_samples,
+                        normalization_policy.audio_block_samples,
+                        block_channels
+                    ),
+                    false)) {
+                throw std::runtime_error(
+                    "The streaming audio pipeline could not stage a decoded audio block into the bounded queue."
+                );
+            }
 
             emitted_audio_samples += normalization_policy.audio_block_samples;
         }
@@ -2406,45 +2427,42 @@ SegmentProcessResult process_segment(
             emit_ready_audio_blocks();
 
             av_frame_unref(decoded_audio_frame.get());
+
+            if (audio_decode_should_wait()) {
+                return;
+            }
         }
     };
 
     const auto flush_pending_audio_packets = [&]() {
-        while (!pending_audio_packet_queue.empty()) {
-            if (decoded_audio_queue.full()) {
-                drain_audio_queue(false);
-                if (decoded_audio_queue.full()) {
-                    return;
-                }
+        while (true) {
+            receive_audio_frames();
+            drain_audio_queue(false);
+            emit_ready_audio_blocks();
+            if (audio_decode_should_wait()) {
+                return;
             }
 
-            PacketHandle packet = pending_audio_packet_queue.pop();
+            if (pending_audio_packet_queue.empty()) {
+                return;
+            }
+
+            PacketHandle packet = std::move(pending_audio_packet_queue.front());
+            pending_audio_packet_queue.pop_front();
             send_packet_or_throw(*resources.audio_decoder, packet.get());
-            receive_audio_frames();
         }
     };
 
     while (av_read_frame(resources.format_context.get(), demux_packet.get()) >= 0) {
         if (demux_packet->stream_index == segment_plan.inspected_source_info.primary_video_stream->stream_index) {
-            update_observed_video_audio_sample_budget(*demux_packet);
+            update_known_video_timeline(*demux_packet);
             send_packet_or_throw(*resources.video_decoder, demux_packet.get());
             receive_video_frames();
         } else if (resources.audio_decoder &&
                    demux_packet->stream_index == segment_plan.inspected_source_info.primary_audio_stream->stream_index) {
-            if (!pending_audio_packet_queue.can_push(*demux_packet)) {
-                drain_audio_queue(false);
-                flush_pending_audio_packets();
-            }
-
-            if (!pending_audio_packet_queue.can_push(*demux_packet)) {
-                throw std::runtime_error(
-                    "The streaming audio pipeline exhausted its compressed-audio byte budget before the known video timeline advanced."
-                );
-            }
-
             auto queued_packet = allocate_packet();
             av_packet_move_ref(queued_packet.get(), demux_packet.get());
-            pending_audio_packet_queue.push(std::move(queued_packet));
+            pending_audio_packet_queue.push_back(std::move(queued_packet));
             flush_pending_audio_packets();
         }
 
@@ -2480,14 +2498,20 @@ SegmentProcessResult process_segment(
 
         if (!pending_audio_channels.empty() && !pending_audio_channels.front().empty()) {
             const int tail_sample_count = static_cast<int>(pending_audio_channels.front().size());
-            stage_audio_block(build_audio_block(
-                *segment_plan.inspected_source_info.primary_audio_stream,
-                result.segment_summary.audio_block_count + static_cast<std::int64_t>(decoded_audio_queue.size()),
-                first_output_source_pts,
-                emitted_audio_samples,
-                tail_sample_count,
-                pending_audio_channels
-            ));
+            if (!enqueue_audio_block(
+                    build_audio_block(
+                        *segment_plan.inspected_source_info.primary_audio_stream,
+                        result.segment_summary.audio_block_count + static_cast<std::int64_t>(decoded_audio_queue.size()),
+                        first_output_source_pts,
+                        emitted_audio_samples,
+                        tail_sample_count,
+                        pending_audio_channels
+                    ),
+                    true)) {
+                throw std::runtime_error(
+                    "The streaming audio pipeline could not enqueue the final decoded audio tail block."
+                );
+            }
         }
     }
 
