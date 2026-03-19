@@ -53,7 +53,14 @@ Video is now a direct synchronous path inside the single-threaded loop:
 
 There is no longer a separate bounded queue for video packets, decoded video frames, composited video frames, or encoded mux packets in the active path.
 
-The compressed-audio packet reserve exists only to prevent audio decode from outrunning the video-timed audio budget when interleaved packet order temporarily favors audio.
+The compressed-audio packet reserve exists only to prevent audio decode from outrunning the known video timeline when interleaved packet order temporarily favors audio.
+Audio release now tracks the greater of:
+
+- video frames already emitted onto the output timeline
+- the furthest video packet timeline already demuxed into the decoder
+
+That keeps startup decoder delay and B-frame reordering from stalling audio progress behind an artificial zero-frame budget.
+When the demuxed-video horizon is temporarily ahead of emitted output frames, the non-final drain still keeps one normalized audio block buffered so the segment-end trim can absorb small timestamp skew.
 
 ## Allocation And Release
 

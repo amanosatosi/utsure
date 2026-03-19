@@ -518,6 +518,18 @@ TimestampSeed choose_timestamp_seed(const AVFrame &frame, const std::int64_t fal
     };
 }
 
+std::optional<std::int64_t> choose_packet_timestamp_seed(const AVPacket &packet) {
+    if (packet.pts != AV_NOPTS_VALUE) {
+        return packet.pts;
+    }
+
+    if (packet.dts != AV_NOPTS_VALUE) {
+        return packet.dts;
+    }
+
+    return std::nullopt;
+}
+
 Rational choose_sample_aspect_ratio(const AVFrame &frame, const AVStream &stream) {
     const Rational frame_sample_aspect_ratio = ffmpeg_support::to_rational(frame.sample_aspect_ratio);
     if (rational_is_positive(frame_sample_aspect_ratio)) {
@@ -2021,6 +2033,8 @@ SegmentProcessResult process_segment(
         segment_plan.inspected_source_info.primary_video_stream->timestamps.start_pts.value_or(0);
     const auto fallback_video_duration_pts =
         infer_video_frame_duration_pts(*segment_plan.inspected_source_info.primary_video_stream).value_or(1);
+    const std::int64_t segment_video_start_pts =
+        segment_plan.inspected_source_info.primary_video_stream->timestamps.start_pts.value_or(0);
 
     SwrContextHandle audio_resample_context{};
     std::vector<std::vector<float>> pending_audio_channels{};
@@ -2032,6 +2046,7 @@ SegmentProcessResult process_segment(
     std::int64_t emitted_audio_samples = 0;
     std::int64_t decoded_segment_audio_samples = 0;
     std::int64_t emitted_segment_audio_samples = 0;
+    std::int64_t observed_video_audio_sample_budget = 0;
     std::optional<std::int64_t> previous_video_pts_in_output_time_base{};
 
     if (resources.audio_decoder) {
@@ -2090,6 +2105,39 @@ SegmentProcessResult process_segment(
             result.segment_summary.video_frame_count * video_output_plan.frame_duration_pts,
             timeline_plan.output_video_time_base,
             timeline_plan.output_audio_stream->timestamps.time_base
+        );
+    };
+
+    const auto update_observed_video_audio_sample_budget = [&](const AVPacket &video_packet) {
+        if (!timeline_plan.output_audio_stream.has_value()) {
+            return;
+        }
+
+        const auto packet_timestamp = choose_packet_timestamp_seed(video_packet);
+        if (!packet_timestamp.has_value()) {
+            return;
+        }
+
+        const auto packet_duration_pts = video_packet.duration > 0 ? video_packet.duration : fallback_video_duration_pts;
+        const auto packet_end_pts = *packet_timestamp + packet_duration_pts;
+        if (packet_end_pts <= segment_video_start_pts) {
+            return;
+        }
+
+        observed_video_audio_sample_budget = std::max(
+            observed_video_audio_sample_budget,
+            rescale_value(
+                packet_end_pts - segment_video_start_pts,
+                segment_plan.inspected_source_info.primary_video_stream->timestamps.time_base,
+                timeline_plan.output_audio_stream->timestamps.time_base
+            )
+        );
+    };
+
+    const auto expected_segment_audio_samples_for_available_video = [&]() -> std::int64_t {
+        return std::max(
+            expected_segment_audio_samples_for_emitted_video(),
+            observed_video_audio_sample_budget
         );
     };
 
@@ -2157,8 +2205,17 @@ SegmentProcessResult process_segment(
                 );
             }
 
-            const auto available_segment_samples =
-                expected_segment_audio_samples_for_emitted_video() - emitted_segment_audio_samples;
+            const auto emitted_video_audio_budget = expected_segment_audio_samples_for_emitted_video();
+            const auto available_video_audio_budget = expected_segment_audio_samples_for_available_video();
+            auto available_segment_samples = available_video_audio_budget - emitted_segment_audio_samples;
+            if (!final_drain &&
+                available_video_audio_budget > emitted_video_audio_budget &&
+                normalization_policy.audio_block_samples > 0) {
+                available_segment_samples = std::max<std::int64_t>(
+                    0,
+                    available_segment_samples - normalization_policy.audio_block_samples
+                );
+            }
             if (available_segment_samples <= 0) {
                 if (!final_drain) {
                     break;
@@ -2369,6 +2426,7 @@ SegmentProcessResult process_segment(
 
     while (av_read_frame(resources.format_context.get(), demux_packet.get()) >= 0) {
         if (demux_packet->stream_index == segment_plan.inspected_source_info.primary_video_stream->stream_index) {
+            update_observed_video_audio_sample_budget(*demux_packet);
             send_packet_or_throw(*resources.video_decoder, demux_packet.get());
             receive_video_frames();
         } else if (resources.audio_decoder &&
@@ -2380,7 +2438,7 @@ SegmentProcessResult process_segment(
 
             if (!pending_audio_packet_queue.can_push(*demux_packet)) {
                 throw std::runtime_error(
-                    "The streaming audio pipeline exhausted its compressed-audio byte budget before video cadence advanced."
+                    "The streaming audio pipeline exhausted its compressed-audio byte budget before the known video timeline advanced."
                 );
             }
 
