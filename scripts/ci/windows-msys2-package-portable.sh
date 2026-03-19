@@ -11,6 +11,8 @@ bundle_dir="${artifact_root}/${bundle_name}"
 bundle_zip="${artifact_root}/${bundle_name}.zip"
 validation_root="${artifact_root}/portable-validation"
 third_party_root="${UTSURE_THIRD_PARTY_ROOT:-${project_root}/.deps}"
+ffmpeg_prefix="${UTSURE_FFMPEG_PREFIX:-${third_party_root}/ffmpeg/prefix}"
+ffmpeg_pcdir="${ffmpeg_prefix}/lib/pkgconfig"
 libassmod_prefix="${UTSURE_LIBASSMOD_PREFIX:-${third_party_root}/libassmod/prefix}"
 libassmod_pcdir="${libassmod_prefix}/lib/pkgconfig"
 msys2_prefix="${UTSURE_MSYS2_PREFIX:-/ucrt64}"
@@ -21,8 +23,8 @@ qt_runtime_manifest="${bundle_dir}/qt-runtime-files.txt"
 non_qt_runtime_manifest="${bundle_dir}/non-qt-runtime-dependencies.txt"
 bundle_manifest="${bundle_dir}/bundle-file-manifest.txt"
 
-export PATH="${libassmod_prefix}/bin:${msys2_bin_dir}:${PATH}"
-export PKG_CONFIG_PATH="${libassmod_pcdir}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+export PATH="${ffmpeg_prefix}/bin:${libassmod_prefix}/bin:${msys2_bin_dir}:${PATH}"
+export PKG_CONFIG_PATH="${ffmpeg_pcdir}:${libassmod_pcdir}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 find_windeployqt() {
   local candidates=(
@@ -68,6 +70,7 @@ should_package_dependency() {
 
   case "${dependency_path}" in
     "${msys2_bin_dir}"/*|\
+    "${ffmpeg_prefix}/bin/"*|\
     "${libassmod_prefix}/bin/"*)
       return 0
       ;;

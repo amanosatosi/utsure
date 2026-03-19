@@ -4,7 +4,14 @@ set(UTSURE_QT_MIN_VERSION "6.5" CACHE STRING "Minimum supported Qt 6 version.")
 set(UTSURE_FFMPEG_REQUIRED_SERIES "7.1" CACHE STRING "Required FFmpeg major.minor series for the active media pipeline.")
 set(UTSURE_FFMPEG_NEXT_UNTESTED_SERIES "7.2" CACHE STRING "First FFmpeg series outside the currently supported range.")
 option(UTSURE_ENABLE_DEPENDENCY_AUDIT "Verify the planned external dependency stack at configure time." ON)
+option(UTSURE_REQUIRE_FFMPEG "Require FFmpeg to be available from an explicit isolated prefix." ON)
 option(UTSURE_REQUIRE_LIBASSMOD "Require libassmod to be available during dependency audit." ON)
+set(
+    UTSURE_FFMPEG_ROOT
+    ""
+    CACHE PATH
+    "Installed FFmpeg prefix pinned to the supported release series."
+)
 set(
     UTSURE_LIBASSMOD_ROOT
     ""
@@ -68,6 +75,74 @@ macro(utsure_configure_dependencies)
         pkg_check_modules(UTSURE_LIBSWSCALE REQUIRED IMPORTED_TARGET GLOBAL libswscale)
         pkg_check_modules(UTSURE_X264 REQUIRED IMPORTED_TARGET GLOBAL x264)
         pkg_check_modules(UTSURE_X265 REQUIRED IMPORTED_TARGET GLOBAL x265)
+
+        set(_ffmpeg_status "not validated")
+        if(UTSURE_REQUIRE_FFMPEG OR NOT "${UTSURE_FFMPEG_ROOT}" STREQUAL "")
+            if("${UTSURE_FFMPEG_ROOT}" STREQUAL "")
+                message(FATAL_ERROR
+                    "UTSURE_REQUIRE_FFMPEG is ON, but UTSURE_FFMPEG_ROOT is empty. "
+                    "Build FFmpeg into an isolated prefix and point UTSURE_FFMPEG_ROOT at that prefix."
+                )
+            endif()
+
+            utsure_normalize_path(_ffmpeg_root "${UTSURE_FFMPEG_ROOT}")
+            set(_ffmpeg_pc_candidates
+                "${_ffmpeg_root}/lib/pkgconfig/libavcodec.pc"
+                "${_ffmpeg_root}/lib64/pkgconfig/libavcodec.pc"
+            )
+            set(_ffmpeg_pc_expected "")
+            foreach(_candidate IN LISTS _ffmpeg_pc_candidates)
+                if(EXISTS "${_candidate}")
+                    set(_ffmpeg_pc_expected "${_candidate}")
+                    break()
+                endif()
+            endforeach()
+
+            if("${_ffmpeg_pc_expected}" STREQUAL "")
+                message(FATAL_ERROR
+                    "FFmpeg was expected under '${_ffmpeg_root}', but no libavcodec pkg-config file was found."
+                )
+            endif()
+
+            foreach(_component
+                    libavcodec
+                    libavformat
+                    libavutil
+                    libswresample
+                    libswscale)
+                pkg_get_variable(_pcfiledir "${_component}" pcfiledir)
+                utsure_normalize_path(_actual_pcfiledir "${_pcfiledir}")
+                set(_actual_pcfile "${_actual_pcfiledir}/${_component}.pc")
+
+                if(NOT EXISTS "${_actual_pcfile}")
+                    message(FATAL_ERROR
+                        "pkg-config resolved ${_component} from '${_actual_pcfiledir}', but '${_actual_pcfile}' does not exist."
+                    )
+                endif()
+
+                set(_expected_pcfile "${_ffmpeg_root}/lib/pkgconfig/${_component}.pc")
+                if(NOT EXISTS "${_expected_pcfile}")
+                    set(_expected_pcfile "${_ffmpeg_root}/lib64/pkgconfig/${_component}.pc")
+                endif()
+
+                if(NOT EXISTS "${_expected_pcfile}")
+                    message(FATAL_ERROR
+                        "FFmpeg was expected under '${_ffmpeg_root}', but '${_component}.pc' was not found there."
+                    )
+                endif()
+
+                utsure_resolve_existing_path(_expected_pcfile_resolved "${_expected_pcfile}")
+                utsure_resolve_existing_path(_actual_pcfile_resolved "${_actual_pcfile}")
+                if(NOT _expected_pcfile_resolved STREQUAL _actual_pcfile_resolved)
+                    message(FATAL_ERROR
+                        "pkg-config resolved '${_component}' from '${_actual_pcfile_resolved}', but pinned FFmpeg was expected at "
+                        "'${_expected_pcfile_resolved}'. Ensure the pinned FFmpeg pkg-config prefix is ahead of any system entry."
+                    )
+                endif()
+            endforeach()
+
+            set(_ffmpeg_status "validated from ${_ffmpeg_root}")
+        endif()
 
         utsure_require_ffmpeg_series("libavcodec" "${UTSURE_LIBAVCODEC_VERSION}")
         utsure_require_ffmpeg_series("libavformat" "${UTSURE_LIBAVFORMAT_VERSION}")
@@ -174,6 +249,7 @@ macro(utsure_configure_dependencies)
         if(UTSURE_BUILD_APP)
             message(STATUS "  Qt6 Widgets: found via CMake package config")
         endif()
+        message(STATUS "  FFmpeg pin: ${_ffmpeg_status}")
         message(STATUS "  FFmpeg libavcodec: ${UTSURE_LIBAVCODEC_VERSION}")
         message(STATUS "  FFmpeg libavformat: ${UTSURE_LIBAVFORMAT_VERSION}")
         message(STATUS "  FFmpeg libavutil: ${UTSURE_LIBAVUTIL_VERSION}")

@@ -28,6 +28,7 @@ The packaging entry point is `scripts/ci/windows-msys2-package-portable.sh`.
 
 - target platform: Windows x64
 - toolchain/runtime source: MSYS2 UCRT64
+- pinned media runtime: source-built FFmpeg 7.1.2 from `.deps/ffmpeg/prefix`
 - distribution format: portable zip, not an installer
 - signing: not implemented yet
 - auto-update: not implemented yet
@@ -37,7 +38,7 @@ The packaging entry point is `scripts/ci/windows-msys2-package-portable.sh`.
 1. Start from a green `windows-msys2` workflow run on the target commit.
 2. Confirm the portable bundle smoke test passed after re-extracting the zip.
 3. Keep the bundle manifests with the artifact so dependency contents remain auditable.
-4. Record the pinned `UTSURE_LIBASSMOD_REF` and any dependency version changes made for the release.
+4. Record the pinned `UTSURE_FFMPEG_VERSION`, `UTSURE_LIBASSMOD_REF`, and any dependency version changes made for the release.
 5. Test the zip on a clean Windows machine before treating it as a user-facing release.
 6. Review redistribution and licensing obligations for FFmpeg, x264, x265, Qt, and `libassmod`.
 

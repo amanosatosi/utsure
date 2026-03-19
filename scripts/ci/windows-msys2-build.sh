@@ -4,18 +4,22 @@ set -euo pipefail
 
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 third_party_root="${UTSURE_THIRD_PARTY_ROOT:-${project_root}/.deps}"
+ffmpeg_prefix="${UTSURE_FFMPEG_PREFIX:-${third_party_root}/ffmpeg/prefix}"
+ffmpeg_pcdir="${ffmpeg_prefix}/lib/pkgconfig"
 libassmod_prefix="${UTSURE_LIBASSMOD_PREFIX:-${third_party_root}/libassmod/prefix}"
 libassmod_pcdir="${libassmod_prefix}/lib/pkgconfig"
 cmake_build_type="${UTSURE_CMAKE_BUILD_TYPE:-Debug}"
 
-export PATH="${libassmod_prefix}/bin:/ucrt64/bin:${PATH}"
-export PKG_CONFIG_PATH="${libassmod_pcdir}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+export PATH="${ffmpeg_prefix}/bin:${libassmod_prefix}/bin:/ucrt64/bin:${PATH}"
+export PKG_CONFIG_PATH="${ffmpeg_pcdir}:${libassmod_pcdir}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE="${cmake_build_type}" \
   -DCMAKE_PREFIX_PATH=/ucrt64 \
   -DUTSURE_BUILD_APP=ON \
   -DUTSURE_ENABLE_DEPENDENCY_AUDIT=ON \
+  -DUTSURE_REQUIRE_FFMPEG=ON \
+  -DUTSURE_FFMPEG_ROOT="${ffmpeg_prefix}" \
   -DUTSURE_REQUIRE_LIBASSMOD=ON \
   -DUTSURE_LIBASSMOD_ROOT="${libassmod_prefix}"
 

@@ -42,6 +42,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The hardening and handoff milestone is limited to validation coverage for the current pipeline, practical build/setup notes, packaging and release guidance, and a clearer roadmap split between near-term and later work.
 - The current milestone is limited to replacing the full-clip decoded buffering path with a bounded-memory streaming pipeline while preserving cadence rules, subtitle burn-in behavior, intro/outro sequencing, and streamed A/V output.
 - The current milestone is also limited to centering the active transcoder on FFmpeg 7.1's `libavformat`/`libavcodec`/`libswscale`/`libswresample` APIs while keeping subtitle burn-in inside the app and out of `libavfilter`.
+- The current milestone now also includes pinning FFmpeg 7.1.x as an isolated source-built dependency in CI and the documented MSYS2 workflow so the build does not silently resolve a newer system FFmpeg.
 - The current M16 slice is limited to migrating the libassmod subtitle adapter from the legacy `ASS_Image` path to the fork's RGBA-capable render path where required, while preserving the existing renderer abstraction, timestamp rules, and streaming subtitle burn-in flow.
 - The current M16 subtitle-rendering slice now prefers the libassmod RGBA API unconditionally inside the adapter so gradient and other per-pixel effects are not exposed to legacy `ASS_Image` fallback behavior.
 - The current M16 hardening slice also includes fixing cadence validation for real-world CFR sources whose container stream time base is too coarse to represent the authoritative frame rate exactly.
@@ -517,6 +518,7 @@ Current slice status:
 - Completed: libassmod RGBA subtitle rendering migration for gradient-capable scripts and shared premultiplied-RGBA subtitle composition.
 - Completed: cadence-safe output video time-base selection plus regression coverage for CFR sources whose stream time base is coarser than the authoritative main-source frame rate.
 - Completed: FFmpeg 7.1 core-library dependency gating plus removal of `libavfilter` from the active dependency surface.
+- Completed: pinned FFmpeg 7.1.2 source-build workflow plus explicit prefix validation so CI no longer picks up MSYS2's newer FFmpeg package line.
 - Completed: simplified single-threaded streaming loop with immediate video encode/mux handoff and bounded audio backpressure queues instead of redundant packet/frame staging queues.
 - Deferred: host-side `\img` resource registration remains outside this slice, and `\img` scripts now fail explicitly until that registration path exists.
 

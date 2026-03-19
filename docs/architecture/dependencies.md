@@ -4,11 +4,24 @@ This repository treats GitHub Actions as the source of truth for build verificat
 
 ## Selected strategy
 
-- Windows-first dependency provider: MSYS2 UCRT64.
+- Windows-first base dependency provider: MSYS2 UCRT64.
 - Build system: CMake.
 - Qt discovery: `find_package(Qt6 ...)` through the active prefix path.
-- FFmpeg 7.1.x `libavcodec`, `libavformat`, `libavutil`, `libswresample`, `libswscale`, plus `libx264` and `libx265` discovery: `pkg-config`.
+- FFmpeg 7.1.x `libavcodec`, `libavformat`, `libavutil`, `libswresample`, and `libswscale` discovery: `pkg-config`, but only from an explicit isolated install prefix.
+- `libx264` and `libx265` discovery: `pkg-config`.
 - `libassmod` discovery: `pkg-config`, but only from an explicit isolated install prefix.
+
+## Why FFmpeg is handled separately
+
+MSYS2 ships the latest FFmpeg package line, which can move ahead of the supported `7.1.x` series. The project environment is pinned to FFmpeg `7.1.x`, so configure must not silently resolve a newer system package.
+
+To keep this explicit:
+
+- FFmpeg is built from source in CI and the documented MSYS2 workflow.
+- The current pin is `7.1.2`.
+- The build installs FFmpeg into `.deps/ffmpeg/prefix`.
+- CMake requires `UTSURE_FFMPEG_ROOT` when FFmpeg dependency validation is enabled.
+- The dependency audit fails if any required `libav*` or `libsw*` pkg-config module resolves outside that prefix.
 
 ## Why `libassmod` is handled separately
 
@@ -27,6 +40,10 @@ The root configure step now understands these dependency inputs:
 
 - `UTSURE_ENABLE_DEPENDENCY_AUDIT`
   - When `ON`, configure-time dependency discovery verifies the planned external stack.
+- `UTSURE_REQUIRE_FFMPEG`
+  - When `ON`, configure fails unless FFmpeg is available from the expected isolated prefix.
+- `UTSURE_FFMPEG_ROOT`
+  - Prefix where the source-built FFmpeg install lives.
 - `UTSURE_REQUIRE_LIBASSMOD`
   - When `ON`, configure fails unless `libassmod` is available from the expected isolated prefix.
 - `UTSURE_LIBASSMOD_ROOT`
@@ -43,11 +60,12 @@ The active transcode path does not depend on `libavfilter`.
 
 ## Windows CI path
 
-- Install Qt 6 Widgets, FFmpeg, `libx264`, `libx265`, and the `libassmod` build prerequisites from MSYS2 UCRT64.
+- Install Qt 6 Widgets, the FFmpeg build prerequisites, `libx264`, `libx265`, and the `libassmod` build prerequisites from MSYS2 UCRT64.
+- Download and build FFmpeg `7.1.2` from the official release tarball into `.deps/ffmpeg/prefix`.
 - Clone and build `libassmod` from the upstream repository, pinned to tag `1.0`.
-- Put the `libassmod` prefix ahead of the default pkg-config search path.
+- Put the FFmpeg and `libassmod` prefixes ahead of the default pkg-config search path.
 - Run configure-time dependency audit.
-- Fail configure if any required FFmpeg component resolves outside the `7.1.x` series.
+- Fail configure if any required FFmpeg component resolves outside the pinned prefix or outside the `7.1.x` series.
 - Build the repository targets and smoke-launch the Qt app.
 
 ## Unresolved assumptions

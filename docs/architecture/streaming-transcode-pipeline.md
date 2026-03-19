@@ -160,7 +160,7 @@ That keeps peak memory proportional to resolution plus the small bounded audio q
 
 The Windows GitHub Actions job should verify:
 
-1. dependency audit succeeds with FFmpeg `7.1.x`, `libx264`, `libx265`, and the pinned `libassmod` prefix
+1. dependency audit succeeds with source-built FFmpeg `7.1.2`, `libx264`, `libx265`, and the pinned `libassmod` prefix
 2. CMake configure/build succeeds without requiring `libavfilter`
 3. core tests still cover inspection, decode, legacy encode helpers, timeline assembly, encode-job streaming output, subtitle rendering, subtitle composition, and subtitle burn-in
 4. audio-bearing encode-job outputs still contain synchronized audio streams

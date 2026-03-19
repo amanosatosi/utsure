@@ -11,6 +11,7 @@ jobs:
     runs-on: windows-latest
     env:
       UTSURE_CMAKE_BUILD_TYPE: Release
+      UTSURE_FFMPEG_VERSION: "7.1.2"
       UTSURE_LIBASSMOD_REF: "1.0"
       UTSURE_PORTABLE_BUNDLE_NAME: encoder-windows-x64-portable
 
@@ -30,17 +31,22 @@ jobs:
           install: >-
             git
             mingw-w64-ucrt-x86_64-cmake
-            mingw-w64-ucrt-x86_64-ffmpeg
             mingw-w64-ucrt-x86_64-freetype
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-fribidi
             mingw-w64-ucrt-x86_64-harfbuzz
             mingw-w64-ucrt-x86_64-libx264
             mingw-w64-ucrt-x86_64-meson
+            mingw-w64-ucrt-x86_64-nasm
             mingw-w64-ucrt-x86_64-ninja
             mingw-w64-ucrt-x86_64-pkgconf
             mingw-w64-ucrt-x86_64-qt6-base
             mingw-w64-ucrt-x86_64-x265
+            curl
+            make
+
+      - name: Build FFmpeg
+        run: ./scripts/ci/windows-msys2-build-ffmpeg.sh
 
       - name: Build libassmod
         run: ./scripts/ci/windows-msys2-build-libassmod.sh
