@@ -455,12 +455,12 @@ TimestampSeed choose_timestamp_seed(const AVFrame &frame, const std::int64_t fal
 
 Rational choose_sample_aspect_ratio(const AVFrame &frame, const AVStream &stream) {
     const Rational frame_sample_aspect_ratio = ffmpeg_support::to_rational(frame.sample_aspect_ratio);
-    if (frame_sample_aspect_ratio.is_valid()) {
+    if (rational_is_positive(frame_sample_aspect_ratio)) {
         return frame_sample_aspect_ratio;
     }
 
     const Rational stream_sample_aspect_ratio = ffmpeg_support::to_rational(stream.sample_aspect_ratio);
-    if (stream_sample_aspect_ratio.is_valid()) {
+    if (rational_is_positive(stream_sample_aspect_ratio)) {
         return stream_sample_aspect_ratio;
     }
 
@@ -1317,7 +1317,7 @@ VideoOutputPlan build_video_output_plan(const timeline::TimelinePlan &timeline_p
         .height = main_video_stream.height,
         .time_base = timeline_plan.output_video_time_base,
         .average_frame_rate = timeline_plan.output_frame_rate,
-        .sample_aspect_ratio = main_video_stream.sample_aspect_ratio.is_valid()
+        .sample_aspect_ratio = rational_is_positive(main_video_stream.sample_aspect_ratio)
             ? main_video_stream.sample_aspect_ratio
             : Rational{1, 1},
         .frame_duration_pts = frame_duration_pts,
@@ -1346,7 +1346,7 @@ void validate_video_frame_for_segment(
         );
     }
 
-    if (video_output_plan.sample_aspect_ratio.is_valid() &&
+    if (rational_is_positive(video_output_plan.sample_aspect_ratio) &&
         !rationals_equal(frame.sample_aspect_ratio, video_output_plan.sample_aspect_ratio)) {
         throw std::runtime_error(
             "The " + std::string(timeline::to_string(kind)) +
@@ -1824,7 +1824,7 @@ subtitles::SubtitleRenderSessionResult create_subtitle_session(
         .format_hint = subtitle_settings.format_hint,
         .canvas_width = video_stream.width,
         .canvas_height = video_stream.height,
-        .sample_aspect_ratio = video_stream.sample_aspect_ratio.is_valid()
+        .sample_aspect_ratio = rational_is_positive(video_stream.sample_aspect_ratio)
             ? video_stream.sample_aspect_ratio
             : Rational{1, 1}
     });

@@ -10,6 +10,18 @@ extern "C" {
 
 namespace utsure::core::media::ffmpeg_support {
 
+namespace {
+
+Rational normalize_positive_rational(const AVRational value, const Rational fallback = Rational{1, 1}) {
+    if (value.num > 0 && value.den > 0) {
+        return to_rational(value);
+    }
+
+    return fallback;
+}
+
+}  // namespace
+
 void FormatContextDeleter::operator()(AVFormatContext *format_context) const noexcept {
     if (format_context == nullptr) {
         return;
@@ -107,7 +119,7 @@ VideoStreamInfo build_video_stream_info(const AVStream &stream) {
         .codec_name = codec_name_from_parameters(parameters),
         .width = parameters.width,
         .height = parameters.height,
-        .sample_aspect_ratio = to_rational(stream.sample_aspect_ratio),
+        .sample_aspect_ratio = normalize_positive_rational(stream.sample_aspect_ratio),
         .pixel_format_name = pixel_format_name_from_parameters(parameters),
         .average_frame_rate = to_rational(stream.avg_frame_rate),
         .timestamps = build_timestamp_info(stream),

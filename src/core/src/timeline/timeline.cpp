@@ -545,8 +545,8 @@ void validate_video_compatibility(
         );
     }
 
-    if (main_video.sample_aspect_ratio.is_valid() &&
-        candidate_video.sample_aspect_ratio.is_valid() &&
+    if (rational_is_positive(main_video.sample_aspect_ratio) &&
+        rational_is_positive(candidate_video.sample_aspect_ratio) &&
         !rationals_equal(candidate_video.sample_aspect_ratio, main_video.sample_aspect_ratio)) {
         throw std::runtime_error(
             "The " + std::string(to_string(kind)) + " segment sample aspect ratio " +

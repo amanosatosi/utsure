@@ -123,6 +123,10 @@ std::int64_t rescale_to_microseconds(const std::int64_t value, const Rational &t
     return av_rescale_q(value, to_av_rational(time_base), AV_TIME_BASE_Q);
 }
 
+bool rational_is_positive(const Rational &value) {
+    return value.is_valid() && value.numerator > 0 && value.denominator > 0;
+}
+
 std::optional<std::int64_t> infer_video_frame_duration_pts(const VideoStreamInfo &video_stream_info) {
     if (!video_stream_info.timestamps.time_base.is_valid() ||
         !video_stream_info.average_frame_rate.is_valid() ||
@@ -163,12 +167,12 @@ TimestampSeed choose_timestamp_seed(const AVFrame &frame, const std::int64_t fal
 
 Rational choose_sample_aspect_ratio(const AVFrame &frame, const AVStream &stream) {
     const Rational frame_sample_aspect_ratio = ffmpeg_support::to_rational(frame.sample_aspect_ratio);
-    if (frame_sample_aspect_ratio.is_valid()) {
+    if (rational_is_positive(frame_sample_aspect_ratio)) {
         return frame_sample_aspect_ratio;
     }
 
     const Rational stream_sample_aspect_ratio = ffmpeg_support::to_rational(stream.sample_aspect_ratio);
-    if (stream_sample_aspect_ratio.is_valid()) {
+    if (rational_is_positive(stream_sample_aspect_ratio)) {
         return stream_sample_aspect_ratio;
     }
 
