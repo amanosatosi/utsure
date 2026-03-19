@@ -11,18 +11,21 @@ ffmpeg_archive_path="${UTSURE_FFMPEG_ARCHIVE_PATH:-${ffmpeg_root}/ffmpeg-${ffmpe
 ffmpeg_source_dir="${UTSURE_FFMPEG_SOURCE_DIR:-${ffmpeg_root}/src}"
 ffmpeg_build_dir="${UTSURE_FFMPEG_BUILD_DIR:-${ffmpeg_root}/build}"
 ffmpeg_prefix="${UTSURE_FFMPEG_PREFIX:-${ffmpeg_root}/prefix}"
-ffmpeg_stamp_file="${ffmpeg_prefix}/.utsure-ffmpeg-version"
+ffmpeg_configure_flags_string="${UTSURE_FFMPEG_CONFIGURE_FLAGS:---enable-gpl --enable-libx264 --enable-libx265 --enable-shared --disable-static --disable-debug --disable-doc --disable-ffplay --disable-programs --enable-ffmpeg --enable-ffprobe}"
+ffmpeg_build_id="${UTSURE_FFMPEG_BUILD_ID:-ffmpeg-${ffmpeg_version}}"
+ffmpeg_stamp_file="${ffmpeg_prefix}/.utsure-ffmpeg-build-id"
 
 mkdir -p "${ffmpeg_root}"
 
 echo "Using FFmpeg version: ${ffmpeg_version}"
+echo "Using FFmpeg build id: ${ffmpeg_build_id}"
 
 if [ ! -f "${ffmpeg_archive_path}" ]; then
   curl -L --fail --output "${ffmpeg_archive_path}" "${ffmpeg_source_url}"
 fi
 
-if [ -f "${ffmpeg_stamp_file}" ] && [ "$(cat "${ffmpeg_stamp_file}")" = "${ffmpeg_version}" ]; then
-  echo "Pinned FFmpeg ${ffmpeg_version} is already installed at ${ffmpeg_prefix}"
+if [ -f "${ffmpeg_stamp_file}" ] && [ "$(cat "${ffmpeg_stamp_file}")" = "${ffmpeg_build_id}" ]; then
+  echo "Pinned FFmpeg build '${ffmpeg_build_id}' is already installed at ${ffmpeg_prefix}"
   exit 0
 fi
 
@@ -40,26 +43,17 @@ mv "${extracted_source_dir}" "${ffmpeg_source_dir}"
 
 export PATH="/ucrt64/bin:${PATH}"
 export PKG_CONFIG_PATH="/ucrt64/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+read -r -a ffmpeg_configure_flags <<< "${ffmpeg_configure_flags_string}"
 
 pushd "${ffmpeg_build_dir}" >/dev/null
 "${ffmpeg_source_dir}/configure" \
   --prefix="${ffmpeg_prefix}" \
-  --enable-gpl \
-  --enable-libx264 \
-  --enable-libx265 \
-  --enable-shared \
-  --disable-static \
-  --disable-debug \
-  --disable-doc \
-  --disable-ffplay \
-  --disable-programs \
-  --enable-ffmpeg \
-  --enable-ffprobe \
+  "${ffmpeg_configure_flags[@]}" \
   --pkg-config=pkg-config
 make -j"$(nproc)"
 make install
 popd >/dev/null
 
-printf '%s\n' "${ffmpeg_version}" > "${ffmpeg_stamp_file}"
+printf '%s\n' "${ffmpeg_build_id}" > "${ffmpeg_stamp_file}"
 
 echo "FFmpeg ${ffmpeg_version} installed to ${ffmpeg_prefix}"

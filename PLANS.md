@@ -519,6 +519,7 @@ Current slice status:
 - Completed: cadence-safe output video time-base selection plus regression coverage for CFR sources whose stream time base is coarser than the authoritative main-source frame rate.
 - Completed: FFmpeg 7.1 core-library dependency gating plus removal of `libavfilter` from the active dependency surface.
 - Completed: pinned FFmpeg 7.1.2 source-build workflow plus explicit prefix validation so CI no longer picks up MSYS2's newer FFmpeg package line.
+- Completed: FFmpeg-only GitHub Actions dependency cache keyed to the pinned 7.1 recipe so later workflow runs can skip rebuilding FFmpeg without caching the app build tree.
 - Completed: simplified single-threaded streaming loop with immediate video encode/mux handoff and bounded audio backpressure queues instead of redundant packet/frame staging queues.
 - Deferred: host-side `\img` resource registration remains outside this slice, and `\img` scripts now fail explicitly until that registration path exists.
 
