@@ -84,7 +84,7 @@ UTSURE_CMAKE_BUILD_TYPE=Release ./scripts/ci/windows-msys2-build.sh
 - `PKG_CONFIG_PATH` must resolve `libavcodec`, `libavformat`, `libavutil`, `libswresample`, and `libswscale` from the FFmpeg prefix before any system FFmpeg entry.
 - `PKG_CONFIG_PATH` must resolve `libass` from the `libassmod` prefix before any system `libass`.
 - `CMAKE_PREFIX_PATH` should include `/ucrt64` for the MSYS2 Qt and other packaged dependencies.
-- Configure now fails if the discovered FFmpeg core libraries are outside the pinned FFmpeg prefix or outside the supported `7.1.x` series.
+- Configure now fails if the discovered FFmpeg core libraries are outside the pinned FFmpeg prefix or if the pinned `ffmpeg` executable is outside the supported `7.1.x` series.
 
 ## Current limits
 

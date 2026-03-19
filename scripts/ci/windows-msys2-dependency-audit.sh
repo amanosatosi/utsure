@@ -18,6 +18,16 @@ export PKG_CONFIG_PATH="${ffmpeg_pcdir}:${libassmod_pcdir}${PKG_CONFIG_PATH:+:${
 
 test -f /ucrt64/lib/cmake/Qt6/Qt6Config.cmake
 
+ffmpeg_release_line="$(ffmpeg -version | head -n 1)"
+case "${ffmpeg_release_line}" in
+  "ffmpeg version 7.1."*|"ffmpeg version n7.1."*)
+    ;;
+  *)
+    echo "Expected the pinned ffmpeg executable to report a 7.1.x release, but got: ${ffmpeg_release_line}"
+    exit 1
+    ;;
+esac
+
 pkg-config --modversion libavcodec libavformat libavutil libswresample libswscale x264 x265 libass
 
 assert_pcdir_under_prefix() {

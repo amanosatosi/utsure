@@ -42,20 +42,57 @@ function(utsure_resolve_existing_path output_variable input_path)
     set(${output_variable} "${_resolved_path}" PARENT_SCOPE)
 endfunction()
 
-function(utsure_require_ffmpeg_series component_name component_version)
-    if("${component_version}" STREQUAL "")
+function(utsure_require_ffmpeg_release_series ffmpeg_root status_variable)
+    set(_ffmpeg_executable_candidates
+        "${ffmpeg_root}/bin/ffmpeg.exe"
+        "${ffmpeg_root}/bin/ffmpeg"
+    )
+    set(_ffmpeg_executable "")
+    foreach(_candidate IN LISTS _ffmpeg_executable_candidates)
+        if(EXISTS "${_candidate}")
+            set(_ffmpeg_executable "${_candidate}")
+            break()
+        endif()
+    endforeach()
+
+    if("${_ffmpeg_executable}" STREQUAL "")
         message(FATAL_ERROR
-            "FFmpeg component '${component_name}' did not report a version through pkg-config."
+            "FFmpeg was expected under '${ffmpeg_root}', but no ffmpeg executable was found in its bin directory."
         )
     endif()
 
-    if(NOT "${component_version}" VERSION_GREATER_EQUAL "${UTSURE_FFMPEG_REQUIRED_SERIES}" OR
-       "${component_version}" VERSION_GREATER_EQUAL "${UTSURE_FFMPEG_NEXT_UNTESTED_SERIES}")
+    execute_process(
+        COMMAND "${_ffmpeg_executable}" -version
+        RESULT_VARIABLE _ffmpeg_version_result
+        OUTPUT_VARIABLE _ffmpeg_version_output
+        ERROR_VARIABLE _ffmpeg_version_error
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT _ffmpeg_version_result EQUAL 0)
         message(FATAL_ERROR
-            "FFmpeg component '${component_name}' resolved to version '${component_version}', but this project is "
+            "Failed to query the pinned FFmpeg executable at '${_ffmpeg_executable}'. "
+            "The executable returned: ${_ffmpeg_version_error}"
+        )
+    endif()
+
+    string(REGEX MATCH "ffmpeg version n?([0-9]+\\.[0-9]+(\\.[0-9]+)?)" _ffmpeg_version_line "${_ffmpeg_version_output}")
+    if(NOT CMAKE_MATCH_1)
+        message(FATAL_ERROR
+            "Could not parse an FFmpeg release version from '${_ffmpeg_executable} -version'."
+        )
+    endif()
+
+    set(_ffmpeg_release_version "${CMAKE_MATCH_1}")
+    if(NOT "${_ffmpeg_release_version}" VERSION_GREATER_EQUAL "${UTSURE_FFMPEG_REQUIRED_SERIES}" OR
+       "${_ffmpeg_release_version}" VERSION_GREATER_EQUAL "${UTSURE_FFMPEG_NEXT_UNTESTED_SERIES}")
+        message(FATAL_ERROR
+            "The pinned FFmpeg executable resolved to release '${_ffmpeg_release_version}', but this project is "
             "pinned to the FFmpeg ${UTSURE_FFMPEG_REQUIRED_SERIES}.x series."
         )
     endif()
+
+    set(${status_variable} "validated from ${ffmpeg_root} (ffmpeg ${_ffmpeg_release_version})" PARENT_SCOPE)
 endfunction()
 
 macro(utsure_configure_dependencies)
@@ -141,14 +178,8 @@ macro(utsure_configure_dependencies)
                 endif()
             endforeach()
 
-            set(_ffmpeg_status "validated from ${_ffmpeg_root}")
+            utsure_require_ffmpeg_release_series("${_ffmpeg_root}" _ffmpeg_status)
         endif()
-
-        utsure_require_ffmpeg_series("libavcodec" "${UTSURE_LIBAVCODEC_VERSION}")
-        utsure_require_ffmpeg_series("libavformat" "${UTSURE_LIBAVFORMAT_VERSION}")
-        utsure_require_ffmpeg_series("libavutil" "${UTSURE_LIBAVUTIL_VERSION}")
-        utsure_require_ffmpeg_series("libswresample" "${UTSURE_LIBSWRESAMPLE_VERSION}")
-        utsure_require_ffmpeg_series("libswscale" "${UTSURE_LIBSWSCALE_VERSION}")
 
         if(NOT TARGET utsure_ffmpeg)
             add_library(utsure_ffmpeg INTERFACE)

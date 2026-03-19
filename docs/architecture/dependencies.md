@@ -65,7 +65,7 @@ The active transcode path does not depend on `libavfilter`.
 - Clone and build `libassmod` from the upstream repository, pinned to tag `1.0`.
 - Put the FFmpeg and `libassmod` prefixes ahead of the default pkg-config search path.
 - Run configure-time dependency audit.
-- Fail configure if any required FFmpeg component resolves outside the pinned prefix or outside the `7.1.x` series.
+- Fail configure if any required FFmpeg pkg-config module resolves outside the pinned prefix or if the pinned `ffmpeg` executable reports a release outside the `7.1.x` series.
 - Build the repository targets and smoke-launch the Qt app.
 
 ## Unresolved assumptions
