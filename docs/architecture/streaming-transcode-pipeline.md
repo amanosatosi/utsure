@@ -59,7 +59,7 @@ Frame and packet lifetime is explicit:
 - The composite stage mutates the frame in place, rebases its output timestamp, and moves it into the composited-video queue.
 - The composited-video queue owns that frame until encode pops it.
 - Encode converts the RGBA frame to a temporary YUV frame, sends it to the codec, then the RGBA frame is destroyed when the local variable leaves scope.
-- The audio output stage rebases one decoded audio block onto the output audio timeline, sends it to the audio encoder, and then the normalized audio block is destroyed when the local variable leaves scope.
+- The audio output stage rebases decoded audio blocks onto the output audio timeline, buffers at most one encoder-frame worth of carry samples across segment boundaries, sends encoder-sized frames downstream, and then destroys the normalized block data after handoff.
 - The encoded-packet queue owns muxable packets until mux pops and writes them.
 
 In practice, frame memory is released at three points:
@@ -89,6 +89,7 @@ Current estimate formula:
 - Subtitle scratch: `+ rgba_frame_bytes` when subtitles are enabled
 - Encoder surfaces: `2 * yuv420_frame_bytes`
 - Audio queue: `decoded_audio_block_queue * audio_block_bytes`
+- Audio encoder carry buffer: `+ 1 * audio_block_bytes`
 - Packet reserve: `(video_packets + audio_packets + encoded_packets) * 512 KiB`
 
 That keeps peak memory roughly proportional to resolution and queue depth, not clip length.
