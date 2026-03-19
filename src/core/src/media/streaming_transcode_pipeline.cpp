@@ -1794,6 +1794,8 @@ SegmentProcessResult process_segment(
             timeline_plan.output_audio_stream->timestamps.time_base
         );
 
+        // Keep reporting audio timing expectations for summaries, but do not fail the active video-only
+        // transcode path when a real-world segment's decoded audio duration drifts from its video duration.
         if (!segment_plan.inspected_source_info.primary_audio_stream.has_value()) {
             result.segment_summary.inserted_silence = expected_segment_samples > 0;
             result.segment_summary.audio_block_count = count_silence_audio_blocks(
@@ -1801,11 +1803,6 @@ SegmentProcessResult process_segment(
                 normalization_policy
             );
             result.decoded_audio_block_count = result.segment_summary.audio_block_count;
-        } else if (actual_segment_audio_samples != expected_segment_samples) {
-            throw std::runtime_error(
-                "The decoded " + std::string(timeline::to_string(segment_plan.kind)) +
-                " segment audio duration does not match its video duration at the main cadence."
-            );
         }
     }
 

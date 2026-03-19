@@ -149,6 +149,7 @@ That preserves the existing behavior needed for validation and reporting:
 - Segment audio compatibility is still checked
 - Audio block counts are still reported
 - Silence insertion accounting for clips without audio still matches the existing timeline summary
+- Audio and video duration drift no longer aborts the active encode path because the current muxed output is still video-only
 
 Decoded audio blocks are not retained after validation/counting.
 
