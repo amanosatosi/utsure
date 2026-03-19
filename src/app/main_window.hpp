@@ -27,6 +27,10 @@ public:
 private:
     [[nodiscard]] std::optional<utsure::core::job::EncodeJob> build_job(QString &error_message) const;
     [[nodiscard]] utsure::core::media::OutputVideoCodec current_output_codec() const;
+    [[nodiscard]] utsure::core::media::AudioOutputMode current_audio_mode() const;
+    [[nodiscard]] utsure::core::media::OutputAudioCodec current_output_audio_codec() const;
+    [[nodiscard]] std::optional<int> current_audio_sample_rate_override() const;
+    [[nodiscard]] std::optional<int> current_audio_channel_override() const;
 
     void choose_source_video();
     void choose_subtitle_file();
@@ -43,12 +47,14 @@ private:
     void set_preview_text(const QString &text, bool is_error);
     void set_status_text(const QString &text, bool is_error);
     void maybe_seed_output_path();
+    void update_audio_control_states();
 
     static std::filesystem::path qstring_to_path(const QString &text);
     static QString path_to_qstring(const std::filesystem::path &path);
 
     QGroupBox *inputs_group_{nullptr};
     QGroupBox *output_group_{nullptr};
+    QGroupBox *audio_group_{nullptr};
     QLabel *status_label_{nullptr};
     QLabel *preview_label_{nullptr};
     QProgressBar *progress_bar_{nullptr};
@@ -60,6 +66,11 @@ private:
     QComboBox *preset_combo_{nullptr};
     QSpinBox *crf_spin_box_{nullptr};
     QLineEdit *output_path_edit_{nullptr};
+    QComboBox *audio_mode_combo_{nullptr};
+    QComboBox *audio_codec_combo_{nullptr};
+    QSpinBox *audio_bitrate_spin_box_{nullptr};
+    QComboBox *audio_sample_rate_combo_{nullptr};
+    QComboBox *audio_channels_combo_{nullptr};
     QPushButton *start_button_{nullptr};
     QPlainTextEdit *log_view_{nullptr};
     EncodeJobRunnerController *runner_controller_{nullptr};

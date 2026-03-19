@@ -91,6 +91,12 @@ For each decoded audio frame:
 5. `StreamingOutputSession::build_encoded_audio_frame(...)` allocates an encoder input frame, copies planar floats into FFmpeg-owned buffers, sends it to the encoder, and releases it after the send/drain step.
 6. Encoded audio packets are muxed immediately and unreffed immediately.
 
+For stream-copy audio:
+
+1. The source `AVPacket` is cloned only long enough to retime it onto the output stream.
+2. `copy_audio_packet(...)` subtracts the source stream start PTS, rescales timestamps into the muxer stream time base, writes the packet, and unreferences it immediately.
+3. No audio decoder, resampler, or encoded-audio carry buffer is created for that path.
+
 ### Subtitle Tiles
 
 Subtitle tiles are owned only for one frame render/composite pass:
@@ -103,10 +109,14 @@ Subtitle tiles are owned only for one frame render/composite pass:
 
 ## Audio Rules
 
-The active streaming path emits muxed audio when `TimelinePlan.output_audio_stream` is present.
+The active streaming path resolves one `ResolvedAudioOutputPlan` before the muxer is created and uses that plan for preflight, GUI preview text, stream setup, and runtime flow control.
 
 Rules:
 
+- `Disable` omits the output audio stream entirely.
+- `Copy` is currently allowed only for single-segment jobs where the output container is a safe fit for the source codec and the user did not request sample-rate or channel-layout changes.
+- `Auto` uses stream copy only when that copy path is clearly safe; otherwise it falls back to AAC encode.
+- AAC encode always rebases audio onto a sample-based output timeline (`1 / sample_rate`) instead of inheriting an arbitrary source stream time base.
 - If a segment has no audio stream but the output timeline does, bounded silence blocks are synthesized for that segment.
 - If decoded segment audio exceeds the video-defined segment duration, the final drain trims the overflow instead of extending the output timeline.
 - If decoded segment audio falls short of the expected segment duration, the pipeline pads the tail with silence.

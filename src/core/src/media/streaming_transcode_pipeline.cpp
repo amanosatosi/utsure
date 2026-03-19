@@ -69,6 +69,18 @@ struct PacketDeleter final {
 
 using PacketHandle = std::unique_ptr<AVPacket, PacketDeleter>;
 
+struct CodecParametersDeleter final {
+    void operator()(AVCodecParameters *parameters) const noexcept {
+        if (parameters == nullptr) {
+            return;
+        }
+
+        avcodec_parameters_free(&parameters);
+    }
+};
+
+using CodecParametersHandle = std::unique_ptr<AVCodecParameters, CodecParametersDeleter>;
+
 struct OutputFormatContextDeleter final {
     void operator()(AVFormatContext *format_context) const noexcept {
         if (format_context == nullptr) {
@@ -183,10 +195,26 @@ struct VideoOutputPlan final {
 };
 
 struct AudioOutputPlan final {
+    ResolvedAudioOutputPlan resolved{};
     int sample_rate{0};
     int channel_count{0};
     Rational time_base{};
     std::string channel_layout_name{"unknown"};
+    int bitrate_kbps{0};
+
+    [[nodiscard]] bool encodes_audio() const noexcept {
+        return resolved.resolved_mode == ResolvedAudioOutputMode::encode_aac;
+    }
+
+    [[nodiscard]] bool copies_audio() const noexcept {
+        return resolved.resolved_mode == ResolvedAudioOutputMode::copy_source;
+    }
+};
+
+struct AudioCopyTemplate final {
+    CodecParametersHandle codec_parameters{};
+    Rational time_base{};
+    std::int64_t start_pts{0};
 };
 
 struct SegmentDecoderResources final {
@@ -567,7 +595,27 @@ CodecContextHandle open_decoder_context(AVStream &stream) {
     return codec_context;
 }
 
-SegmentDecoderResources open_segment_resources(const timeline::TimelineSegmentPlan &segment_plan) {
+CodecParametersHandle clone_codec_parameters(const AVCodecParameters &source_parameters) {
+    CodecParametersHandle cloned_parameters(avcodec_parameters_alloc());
+    if (!cloned_parameters) {
+        throw std::runtime_error("Failed to allocate cloned FFmpeg codec parameters.");
+    }
+
+    const auto copy_result = avcodec_parameters_copy(cloned_parameters.get(), &source_parameters);
+    if (copy_result < 0) {
+        throw std::runtime_error(
+            "Failed to clone FFmpeg codec parameters for streaming stream copy. FFmpeg reported: " +
+            ffmpeg_support::ffmpeg_error_to_string(copy_result)
+        );
+    }
+
+    return cloned_parameters;
+}
+
+SegmentDecoderResources open_segment_resources(
+    const timeline::TimelineSegmentPlan &segment_plan,
+    const bool decode_audio
+) {
     const auto input_path_string = segment_plan.source_path.lexically_normal().string();
     auto format_context = open_format_context(input_path_string);
 
@@ -594,7 +642,9 @@ SegmentDecoderResources open_segment_resources(const timeline::TimelineSegmentPl
         }
 
         audio_stream = format_context->streams[audio_stream_info.stream_index];
-        audio_decoder = open_decoder_context(*audio_stream);
+        if (decode_audio) {
+            audio_decoder = open_decoder_context(*audio_stream);
+        }
     }
 
     return SegmentDecoderResources{
@@ -603,6 +653,38 @@ SegmentDecoderResources open_segment_resources(const timeline::TimelineSegmentPl
         .video_stream = video_stream,
         .audio_decoder = std::move(audio_decoder),
         .audio_stream = audio_stream
+    };
+}
+
+std::optional<AudioCopyTemplate> build_audio_copy_template(const timeline::TimelineSegmentPlan &segment_plan) {
+    if (!segment_plan.inspected_source_info.primary_audio_stream.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto input_path_string = segment_plan.source_path.lexically_normal().string();
+    auto format_context = open_format_context(input_path_string);
+    const auto &audio_stream_info = *segment_plan.inspected_source_info.primary_audio_stream;
+    if (audio_stream_info.stream_index < 0 ||
+        audio_stream_info.stream_index >= static_cast<int>(format_context->nb_streams)) {
+        throw std::runtime_error(
+            "The selected audio stream index is not present in '" + input_path_string + "'."
+        );
+    }
+
+    auto *audio_stream = format_context->streams[audio_stream_info.stream_index];
+    if (audio_stream == nullptr || audio_stream->codecpar == nullptr) {
+        throw std::runtime_error("The streaming audio copy path requires source codec parameters.");
+    }
+
+    const std::int64_t start_pts =
+        audio_stream->start_time != AV_NOPTS_VALUE
+            ? audio_stream->start_time
+            : audio_stream_info.timestamps.start_pts.value_or(0);
+
+    return AudioCopyTemplate{
+        .codec_parameters = clone_codec_parameters(*audio_stream->codecpar),
+        .time_base = ffmpeg_support::to_rational(audio_stream->time_base),
+        .start_pts = start_pts
     };
 }
 
@@ -799,39 +881,26 @@ void append_channel_samples(
 }
 
 DecodedAudioSamples build_audio_block(
-    const AudioStreamInfo &audio_stream_info,
+    const AudioOutputPlan &audio_output_plan,
     const std::int64_t block_index,
-    const std::int64_t first_output_source_pts,
     const std::int64_t samples_written_before_block,
     const int block_sample_count,
     const std::vector<std::vector<float>> &block_channels
 ) {
-    const AVRational sample_time_base{
-        .num = 1,
-        .den = audio_stream_info.sample_rate
-    };
-    const auto stream_time_base = to_av_rational(audio_stream_info.timestamps.time_base);
-    const auto block_source_pts = first_output_source_pts +
-        av_rescale_q(samples_written_before_block, sample_time_base, stream_time_base);
-    const auto block_source_duration = av_rescale_q(block_sample_count, sample_time_base, stream_time_base);
-
     return DecodedAudioSamples{
-        .stream_index = audio_stream_info.stream_index,
+        .stream_index = -1,
         .block_index = block_index,
         .timestamp = MediaTimestamp{
-            .source_time_base = audio_stream_info.timestamps.time_base,
-            .source_pts = block_source_pts,
-            .source_duration = block_source_duration,
+            .source_time_base = audio_output_plan.time_base,
+            .source_pts = samples_written_before_block,
+            .source_duration = block_sample_count,
             .origin = TimestampOrigin::stream_cursor,
-            .start_microseconds = rescale_to_microseconds(block_source_pts, audio_stream_info.timestamps.time_base),
-            .duration_microseconds = rescale_to_microseconds(
-                block_source_duration,
-                audio_stream_info.timestamps.time_base
-            )
+            .start_microseconds = rescale_to_microseconds(samples_written_before_block, audio_output_plan.time_base),
+            .duration_microseconds = rescale_to_microseconds(block_sample_count, audio_output_plan.time_base)
         },
-        .sample_rate = audio_stream_info.sample_rate,
-        .channel_count = audio_stream_info.channel_count,
-        .channel_layout_name = audio_stream_info.channel_layout_name,
+        .sample_rate = audio_output_plan.sample_rate,
+        .channel_count = audio_output_plan.channel_count,
+        .channel_layout_name = audio_output_plan.channel_layout_name,
         .sample_format = NormalizedAudioSampleFormat::f32_planar,
         .samples_per_channel = block_sample_count,
         .channel_samples = block_channels
@@ -1133,6 +1202,26 @@ bool audio_encoder_supports_short_frame_samples(const AVCodecContext &codec_cont
         (codec_context.codec->capabilities & AV_CODEC_CAP_SMALL_LAST_FRAME) != 0;
 }
 
+void configure_audio_copy_stream(
+    AVStream &audio_stream,
+    const AudioCopyTemplate &copy_template
+) {
+    if (!copy_template.codec_parameters) {
+        throw std::runtime_error("The streaming audio copy path requires source codec parameters.");
+    }
+
+    const auto parameters_result = avcodec_parameters_copy(audio_stream.codecpar, copy_template.codec_parameters.get());
+    if (parameters_result < 0) {
+        throw std::runtime_error(
+            "Failed to copy source audio stream parameters for stream copy. FFmpeg reported: " +
+            ffmpeg_support::ffmpeg_error_to_string(parameters_result)
+        );
+    }
+
+    audio_stream.codecpar->codec_tag = 0;
+    audio_stream.time_base = to_av_rational(copy_template.time_base);
+}
+
 CodecContextHandle create_audio_encoder_context(
     AVFormatContext &output_context,
     AVStream &audio_stream,
@@ -1178,7 +1267,7 @@ CodecContextHandle create_audio_encoder_context(
     codec_context->sample_fmt = sample_format;
     codec_context->sample_rate = plan.sample_rate;
     codec_context->time_base = to_av_rational(plan.time_base);
-    codec_context->bit_rate = 128000;
+    codec_context->bit_rate = static_cast<std::int64_t>(plan.bitrate_kbps) * 1000LL;
     const auto channel_layout_copy_result =
         av_channel_layout_copy(&codec_context->ch_layout, &requested_channel_layout);
     av_channel_layout_uninit(&requested_channel_layout);
@@ -1218,11 +1307,15 @@ public:
     StreamingOutputSession(
         const MediaEncodeRequest &request,
         const VideoOutputPlan &video_plan,
-        const std::optional<AudioOutputPlan> &audio_plan
+        const ResolvedAudioOutputPlan &resolved_audio_output,
+        const std::optional<AudioOutputPlan> &audio_plan,
+        std::optional<AudioCopyTemplate> audio_copy_template
     )
         : request_(request),
           video_plan_(video_plan),
-          audio_plan_(audio_plan) {
+          resolved_audio_output_(resolved_audio_output),
+          audio_plan_(audio_plan),
+          audio_copy_template_(std::move(audio_copy_template)) {
         const auto output_path = request.output_path.lexically_normal();
         const auto output_path_string = output_path.string();
         if (output_path_string.empty()) {
@@ -1249,7 +1342,15 @@ public:
             }
 
             audio_stream_ = raw_audio_stream;
-            audio_codec_context_ = create_audio_encoder_context(*output_context_, *audio_stream_, *audio_plan_);
+            if (audio_plan_->encodes_audio()) {
+                audio_codec_context_ = create_audio_encoder_context(*output_context_, *audio_stream_, *audio_plan_);
+            } else if (audio_plan_->copies_audio()) {
+                if (!audio_copy_template_.has_value()) {
+                    throw std::runtime_error("The streaming audio copy path is missing its source stream template.");
+                }
+
+                configure_audio_copy_stream(*audio_stream_, *audio_copy_template_);
+            }
         }
 
         open_output_file(*output_context_, output_path);
@@ -1269,7 +1370,7 @@ public:
     }
 
     [[nodiscard]] bool audio_enabled() const noexcept {
-        return audio_codec_context_ != nullptr;
+        return audio_stream_ != nullptr;
     }
 
     void push_frame(const DecodedVideoFrame &decoded_frame) {
@@ -1287,13 +1388,53 @@ public:
     }
 
     void push_audio_block(const DecodedAudioSamples &audio_block) {
-        if (!audio_codec_context_ || !audio_plan_.has_value() || audio_stream_ == nullptr) {
+        if (!audio_codec_context_ || !audio_plan_.has_value() || !audio_plan_->encodes_audio() || audio_stream_ == nullptr) {
             throw std::runtime_error("The streaming output session was asked to encode audio without an audio stream.");
         }
 
         validate_audio_block_for_output(audio_block);
         append_pending_audio_block(audio_block);
         drain_ready_audio_blocks_into_encoder(false);
+    }
+
+    void copy_audio_packet(const AVPacket &source_packet) {
+        if (!audio_plan_.has_value() || !audio_plan_->copies_audio() || audio_stream_ == nullptr ||
+            !audio_copy_template_.has_value()) {
+            throw std::runtime_error("The streaming output session was asked to copy audio without a copy stream.");
+        }
+
+        auto packet = allocate_packet();
+        const auto ref_result = av_packet_ref(packet.get(), &source_packet);
+        if (ref_result < 0) {
+            throw std::runtime_error(
+                "Failed to clone a source audio packet for stream copy. FFmpeg reported: " +
+                ffmpeg_support::ffmpeg_error_to_string(ref_result)
+            );
+        }
+
+        if (packet->pts != AV_NOPTS_VALUE) {
+            packet->pts -= audio_copy_template_->start_pts;
+        }
+        if (packet->dts != AV_NOPTS_VALUE) {
+            packet->dts -= audio_copy_template_->start_pts;
+        }
+
+        av_packet_rescale_ts(
+            packet.get(),
+            to_av_rational(audio_copy_template_->time_base),
+            audio_stream_->time_base
+        );
+        packet->stream_index = audio_stream_->index;
+        packet->pos = -1;
+
+        const auto write_result = av_interleaved_write_frame(output_context_.get(), packet.get());
+        av_packet_unref(packet.get());
+        if (write_result < 0) {
+            throw std::runtime_error(
+                "Failed to mux a copied audio packet. FFmpeg reported: " +
+                ffmpeg_support::ffmpeg_error_to_string(write_result)
+            );
+        }
     }
 
     EncodedMediaSummary finish() {
@@ -1346,6 +1487,7 @@ public:
         return EncodedMediaSummary{
             .output_path = request_.output_path.lexically_normal(),
             .video_settings = request_.video_settings,
+            .resolved_audio_output = resolved_audio_output_,
             .output_info = *inspection_result.media_source_info,
             .encoded_video_frame_count = encoded_video_frame_count_
         };
@@ -1719,7 +1861,9 @@ private:
 
     MediaEncodeRequest request_{};
     VideoOutputPlan video_plan_{};
+    ResolvedAudioOutputPlan resolved_audio_output_{};
     std::optional<AudioOutputPlan> audio_plan_{};
+    std::optional<AudioCopyTemplate> audio_copy_template_{};
     OutputFormatContextHandle output_context_{};
     CodecContextHandle video_codec_context_{};
     CodecContextHandle audio_codec_context_{};
@@ -1769,21 +1913,20 @@ VideoOutputPlan build_video_output_plan(const timeline::TimelinePlan &timeline_p
     };
 }
 
-std::optional<AudioOutputPlan> build_audio_output_plan(const timeline::TimelinePlan &timeline_plan) {
-    if (!timeline_plan.output_audio_stream.has_value()) {
+std::optional<AudioOutputPlan> build_audio_output_plan(const ResolvedAudioOutputPlan &resolved_audio_output) {
+    if (!resolved_audio_output.output_present) {
         return std::nullopt;
     }
 
-    const auto &output_audio_stream = *timeline_plan.output_audio_stream;
-    if (output_audio_stream.sample_rate <= 0 || output_audio_stream.channel_count <= 0) {
+    if (resolved_audio_output.sample_rate_hz <= 0 || resolved_audio_output.channel_count <= 0) {
         throw std::runtime_error("The streaming pipeline requires a usable output audio sample rate and channel count.");
     }
 
-    Rational time_base = output_audio_stream.timestamps.time_base;
+    Rational time_base = resolved_audio_output.time_base;
     if (!rational_is_positive(time_base)) {
         time_base = Rational{
             .numerator = 1,
-            .denominator = output_audio_stream.sample_rate
+            .denominator = resolved_audio_output.sample_rate_hz
         };
     }
 
@@ -1792,15 +1935,17 @@ std::optional<AudioOutputPlan> build_audio_output_plan(const timeline::TimelineP
     }
 
     return AudioOutputPlan{
-        .sample_rate = output_audio_stream.sample_rate,
-        .channel_count = output_audio_stream.channel_count,
+        .resolved = resolved_audio_output,
+        .sample_rate = resolved_audio_output.sample_rate_hz,
+        .channel_count = resolved_audio_output.channel_count,
         .time_base = time_base,
-        .channel_layout_name = output_audio_stream.channel_layout_name
+        .channel_layout_name = resolved_audio_output.channel_layout_name,
+        .bitrate_kbps = resolved_audio_output.bitrate_kbps
     };
 }
 
 DecodedAudioSamples make_output_audio_block(
-    const AudioStreamInfo &output_audio_stream,
+    const AudioOutputPlan &output_audio_plan,
     const DecodeNormalizationPolicy &normalization_policy,
     const std::int64_t block_index,
     const std::int64_t output_pts,
@@ -1811,7 +1956,7 @@ DecodedAudioSamples make_output_audio_block(
     std::vector<std::vector<float>> output_channels{};
     if (silent) {
         output_channels.resize(
-            static_cast<std::size_t>(output_audio_stream.channel_count),
+            static_cast<std::size_t>(output_audio_plan.channel_count),
             std::vector<float>(static_cast<std::size_t>(samples_per_channel), 0.0F)
         );
     } else {
@@ -1819,22 +1964,22 @@ DecodedAudioSamples make_output_audio_block(
     }
 
     return DecodedAudioSamples{
-        .stream_index = output_audio_stream.stream_index,
+        .stream_index = -1,
         .block_index = block_index,
         .timestamp = MediaTimestamp{
-            .source_time_base = output_audio_stream.timestamps.time_base,
+            .source_time_base = output_audio_plan.time_base,
             .source_pts = output_pts,
             .source_duration = samples_per_channel,
             .origin = TimestampOrigin::stream_cursor,
-            .start_microseconds = rescale_to_microseconds(output_pts, output_audio_stream.timestamps.time_base),
+            .start_microseconds = rescale_to_microseconds(output_pts, output_audio_plan.time_base),
             .duration_microseconds = rescale_to_microseconds(
                 samples_per_channel,
-                output_audio_stream.timestamps.time_base
+                output_audio_plan.time_base
             )
         },
-        .sample_rate = output_audio_stream.sample_rate,
-        .channel_count = output_audio_stream.channel_count,
-        .channel_layout_name = output_audio_stream.channel_layout_name,
+        .sample_rate = output_audio_plan.sample_rate,
+        .channel_count = output_audio_plan.channel_count,
+        .channel_layout_name = output_audio_plan.channel_layout_name,
         .sample_format = normalization_policy.audio_sample_format,
         .samples_per_channel = samples_per_channel,
         .channel_samples = std::move(output_channels)
@@ -1931,6 +2076,7 @@ SegmentProcessResult process_segment(
     const VideoOutputPlan &video_output_plan,
     const DecodeNormalizationPolicy &normalization_policy,
     const PipelineQueueLimits &queue_limits,
+    const std::optional<AudioOutputPlan> &audio_output_plan,
     StreamingOutputSession &output_session,
     std::int64_t &next_output_frame_index,
     std::int64_t &next_output_video_pts,
@@ -1949,7 +2095,13 @@ SegmentProcessResult process_segment(
         }
     };
 
-    SegmentDecoderResources resources = open_segment_resources(segment_plan);
+    const AudioOutputPlan *resolved_audio_plan = audio_output_plan.has_value()
+        ? &*audio_output_plan
+        : nullptr;
+    const bool encode_audio = resolved_audio_plan != nullptr && resolved_audio_plan->encodes_audio();
+    const bool copy_audio = resolved_audio_plan != nullptr && resolved_audio_plan->copies_audio();
+
+    SegmentDecoderResources resources = open_segment_resources(segment_plan, encode_audio);
     PacketHandle demux_packet = allocate_packet();
     FrameHandle decoded_video_frame = allocate_frame();
     FrameHandle decoded_audio_frame = allocate_frame();
@@ -1967,17 +2119,12 @@ SegmentProcessResult process_segment(
 
     SwrContextHandle audio_resample_context{};
     std::vector<std::vector<float>> pending_audio_channels{};
-    std::int64_t first_output_source_pts =
-        segment_plan.inspected_source_info.primary_audio_stream.has_value()
-            ? segment_plan.inspected_source_info.primary_audio_stream->timestamps.start_pts.value_or(0)
-            : 0;
-    bool first_output_source_pts_initialized = false;
-    std::int64_t emitted_audio_samples = 0;
+    std::int64_t normalized_audio_samples = 0;
     std::int64_t decoded_segment_audio_samples = 0;
     std::int64_t emitted_segment_audio_samples = 0;
     std::optional<std::int64_t> previous_video_pts_in_output_time_base{};
 
-    if (resources.audio_decoder) {
+    if (encode_audio && resources.audio_decoder) {
         if (normalization_policy.audio_sample_format != NormalizedAudioSampleFormat::f32_planar) {
             throw std::runtime_error("Only f32_planar audio normalization is implemented in the streaming pipeline.");
         }
@@ -1986,19 +2133,20 @@ SegmentProcessResult process_segment(
             throw std::runtime_error("The audio normalization policy must use a positive block size.");
         }
 
-        const auto &audio_stream_info = *segment_plan.inspected_source_info.primary_audio_stream;
+        AVChannelLayout output_channel_layout = make_default_audio_channel_layout(resolved_audio_plan->channel_count);
         SwrContext *raw_resample_context = nullptr;
         const auto resample_setup_result = swr_alloc_set_opts2(
             &raw_resample_context,
-            &resources.audio_decoder->ch_layout,
+            &output_channel_layout,
             AV_SAMPLE_FMT_FLTP,
-            audio_stream_info.sample_rate,
+            resolved_audio_plan->sample_rate,
             &resources.audio_decoder->ch_layout,
             resources.audio_decoder->sample_fmt,
-            audio_stream_info.sample_rate,
+            resources.audio_decoder->sample_rate,
             0,
             nullptr
         );
+        av_channel_layout_uninit(&output_channel_layout);
         if (resample_setup_result < 0 || raw_resample_context == nullptr) {
             throw std::runtime_error(
                 "Failed to configure the streaming audio normalization context. FFmpeg reported: " +
@@ -2026,7 +2174,7 @@ SegmentProcessResult process_segment(
     std::optional<std::int64_t> last_written_video_pts{};
     std::optional<std::int64_t> last_written_audio_pts{};
 
-    if (queue_limits.startup_audio_preroll_microseconds < 0) {
+    if (encode_audio && queue_limits.startup_audio_preroll_microseconds < 0) {
         throw std::runtime_error("The streaming audio startup preroll must not be negative.");
     }
 
@@ -2034,19 +2182,19 @@ SegmentProcessResult process_segment(
         *timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info.primary_video_stream;
 
     const auto expected_segment_audio_samples_for_emitted_video = [&]() -> std::int64_t {
-        if (!timeline_plan.output_audio_stream.has_value()) {
+        if (!encode_audio || resolved_audio_plan == nullptr) {
             return 0;
         }
 
         return rescale_value(
             result.segment_summary.video_frame_count * video_output_plan.frame_duration_pts,
             timeline_plan.output_video_time_base,
-            timeline_plan.output_audio_stream->timestamps.time_base
+            resolved_audio_plan->time_base
         );
     };
 
     const auto update_known_video_timeline = [&](const AVPacket &video_packet) {
-        if (!timeline_plan.output_audio_stream.has_value()) {
+        if (!encode_audio || resolved_audio_plan == nullptr) {
             return;
         }
 
@@ -2084,13 +2232,13 @@ SegmentProcessResult process_segment(
     };
 
     const auto audio_samples_to_microseconds = [&](const std::int64_t samples) -> std::int64_t {
-        if (!timeline_plan.output_audio_stream.has_value() || samples <= 0) {
+        if (!encode_audio || resolved_audio_plan == nullptr || samples <= 0) {
             return 0;
         }
 
         return rescale_value(
             samples,
-            timeline_plan.output_audio_stream->timestamps.time_base,
+            resolved_audio_plan->time_base,
             Rational{1, AV_TIME_BASE}
         );
     };
@@ -2135,7 +2283,7 @@ SegmentProcessResult process_segment(
     };
 
     const auto audio_decode_should_wait = [&]() -> bool {
-        if (!timeline_plan.output_audio_stream.has_value()) {
+        if (!encode_audio) {
             return false;
         }
 
@@ -2152,16 +2300,15 @@ SegmentProcessResult process_segment(
         const int samples_to_emit,
         const bool silent
     ) {
-        if (!timeline_plan.output_audio_stream.has_value() || samples_to_emit <= 0) {
+        if (!encode_audio || resolved_audio_plan == nullptr || samples_to_emit <= 0) {
             return;
         }
 
-        const auto &output_audio_stream = *timeline_plan.output_audio_stream;
         const auto output_channels = silent
             ? std::vector<std::vector<float>>{}
             : copy_audio_block_prefix(source_block.channel_samples, samples_to_emit);
         auto output_block = make_output_audio_block(
-            output_audio_stream,
+            *resolved_audio_plan,
             normalization_policy,
             result.segment_summary.audio_block_count,
             next_output_audio_pts,
@@ -2202,10 +2349,10 @@ SegmentProcessResult process_segment(
     const auto drain_audio_queue = [&](const bool final_drain) {
         while (!decoded_audio_queue.empty()) {
             const auto &ready_block = decoded_audio_queue.front();
-            const auto &output_audio_stream = *timeline_plan.output_audio_stream;
             if (ready_block.sample_format != normalization_policy.audio_sample_format ||
-                ready_block.sample_rate != output_audio_stream.sample_rate ||
-                ready_block.channel_count != output_audio_stream.channel_count) {
+                resolved_audio_plan == nullptr ||
+                ready_block.sample_rate != resolved_audio_plan->sample_rate ||
+                ready_block.channel_count != resolved_audio_plan->channel_count) {
                 throw std::runtime_error(
                     "The decoded " + std::string(timeline::to_string(segment_plan.kind)) +
                     " segment audio block shape does not match the main segment."
@@ -2292,7 +2439,7 @@ SegmentProcessResult process_segment(
         ++next_output_frame_index;
         next_output_video_pts += video_output_plan.frame_duration_pts;
 
-        if (timeline_plan.output_audio_stream.has_value()) {
+        if (encode_audio) {
             drain_audio_queue(false);
         }
     };
@@ -2312,7 +2459,7 @@ SegmentProcessResult process_segment(
     };
 
     const auto emit_ready_audio_blocks = [&]() {
-        if (pending_audio_channels.empty()) {
+        if (!encode_audio || resolved_audio_plan == nullptr || pending_audio_channels.empty()) {
             return;
         }
 
@@ -2338,10 +2485,9 @@ SegmentProcessResult process_segment(
 
             if (!enqueue_audio_block(
                     build_audio_block(
-                        *segment_plan.inspected_source_info.primary_audio_stream,
+                        *resolved_audio_plan,
                         result.segment_summary.audio_block_count + static_cast<std::int64_t>(decoded_audio_queue.size()),
-                        first_output_source_pts,
-                        emitted_audio_samples,
+                        normalized_audio_samples,
                         normalization_policy.audio_block_samples,
                         block_channels
                     ),
@@ -2351,7 +2497,7 @@ SegmentProcessResult process_segment(
                 );
             }
 
-            emitted_audio_samples += normalization_policy.audio_block_samples;
+            normalized_audio_samples += normalization_policy.audio_block_samples;
         }
     };
 
@@ -2393,7 +2539,7 @@ SegmentProcessResult process_segment(
     };
 
     const auto receive_audio_frames = [&]() {
-        if (!resources.audio_decoder) {
+        if (!encode_audio || !resources.audio_decoder) {
             return;
         }
 
@@ -2410,18 +2556,12 @@ SegmentProcessResult process_segment(
                 );
             }
 
-            if (!first_output_source_pts_initialized) {
-                const auto timestamp_seed = choose_timestamp_seed(*decoded_audio_frame, first_output_source_pts);
-                first_output_source_pts = timestamp_seed.source_pts;
-                first_output_source_pts_initialized = true;
-            }
-
             append_channel_samples(
                 pending_audio_channels,
                 resample_audio_frame(
                     *audio_resample_context,
                     decoded_audio_frame.get(),
-                    segment_plan.inspected_source_info.primary_audio_stream->channel_count
+                    resolved_audio_plan->channel_count
                 )
             );
             emit_ready_audio_blocks();
@@ -2435,6 +2575,10 @@ SegmentProcessResult process_segment(
     };
 
     const auto flush_pending_audio_packets = [&]() {
+        if (!encode_audio || !resources.audio_decoder) {
+            return;
+        }
+
         while (true) {
             receive_audio_frames();
             drain_audio_queue(false);
@@ -2458,17 +2602,22 @@ SegmentProcessResult process_segment(
             update_known_video_timeline(*demux_packet);
             send_packet_or_throw(*resources.video_decoder, demux_packet.get());
             receive_video_frames();
-        } else if (resources.audio_decoder &&
+        } else if (resources.audio_stream &&
+                   segment_plan.inspected_source_info.primary_audio_stream.has_value() &&
                    demux_packet->stream_index == segment_plan.inspected_source_info.primary_audio_stream->stream_index) {
-            auto queued_packet = allocate_packet();
-            av_packet_move_ref(queued_packet.get(), demux_packet.get());
-            pending_audio_packet_queue.push_back(std::move(queued_packet));
-            flush_pending_audio_packets();
+            if (copy_audio) {
+                output_session.copy_audio_packet(*demux_packet);
+            } else if (encode_audio) {
+                auto queued_packet = allocate_packet();
+                av_packet_move_ref(queued_packet.get(), demux_packet.get());
+                pending_audio_packet_queue.push_back(std::move(queued_packet));
+                flush_pending_audio_packets();
+            }
         }
 
         av_packet_unref(demux_packet.get());
 
-        if (timeline_plan.output_audio_stream.has_value()) {
+        if (encode_audio) {
             drain_audio_queue(false);
             flush_pending_audio_packets();
         }
@@ -2477,7 +2626,7 @@ SegmentProcessResult process_segment(
     send_packet_or_throw(*resources.video_decoder, nullptr);
     receive_video_frames();
 
-    if (resources.audio_decoder) {
+    if (encode_audio && resources.audio_decoder) {
         flush_pending_audio_packets();
         send_packet_or_throw(*resources.audio_decoder, nullptr);
         receive_audio_frames();
@@ -2486,7 +2635,7 @@ SegmentProcessResult process_segment(
             const auto flushed_channels = resample_audio_frame(
                 *audio_resample_context,
                 nullptr,
-                segment_plan.inspected_source_info.primary_audio_stream->channel_count
+                resolved_audio_plan->channel_count
             );
             if (flushed_channels.empty() || flushed_channels.front().empty()) {
                 break;
@@ -2500,10 +2649,9 @@ SegmentProcessResult process_segment(
             const int tail_sample_count = static_cast<int>(pending_audio_channels.front().size());
             if (!enqueue_audio_block(
                     build_audio_block(
-                        *segment_plan.inspected_source_info.primary_audio_stream,
+                        *resolved_audio_plan,
                         result.segment_summary.audio_block_count + static_cast<std::int64_t>(decoded_audio_queue.size()),
-                        first_output_source_pts,
-                        emitted_audio_samples,
+                        normalized_audio_samples,
                         tail_sample_count,
                         pending_audio_channels
                     ),
@@ -2512,10 +2660,9 @@ SegmentProcessResult process_segment(
                     "The streaming audio pipeline could not enqueue the final decoded audio tail block."
                 );
             }
-        }
-    }
 
-    if (timeline_plan.output_audio_stream.has_value()) {
+            normalized_audio_samples += tail_sample_count;
+        }
         drain_audio_queue(true);
     }
 
@@ -2524,11 +2671,11 @@ SegmentProcessResult process_segment(
         timeline_plan.output_video_time_base
     );
 
-    if (timeline_plan.output_audio_stream.has_value()) {
+    if (encode_audio && resolved_audio_plan != nullptr) {
         const auto expected_segment_samples = rescale_value(
             result.segment_summary.video_frame_count * video_output_plan.frame_duration_pts,
             timeline_plan.output_video_time_base,
-            timeline_plan.output_audio_stream->timestamps.time_base
+            resolved_audio_plan->time_base
         );
 
         if (!segment_plan.inspected_source_info.primary_audio_stream.has_value()) {
@@ -2595,11 +2742,43 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
 
     try {
         const VideoOutputPlan video_output_plan = build_video_output_plan(timeline_plan);
-        const auto audio_output_plan = build_audio_output_plan(timeline_plan);
+        const auto *main_source_audio_stream =
+            timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info.primary_audio_stream.has_value()
+                ? &*timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info.primary_audio_stream
+                : nullptr;
+        const auto resolved_audio_output = resolve_audio_output_plan(AudioOutputResolveRequest{
+            .output_path = request.media_encode_request.output_path,
+            .settings = request.media_encode_request.audio_settings,
+            .segment_count = timeline_plan.segments.size(),
+            .main_source_audio_stream = main_source_audio_stream
+        });
+        if (resolved_audio_output.requested_copy_blocker.has_value()) {
+            return make_error(
+                "The selected audio mode is not compatible with the requested output.",
+                *resolved_audio_output.requested_copy_blocker + " Use Auto or AAC instead."
+            );
+        }
+
+        const auto audio_output_plan = build_audio_output_plan(resolved_audio_output);
+        std::optional<AudioCopyTemplate> audio_copy_template{};
+        if (audio_output_plan.has_value() && audio_output_plan->copies_audio()) {
+            audio_copy_template = build_audio_copy_template(
+                timeline_plan.segments[timeline_plan.main_segment_index]
+            );
+            if (!audio_copy_template.has_value()) {
+                return make_error(
+                    "The selected audio copy mode did not have a source stream to copy.",
+                    "Choose Auto, AAC, or a source with audio."
+                );
+            }
+        }
+
         StreamingOutputSession output_session(
             request.media_encode_request,
             video_output_plan,
-            audio_output_plan
+            resolved_audio_output,
+            audio_output_plan,
+            std::move(audio_copy_template)
         );
 
         std::unique_ptr<subtitles::SubtitleRenderSession> subtitle_session{};
@@ -2623,8 +2802,8 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
             .segments = {},
             .output_video_time_base = timeline_plan.output_video_time_base,
             .output_frame_rate = timeline_plan.output_frame_rate,
-            .output_audio_time_base = timeline_plan.output_audio_stream.has_value()
-                ? std::optional<Rational>(timeline_plan.output_audio_stream->timestamps.time_base)
+            .output_audio_time_base = audio_output_plan.has_value()
+                ? std::optional<Rational>(audio_output_plan->time_base)
                 : std::nullopt
         };
         timeline_summary.segments.reserve(timeline_plan.segments.size());
@@ -2647,6 +2826,7 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
                 video_output_plan,
                 request.normalization_policy,
                 request.queue_limits,
+                audio_output_plan,
                 output_session,
                 next_output_frame_index,
                 next_output_video_pts,

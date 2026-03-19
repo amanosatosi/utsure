@@ -4,6 +4,7 @@
 #include "utsure/core/media/media_inspector.hpp"
 
 #include <cstddef>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -23,6 +24,7 @@ using utsure::core::job::EncodeJobRunOptions;
 using utsure::core::job::EncodeJobStage;
 using utsure::core::job::EncodeJobSummary;
 using utsure::core::job::format_encode_job_report;
+using utsure::core::media::AudioOutputMode;
 using utsure::core::media::DecodedMediaSource;
 using utsure::core::media::MediaDecodeResult;
 using utsure::core::media::MediaDecoder;
@@ -30,6 +32,7 @@ using utsure::core::media::MediaInspectionResult;
 using utsure::core::media::MediaInspector;
 using utsure::core::media::OutputVideoCodec;
 using utsure::core::media::Rational;
+using utsure::core::media::ResolvedAudioOutputMode;
 using utsure::core::timeline::TimelineSegmentKind;
 
 int fail(std::string_view message) {
@@ -65,6 +68,24 @@ bool frames_are_identical(
 ) {
     return decoded_output.video_frames[left_index].planes.front().bytes ==
         decoded_output.video_frames[right_index].planes.front().bytes;
+}
+
+std::int64_t decoded_video_end_microseconds(const DecodedMediaSource &decoded_output) {
+    if (decoded_output.video_frames.empty()) {
+        return 0;
+    }
+
+    const auto &last_frame = decoded_output.video_frames.back();
+    return last_frame.timestamp.start_microseconds + last_frame.timestamp.duration_microseconds.value_or(0);
+}
+
+std::int64_t decoded_audio_end_microseconds(const DecodedMediaSource &decoded_output) {
+    if (decoded_output.audio_blocks.empty()) {
+        return 0;
+    }
+
+    const auto &last_block = decoded_output.audio_blocks.back();
+    return last_block.timestamp.start_microseconds + last_block.timestamp.duration_microseconds.value_or(0);
 }
 
 int assert_output_decode(
@@ -123,7 +144,9 @@ int assert_main_only_summary(
     if (summary.encoded_media_summary.output_info.primary_video_stream->codec_name != expected_codec_name ||
         output_audio.codec_name != "aac" ||
         output_audio.sample_rate != 48000 ||
-        output_audio.channel_count != 1) {
+        output_audio.channel_count != 1 ||
+        summary.encoded_media_summary.resolved_audio_output.requested_mode != AudioOutputMode::auto_select ||
+        summary.encoded_media_summary.resolved_audio_output.resolved_mode != ResolvedAudioOutputMode::encode_aac) {
         return fail("Unexpected main-only encoded output streams.");
     }
 
@@ -181,7 +204,8 @@ int assert_timeline_summary(const EncodeJobSummary &summary) {
     if (summary.subtitled_video_frame_count != 0 ||
         output_audio.codec_name != "aac" ||
         output_audio.sample_rate != 48000 ||
-        output_audio.channel_count != 1) {
+        output_audio.channel_count != 1 ||
+        summary.encoded_media_summary.resolved_audio_output.resolved_mode != ResolvedAudioOutputMode::encode_aac) {
         return fail("Unexpected intro/main/outro encode-job output state.");
     }
 
@@ -508,6 +532,140 @@ int run_streaming_memory_budget_assertion(
     return 0;
 }
 
+int run_disable_audio_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &output_path
+) {
+    CollectingObserver observer{};
+    EncodeJob job{
+        .input = {
+            .main_source_path = main_path
+        },
+        .output = {
+            .output_path = output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+    job.output.audio.mode = AudioOutputMode::disable;
+
+    const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!job_result.succeeded()) {
+        const std::string error_message =
+            "The disable-audio encode job failed unexpectedly: " +
+            job_result.error->message +
+            " Hint: " +
+            job_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const MediaDecodeResult output_decode_result = MediaDecoder::decode(output_path);
+    if (!output_decode_result.succeeded()) {
+        const std::string error_message =
+            "The disable-audio output decode failed unexpectedly: " +
+            output_decode_result.error->message +
+            " Hint: " +
+            output_decode_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    if (assert_output_decode(*output_decode_result.decoded_media_source, 48U, false) != 0) {
+        return 1;
+    }
+
+    const auto &summary = *job_result.encode_job_summary;
+    if (summary.decoded_audio_block_count != 0 ||
+        summary.timeline_summary.output_audio_block_count != 0 ||
+        summary.timeline_summary.output_audio_time_base.has_value() ||
+        summary.encoded_media_summary.output_info.primary_audio_stream.has_value() ||
+        summary.encoded_media_summary.resolved_audio_output.resolved_mode != ResolvedAudioOutputMode::disabled) {
+        return fail("Unexpected output state for the disable-audio encode job.");
+    }
+
+    std::cout << build_validation_report(
+        *job_result.encode_job_summary,
+        *output_decode_result.decoded_media_source
+    ) << '\n';
+    return 0;
+}
+
+int run_copy_audio_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &output_path
+) {
+    CollectingObserver observer{};
+    EncodeJob job{
+        .input = {
+            .main_source_path = main_path
+        },
+        .output = {
+            .output_path = output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+    job.output.audio.mode = AudioOutputMode::copy_source;
+
+    const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!job_result.succeeded()) {
+        const std::string error_message =
+            "The copy-audio encode job failed unexpectedly: " +
+            job_result.error->message +
+            " Hint: " +
+            job_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const MediaDecodeResult output_decode_result = MediaDecoder::decode(output_path);
+    if (!output_decode_result.succeeded()) {
+        const std::string error_message =
+            "The copy-audio output decode failed unexpectedly: " +
+            output_decode_result.error->message +
+            " Hint: " +
+            output_decode_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    if (assert_output_decode(*output_decode_result.decoded_media_source, 48U, true) != 0) {
+        return 1;
+    }
+
+    const auto &summary = *job_result.encode_job_summary;
+    if (!summary.encoded_media_summary.output_info.primary_audio_stream.has_value() ||
+        summary.decoded_audio_block_count != 0 ||
+        summary.timeline_summary.output_audio_block_count != 0 ||
+        summary.encoded_media_summary.resolved_audio_output.resolved_mode != ResolvedAudioOutputMode::copy_source ||
+        !summary.timeline_summary.output_audio_time_base.has_value() ||
+        format_rational(*summary.timeline_summary.output_audio_time_base) != "1/48000") {
+        return fail("Unexpected output state for the copy-audio encode job.");
+    }
+
+    const auto &output_audio = *summary.encoded_media_summary.output_info.primary_audio_stream;
+    if (output_audio.codec_name != "aac" ||
+        output_audio.sample_rate != 48000 ||
+        output_audio.channel_count != 1) {
+        return fail("Unexpected copied output audio stream.");
+    }
+
+    std::cout << build_validation_report(
+        *job_result.encode_job_summary,
+        *output_decode_result.decoded_media_source
+    ) << '\n';
+    return 0;
+}
+
 int run_coarse_timebase_ntsc_assertion(
     const std::filesystem::path &main_path,
     const std::filesystem::path &output_path
@@ -525,7 +683,7 @@ int run_coarse_timebase_ntsc_assertion(
     }
 
     CollectingObserver observer{};
-    const EncodeJob job{
+    EncodeJob job{
         .input = {
             .main_source_path = main_path
         },
@@ -538,6 +696,7 @@ int run_coarse_timebase_ntsc_assertion(
             }
         }
     };
+    job.output.audio.mode = AudioOutputMode::encode_aac;
 
     const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
         .decode_normalization_policy = {},
@@ -554,7 +713,10 @@ int run_coarse_timebase_ntsc_assertion(
 
     const auto &summary = *job_result.encode_job_summary;
     if (format_rational(summary.timeline_summary.output_frame_rate) != "24000/1001" ||
-        format_rational(summary.timeline_summary.output_video_time_base) != "1001/24000") {
+        format_rational(summary.timeline_summary.output_video_time_base) != "1001/24000" ||
+        !summary.timeline_summary.output_audio_time_base.has_value() ||
+        format_rational(*summary.timeline_summary.output_audio_time_base) != "1/48000" ||
+        summary.encoded_media_summary.resolved_audio_output.resolved_mode != ResolvedAudioOutputMode::encode_aac) {
         return fail("Unexpected coarse-timebase NTSC output cadence.");
     }
 
@@ -571,6 +733,14 @@ int run_coarse_timebase_ntsc_assertion(
     const auto structure_result = assert_output_decode(*output_decode_result.decoded_media_source, 48U, true);
     if (structure_result != 0) {
         return structure_result;
+    }
+
+    const auto av_duration_delta = std::llabs(
+        decoded_video_end_microseconds(*output_decode_result.decoded_media_source) -
+        decoded_audio_end_microseconds(*output_decode_result.decoded_media_source)
+    );
+    if (av_duration_delta > 100000) {
+        return fail("The coarse-timebase NTSC output audio/video durations drifted too far apart.");
     }
 
     const auto observer_result = assert_observer_flow(observer, 1, false);
@@ -594,6 +764,8 @@ int main(int argc, char *argv[]) {
             "[--h264|--h265] <input> <output> | "
             "[--timeline-h264] <intro> <main> <outro> <output> | "
             "[--streaming-memory-budget] <input> <output> | "
+            "[--disable-audio] <input> <output> | "
+            "[--copy-audio] <input> <output> | "
             "[--coarse-timebase-ntsc] <input> <output>"
         );
     }
@@ -629,6 +801,20 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--streaming-memory-budget" && argc == 4) {
         return run_streaming_memory_budget_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
+        );
+    }
+
+    if (mode == "--disable-audio" && argc == 4) {
+        return run_disable_audio_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
+        );
+    }
+
+    if (mode == "--copy-audio" && argc == 4) {
+        return run_copy_audio_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3])
         );

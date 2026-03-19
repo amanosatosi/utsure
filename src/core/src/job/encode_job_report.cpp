@@ -62,6 +62,19 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
     report << "job.output.video.codec=" << media::to_string(encode_job_summary.job.output.video.codec) << '\n';
     report << "job.output.video.preset=" << encode_job_summary.job.output.video.preset << '\n';
     report << "job.output.video.crf=" << encode_job_summary.job.output.video.crf << '\n';
+    report << "job.output.audio.mode=" << media::to_string(encode_job_summary.job.output.audio.mode) << '\n';
+    report << "job.output.audio.codec=" << media::to_string(encode_job_summary.job.output.audio.codec) << '\n';
+    report << "job.output.audio.bitrate_kbps=" << encode_job_summary.job.output.audio.bitrate_kbps << '\n';
+    report << "job.output.audio.sample_rate="
+           << (encode_job_summary.job.output.audio.sample_rate_hz.has_value()
+                   ? std::to_string(*encode_job_summary.job.output.audio.sample_rate_hz)
+                   : std::string("auto"))
+           << '\n';
+    report << "job.output.audio.channels="
+           << (encode_job_summary.job.output.audio.channel_count.has_value()
+                   ? std::to_string(*encode_job_summary.job.output.audio.channel_count)
+                   : std::string("auto"))
+           << '\n';
     report << "decode.policy.video_pixel_format="
            << media::to_string(encode_job_summary.decode_normalization_policy.video_pixel_format) << '\n';
     report << "decode.policy.audio_sample_format="
@@ -103,6 +116,12 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
     }
     report << "subtitles.burned_video_frames=" << encode_job_summary.subtitled_video_frame_count << '\n';
     report << "output.container=" << encode_job_summary.encoded_media_summary.output_info.container_format_name << '\n';
+    report << "output.audio.requested_mode="
+           << media::to_string(encode_job_summary.encoded_media_summary.resolved_audio_output.requested_mode) << '\n';
+    report << "output.audio.resolved_mode="
+           << media::to_string(encode_job_summary.encoded_media_summary.resolved_audio_output.resolved_mode) << '\n';
+    report << "output.audio.decision="
+           << encode_job_summary.encoded_media_summary.resolved_audio_output.decision_summary << '\n';
     report << "output.encoded_video_frames=" << encode_job_summary.encoded_media_summary.encoded_video_frame_count
            << '\n';
     report << "output.video.present="

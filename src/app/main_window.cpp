@@ -48,6 +48,30 @@ utsure::core::media::OutputVideoCodec codec_from_index(const int index) {
         : utsure::core::media::OutputVideoCodec::h264;
 }
 
+utsure::core::media::AudioOutputMode audio_mode_from_value(const int value) {
+    switch (static_cast<utsure::core::media::AudioOutputMode>(value)) {
+    case utsure::core::media::AudioOutputMode::auto_select:
+        return utsure::core::media::AudioOutputMode::auto_select;
+    case utsure::core::media::AudioOutputMode::copy_source:
+        return utsure::core::media::AudioOutputMode::copy_source;
+    case utsure::core::media::AudioOutputMode::encode_aac:
+        return utsure::core::media::AudioOutputMode::encode_aac;
+    case utsure::core::media::AudioOutputMode::disable:
+        return utsure::core::media::AudioOutputMode::disable;
+    default:
+        return utsure::core::media::AudioOutputMode::auto_select;
+    }
+}
+
+utsure::core::media::OutputAudioCodec output_audio_codec_from_value(const int value) {
+    switch (static_cast<utsure::core::media::OutputAudioCodec>(value)) {
+    case utsure::core::media::OutputAudioCodec::aac:
+        return utsure::core::media::OutputAudioCodec::aac;
+    default:
+        return utsure::core::media::OutputAudioCodec::aac;
+    }
+}
+
 QString recommended_preset(const utsure::core::media::OutputVideoCodec /*codec*/) {
     return "medium";
 }
@@ -189,6 +213,47 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(output_row.browse_button, &QPushButton::clicked, this, &MainWindow::choose_output_path);
     output_layout->addRow("Output path", output_row.container);
 
+    audio_group_ = new QGroupBox("Audio", central_widget);
+    auto *audio_layout = new QFormLayout(audio_group_);
+
+    audio_mode_combo_ = new QComboBox(audio_group_);
+    audio_mode_combo_->setObjectName("audioModeCombo");
+    audio_mode_combo_->addItem("Auto", static_cast<int>(utsure::core::media::AudioOutputMode::auto_select));
+    audio_mode_combo_->addItem("Copy source audio", static_cast<int>(utsure::core::media::AudioOutputMode::copy_source));
+    audio_mode_combo_->addItem("Encode to AAC", static_cast<int>(utsure::core::media::AudioOutputMode::encode_aac));
+    audio_mode_combo_->addItem("Disable audio", static_cast<int>(utsure::core::media::AudioOutputMode::disable));
+    audio_mode_combo_->setToolTip("Auto copies audio only when the container and source codec are clearly safe; otherwise it encodes AAC.");
+    audio_layout->addRow("Mode", audio_mode_combo_);
+
+    audio_codec_combo_ = new QComboBox(audio_group_);
+    audio_codec_combo_->setObjectName("audioCodecCombo");
+    audio_codec_combo_->addItem("AAC", static_cast<int>(utsure::core::media::OutputAudioCodec::aac));
+    audio_codec_combo_->setToolTip("Used when the job resolves to audio encoding.");
+    audio_layout->addRow("Output codec", audio_codec_combo_);
+
+    audio_bitrate_spin_box_ = new QSpinBox(audio_group_);
+    audio_bitrate_spin_box_->setObjectName("audioBitrateSpinBox");
+    audio_bitrate_spin_box_->setRange(32, 512);
+    audio_bitrate_spin_box_->setSingleStep(16);
+    audio_bitrate_spin_box_->setValue(192);
+    audio_bitrate_spin_box_->setSuffix(" kbps");
+    audio_layout->addRow("Bitrate", audio_bitrate_spin_box_);
+
+    audio_sample_rate_combo_ = new QComboBox(audio_group_);
+    audio_sample_rate_combo_->setObjectName("audioSampleRateCombo");
+    audio_sample_rate_combo_->addItem("Auto", 0);
+    audio_sample_rate_combo_->addItem("44100 Hz", 44100);
+    audio_sample_rate_combo_->addItem("48000 Hz", 48000);
+    audio_layout->addRow("Sample rate", audio_sample_rate_combo_);
+
+    audio_channels_combo_ = new QComboBox(audio_group_);
+    audio_channels_combo_->setObjectName("audioChannelsCombo");
+    audio_channels_combo_->addItem("Auto", 0);
+    audio_channels_combo_->addItem("Mono", 1);
+    audio_channels_combo_->addItem("Stereo", 2);
+    audio_channels_combo_->addItem("5.1", 6);
+    audio_layout->addRow("Channels", audio_channels_combo_);
+
     auto *run_group = new QGroupBox("Run", central_widget);
     auto *run_layout = new QGridLayout(run_group);
 
@@ -231,6 +296,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     main_layout->addWidget(summary_label);
     main_layout->addWidget(inputs_group_);
     main_layout->addWidget(output_group_);
+    main_layout->addWidget(audio_group_);
     main_layout->addWidget(run_group);
     main_layout->addWidget(logs_group, 1);
 
@@ -260,6 +326,22 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(output_path_edit_, &QLineEdit::textChanged, this, [this](const QString &) {
         mark_preview_stale();
     });
+    connect(audio_mode_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int /*index*/) {
+        update_audio_control_states();
+        mark_preview_stale();
+    });
+    connect(audio_codec_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int /*index*/) {
+        mark_preview_stale();
+    });
+    connect(audio_bitrate_spin_box_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int /*value*/) {
+        mark_preview_stale();
+    });
+    connect(audio_sample_rate_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int /*index*/) {
+        mark_preview_stale();
+    });
+    connect(audio_channels_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int /*index*/) {
+        mark_preview_stale();
+    });
     connect(preset_combo_, &QComboBox::currentTextChanged, this, [this](const QString &) {
         mark_preview_stale();
     });
@@ -268,6 +350,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     });
 
     apply_codec_defaults();
+    update_audio_control_states();
     set_status_text("Ready to build an encode job.", false);
     set_preview_text("Preview updates after input validation.", false);
     append_log_line("[info] Window ready.");
@@ -278,6 +361,7 @@ QString MainWindow::window_structure_summary() const {
         "Main window structure:\n"
         "- Inputs: source video, subtitle file, optional intro clip, optional outro clip\n"
         "- Output: codec, preset, CRF, output path\n"
+        "- Audio: mode, codec, bitrate, sample rate, channels\n"
         "- Run: status label, preview label, progress bar, start encode button\n"
         "- Logs: read-only text pane for core stage logs, reports, and errors"
     );
@@ -303,6 +387,7 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job(QString &error
     }
 
     const auto codec = current_output_codec();
+    const auto audio_mode = current_audio_mode();
 
     utsure::core::job::EncodeJob job{};
     job.input.main_source_path = qstring_to_path(source_text);
@@ -310,6 +395,19 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job(QString &error
     job.output.video.codec = codec;
     job.output.video.preset = preset_text.toUtf8().toStdString();
     job.output.video.crf = crf_spin_box_->value();
+    job.output.audio.mode = audio_mode;
+    job.output.audio.codec = current_output_audio_codec();
+    job.output.audio.bitrate_kbps = audio_bitrate_spin_box_->value();
+    job.output.audio.sample_rate_hz =
+        audio_mode == utsure::core::media::AudioOutputMode::auto_select ||
+            audio_mode == utsure::core::media::AudioOutputMode::encode_aac
+            ? current_audio_sample_rate_override()
+            : std::nullopt;
+    job.output.audio.channel_count =
+        audio_mode == utsure::core::media::AudioOutputMode::auto_select ||
+            audio_mode == utsure::core::media::AudioOutputMode::encode_aac
+            ? current_audio_channel_override()
+            : std::nullopt;
 
     const QString subtitle_text = subtitle_path_edit_->text().trimmed();
     if (!subtitle_text.isEmpty()) {
@@ -339,6 +437,24 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job(QString &error
 
 utsure::core::media::OutputVideoCodec MainWindow::current_output_codec() const {
     return codec_from_index(codec_combo_->currentData().toInt());
+}
+
+utsure::core::media::AudioOutputMode MainWindow::current_audio_mode() const {
+    return audio_mode_from_value(audio_mode_combo_->currentData().toInt());
+}
+
+utsure::core::media::OutputAudioCodec MainWindow::current_output_audio_codec() const {
+    return output_audio_codec_from_value(audio_codec_combo_->currentData().toInt());
+}
+
+std::optional<int> MainWindow::current_audio_sample_rate_override() const {
+    const int sample_rate = audio_sample_rate_combo_->currentData().toInt();
+    return sample_rate > 0 ? std::optional<int>(sample_rate) : std::nullopt;
+}
+
+std::optional<int> MainWindow::current_audio_channel_override() const {
+    const int channel_count = audio_channels_combo_->currentData().toInt();
+    return channel_count > 0 ? std::optional<int>(channel_count) : std::nullopt;
 }
 
 void MainWindow::choose_source_video() {
@@ -487,9 +603,22 @@ void MainWindow::apply_codec_defaults() {
     crf_spin_box_->setToolTip(codec_help_text(codec));
 }
 
+void MainWindow::update_audio_control_states() {
+    const auto mode = current_audio_mode();
+    const bool encode_controls_enabled =
+        mode == utsure::core::media::AudioOutputMode::auto_select ||
+        mode == utsure::core::media::AudioOutputMode::encode_aac;
+
+    audio_codec_combo_->setEnabled(encode_controls_enabled);
+    audio_bitrate_spin_box_->setEnabled(encode_controls_enabled);
+    audio_sample_rate_combo_->setEnabled(encode_controls_enabled);
+    audio_channels_combo_->setEnabled(encode_controls_enabled);
+}
+
 void MainWindow::handle_running_changed(const bool running) {
     inputs_group_->setEnabled(!running);
     output_group_->setEnabled(!running);
+    audio_group_->setEnabled(!running);
     start_button_->setEnabled(!running);
     start_button_->setText(running ? "Encoding..." : "Start Encode");
 

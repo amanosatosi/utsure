@@ -47,6 +47,8 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M16 subtitle-rendering slice now prefers the libassmod RGBA API unconditionally inside the adapter so gradient and other per-pixel effects are not exposed to legacy `ASS_Image` fallback behavior.
 - The current M16 hardening slice also includes fixing cadence validation for real-world CFR sources whose container stream time base is too coarse to represent the authoritative frame rate exactly.
 - The current M16 hardening slice also includes replacing compressed-audio byte-guard failures with timestamp-based audio throttling, bounded decoded-audio queues, and a startup preroll rule so normal H.264 decode delay does not abort streaming jobs.
+- The current M16 audio slice also includes fixing the normalized/output audio timeline to use sample-based time units instead of inheriting arbitrary source stream time bases, and adding centralized audio output mode resolution for Auto / Copy / AAC / Disable across core and GUI surfaces.
+- The current M16 audio slice now routes the active streamer through one resolved output-audio plan so AAC encode, single-segment stream copy, and disabled-audio jobs all use the same core compatibility rules and preview/report summaries.
 
 ## Architecture direction
 

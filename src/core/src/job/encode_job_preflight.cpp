@@ -161,6 +161,43 @@ void validate_video_settings(
     }
 }
 
+void validate_audio_settings(
+    const EncodeJob &job,
+    std::vector<EncodeJobPreflightIssue> &issues
+) {
+    if ((job.output.audio.mode == media::AudioOutputMode::auto_select ||
+         job.output.audio.mode == media::AudioOutputMode::encode_aac) &&
+        job.output.audio.bitrate_kbps <= 0) {
+        append_issue(
+            issues,
+            EncodeJobPreflightIssueSeverity::error,
+            EncodeJobPreflightIssueCode::invalid_audio_settings,
+            "The audio bitrate must be positive.",
+            "Choose a bitrate such as 192 kbps before starting the encode."
+        );
+    }
+
+    if (job.output.audio.sample_rate_hz.has_value() && *job.output.audio.sample_rate_hz <= 0) {
+        append_issue(
+            issues,
+            EncodeJobPreflightIssueSeverity::error,
+            EncodeJobPreflightIssueCode::invalid_audio_settings,
+            "The selected output audio sample rate is not valid.",
+            "Choose Auto or a positive sample rate."
+        );
+    }
+
+    if (job.output.audio.channel_count.has_value() && *job.output.audio.channel_count <= 0) {
+        append_issue(
+            issues,
+            EncodeJobPreflightIssueSeverity::error,
+            EncodeJobPreflightIssueCode::invalid_audio_settings,
+            "The selected output audio channel count is not valid.",
+            "Choose Auto or a positive channel count."
+        );
+    }
+}
+
 void validate_output_path(
     const EncodeJob &job,
     std::vector<EncodeJobPreflightIssue> &issues,
@@ -379,6 +416,8 @@ const char *to_string(const EncodeJobPreflightIssueCode code) noexcept {
         return "invalid_output_path";
     case EncodeJobPreflightIssueCode::invalid_video_settings:
         return "invalid_video_settings";
+    case EncodeJobPreflightIssueCode::invalid_audio_settings:
+        return "invalid_audio_settings";
     case EncodeJobPreflightIssueCode::output_will_be_overwritten:
         return "output_will_be_overwritten";
     case EncodeJobPreflightIssueCode::working_set_limit_exceeded:
@@ -416,6 +455,8 @@ std::string format_encode_job_preview(const EncodeJobPreviewSummary &preview_sum
 
     preview << " | " << format_rational(preview_summary.output_frame_rate) << " fps";
     preview << " | audio " << (preview_summary.output_audio_present ? "yes" : "no");
+    preview << "\nSource audio: " << preview_summary.source_audio_summary;
+    preview << "\nOutput audio: " << preview_summary.output_audio_summary;
     preview << " | subtitles ";
     if (preview_summary.subtitles_enabled) {
         preview << timeline::to_string(preview_summary.subtitle_timing_mode);
@@ -466,6 +507,7 @@ EncodeJobPreflightResult EncodeJobPreflight::inspect(const EncodeJob &job) noexc
         }
 
         validate_video_settings(job, issues);
+        validate_audio_settings(job, issues);
 
         bool output_exists = false;
         validate_output_path(job, issues, output_exists);
@@ -496,6 +538,25 @@ EncodeJobPreflightResult EncodeJobPreflight::inspect(const EncodeJob &job) noexc
         const auto &timeline_plan = *timeline_result.timeline_plan;
         validate_subtitle_session(job, timeline_plan, issues);
 
+        const auto resolved_audio_output = media::resolve_audio_output_plan(media::AudioOutputResolveRequest{
+            .output_path = job.output.output_path,
+            .settings = job.output.audio,
+            .segment_count = timeline_plan.segments.size(),
+            .main_source_audio_stream = timeline_plan.segments[timeline_plan.main_segment_index]
+                .inspected_source_info.primary_audio_stream.has_value()
+                    ? &*timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info.primary_audio_stream
+                    : nullptr
+        });
+        if (resolved_audio_output.requested_copy_blocker.has_value()) {
+            append_issue(
+                issues,
+                EncodeJobPreflightIssueSeverity::error,
+                EncodeJobPreflightIssueCode::invalid_audio_settings,
+                "The selected audio copy mode cannot be used for this output.",
+                *resolved_audio_output.requested_copy_blocker + " Use Auto or AAC instead."
+            );
+        }
+
         if (const auto working_set_failure = working_set_guard::check(
                 timeline_plan,
                 job.subtitles,
@@ -515,7 +576,11 @@ EncodeJobPreflightResult EncodeJobPreflight::inspect(const EncodeJob &job) noexc
             .segment_kinds = {},
             .main_source_info = timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info,
             .output_frame_rate = timeline_plan.output_frame_rate,
-            .output_audio_present = timeline_plan.output_audio_stream.has_value(),
+            .output_audio_present = resolved_audio_output.output_present,
+            .source_audio_summary = media::format_source_audio_summary(
+                timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info.primary_audio_stream
+            ),
+            .output_audio_summary = media::format_resolved_audio_output_summary(resolved_audio_output),
             .subtitles_enabled = job.subtitles.has_value(),
             .subtitle_timing_mode = job.subtitles.has_value()
                 ? job.subtitles->timing_mode

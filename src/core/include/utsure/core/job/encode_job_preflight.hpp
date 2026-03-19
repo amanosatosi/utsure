@@ -21,6 +21,7 @@ enum class EncodeJobPreflightIssueCode : std::uint8_t {
     invalid_subtitle_source,
     invalid_output_path,
     invalid_video_settings,
+    invalid_audio_settings,
     output_will_be_overwritten,
     working_set_limit_exceeded,
     timeline_validation_failed,
@@ -40,6 +41,8 @@ struct EncodeJobPreviewSummary final {
     media::MediaSourceInfo main_source_info{};
     media::Rational output_frame_rate{};
     bool output_audio_present{false};
+    std::string source_audio_summary{};
+    std::string output_audio_summary{};
     bool subtitles_enabled{false};
     timeline::SubtitleTimingMode subtitle_timing_mode{timeline::SubtitleTimingMode::main_segment_only};
     bool output_exists{false};

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "utsure/core/media/audio_output.hpp"
 #include "utsure/core/media/decoded_media.hpp"
 
 #include <cstdint>
@@ -23,11 +24,13 @@ struct VideoEncodeSettings final {
 struct MediaEncodeRequest final {
     std::filesystem::path output_path{};
     VideoEncodeSettings video_settings{};
+    AudioEncodeSettings audio_settings{};
 };
 
 struct EncodedMediaSummary final {
     std::filesystem::path output_path{};
     VideoEncodeSettings video_settings{};
+    ResolvedAudioOutputPlan resolved_audio_output{};
     MediaSourceInfo output_info{};
     std::int64_t encoded_video_frame_count{0};
 };

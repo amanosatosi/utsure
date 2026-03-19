@@ -66,6 +66,7 @@ struct EncodeJobVideoOutputSettings final {
 struct EncodeJobOutputSettings final {
     std::filesystem::path output_path{};
     EncodeJobVideoOutputSettings video{};
+    media::AudioEncodeSettings audio{};
 };
 
 struct EncodeJob final {

@@ -170,12 +170,10 @@ TimelineAssemblyResult TimelineAssembler::assemble(const TimelineAssemblyRequest
                 );
             }
 
-            if (!rational_is_positive(output_audio_stream->timestamps.time_base)) {
-                output_audio_stream->timestamps.time_base = Rational{
-                    .numerator = 1,
-                    .denominator = output_audio_stream->sample_rate
-                };
-            }
+            output_audio_stream->timestamps.time_base = Rational{
+                .numerator = 1,
+                .denominator = output_audio_stream->sample_rate
+            };
         }
 
         std::vector<TimelineSegmentPlan> segments{};

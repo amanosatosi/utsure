@@ -117,7 +117,8 @@ media::MediaEncodeRequest build_media_encode_request(const EncodeJob &job) {
             .codec = job.output.video.codec,
             .preset = job.output.video.preset,
             .crf = job.output.video.crf
-        }
+        },
+        .audio_settings = job.output.audio
     };
 }
 
@@ -143,7 +144,8 @@ std::string format_segment_log_message(
 
 std::string format_encode_log_message(const EncodeJob &job) {
     return "Encoding the streaming output as " + std::string(media::to_string(job.output.video.codec)) +
-        " with preset '" + job.output.video.preset + "' and CRF " + std::to_string(job.output.video.crf) + ".";
+        " with preset '" + job.output.video.preset + "', CRF " + std::to_string(job.output.video.crf) +
+        ", and audio mode '" + std::string(media::to_string(job.output.audio.mode)) + "'.";
 }
 
 }  // namespace

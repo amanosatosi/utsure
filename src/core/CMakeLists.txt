@@ -4,6 +4,7 @@ add_library(utsure_encoder_core STATIC
     src/job/encode_job.cpp
     src/job/encode_job_preflight.cpp
     src/job/encode_job_report.cpp
+    src/media/audio_output.cpp
     src/media/decoded_media.cpp
     src/media/ffmpeg_media_support.cpp
     src/media/media_decode_report.cpp

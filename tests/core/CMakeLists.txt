@@ -244,6 +244,20 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.job.encode.disable_audio
+    COMMAND utsure_core_encode_job_tests --disable-audio
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-disable-audio.mp4"
+)
+
+add_test(
+    NAME utsure.core.job.encode.copy_audio
+    COMMAND utsure_core_encode_job_tests --copy-audio
+        "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-copy-audio.mp4"
+)
+
+add_test(
     NAME utsure.core.job.encode.ntsc_coarse_timebase
     COMMAND utsure_core_encode_job_tests --coarse-timebase-ntsc
         "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
@@ -309,6 +323,20 @@ add_test(
     COMMAND utsure_core_encode_job_preflight_tests --streaming-memory-budget
         "${UTSURE_MEMORY_HEAVY_MAIN_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/preflight-memory-heavy.mp4"
+)
+
+add_test(
+    NAME utsure.core.job.preflight.copy_blocked
+    COMMAND utsure_core_encode_job_preflight_tests --copy-blocked
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/preflight-copy-blocked.mp4"
+)
+
+add_test(
+    NAME utsure.core.job.preflight.auto_copy_preview
+    COMMAND utsure_core_encode_job_preflight_tests --auto-copy-preview
+        "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/preflight-auto-copy.mp4"
 )
 
 add_executable(utsure_core_timeline_tests

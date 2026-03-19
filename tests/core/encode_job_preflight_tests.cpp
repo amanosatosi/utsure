@@ -15,6 +15,7 @@ using utsure::core::job::EncodeJobPreflightIssueSeverity;
 using utsure::core::job::EncodeJobPreflightResult;
 using utsure::core::job::EncodeJobSubtitleSettings;
 using utsure::core::job::format_encode_job_preview;
+using utsure::core::media::AudioOutputMode;
 using utsure::core::media::OutputVideoCodec;
 using utsure::core::timeline::SubtitleTimingMode;
 using utsure::core::timeline::TimelineSegmentKind;
@@ -109,6 +110,11 @@ int run_valid_preview_assertion(
         preview.output_exists ||
         preview.subtitle_timing_mode != SubtitleTimingMode::main_segment_only) {
         return fail("Unexpected preview output state.");
+    }
+
+    if (preview.source_audio_summary != "pcm_s16le 1ch 48000 Hz" ||
+        preview.output_audio_summary != "AAC 192k 1ch 48000 Hz (Auto)") {
+        return fail("Unexpected preview audio summary.");
     }
 
     const auto preview_text = format_encode_job_preview(preview);
@@ -268,6 +274,65 @@ int run_streaming_memory_budget_assertion(
     return 0;
 }
 
+int run_copy_blocked_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &output_path
+) {
+    remove_file_if_present(output_path);
+
+    auto job = make_base_job(main_path, output_path);
+    job.output.audio.mode = AudioOutputMode::copy_source;
+
+    const auto result = EncodeJobPreflight::inspect(job);
+    if (result.can_start_encode()) {
+        return fail("A copy-blocked preflight job passed unexpectedly.");
+    }
+
+    if (!issues_contain(
+            result,
+            EncodeJobPreflightIssueCode::invalid_audio_settings,
+            EncodeJobPreflightIssueSeverity::error)) {
+        return fail("The copy-blocked preflight job did not report the expected audio-settings error.");
+    }
+
+    if (!result.preview_summary.has_value()) {
+        return fail("A copy-blocked preflight job should still produce a preview summary.");
+    }
+
+    if (result.preview_summary->output_audio_summary != "Copy blocked") {
+        return fail("The copy-blocked preflight job did not report the expected output audio summary.");
+    }
+
+    std::cout << "audio_copy=blocked\n";
+    return 0;
+}
+
+int run_auto_copy_preview_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &output_path
+) {
+    remove_file_if_present(output_path);
+
+    const auto result = EncodeJobPreflight::inspect(make_base_job(main_path, output_path));
+    if (!result.can_start_encode()) {
+        return fail("An auto-copy-safe preflight job was blocked unexpectedly.");
+    }
+
+    if (!result.preview_summary.has_value()) {
+        return fail("An auto-copy-safe preflight job did not produce a preview summary.");
+    }
+
+    const auto &preview = *result.preview_summary;
+    if (!preview.output_audio_present ||
+        preview.source_audio_summary != "aac 1ch 48000 Hz" ||
+        preview.output_audio_summary != "Copy source aac 1ch 48000 Hz (Auto)") {
+        return fail("Unexpected auto-copy-safe preview audio summary.");
+    }
+
+    std::cout << "audio_copy=auto_safe\n";
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -279,7 +344,9 @@ int main(int argc, char *argv[]) {
             "--missing-subtitle <main> <missing-subtitle> <output>|"
             "--overwrite-warning <main> <output>|"
             "--output-conflicts-main <main>|"
-            "--streaming-memory-budget <main> <output>]"
+            "--streaming-memory-budget <main> <output>|"
+            "--copy-blocked <main> <output>|"
+            "--auto-copy-preview <main> <output>]"
         );
     }
 
@@ -324,6 +391,20 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--streaming-memory-budget" && argc == 4) {
         return run_streaming_memory_budget_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
+        );
+    }
+
+    if (mode == "--copy-blocked" && argc == 4) {
+        return run_copy_blocked_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
+        );
+    }
+
+    if (mode == "--auto-copy-preview" && argc == 4) {
+        return run_auto_copy_preview_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3])
         );
