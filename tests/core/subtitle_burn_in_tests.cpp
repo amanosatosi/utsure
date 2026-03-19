@@ -104,13 +104,21 @@ bool frame_changed(
     return !frames_are_identical(plain_output, burned_output, frame_index);
 }
 
-int assert_decoded_output(const DecodedMediaSource &decoded_output, const std::size_t expected_frame_count) {
+int assert_decoded_output(
+    const DecodedMediaSource &decoded_output,
+    const std::size_t expected_frame_count,
+    const bool expect_audio
+) {
     if (decoded_output.video_frames.size() != expected_frame_count) {
         return fail("Unexpected burned-output video frame count.");
     }
 
-    if (!decoded_output.audio_blocks.empty()) {
-        return fail("The subtitle burn-in path should still emit video-only outputs.");
+    if (expect_audio && decoded_output.audio_blocks.empty()) {
+        return fail("The subtitle burn-in path unexpectedly dropped audio.");
+    }
+
+    if (!expect_audio && !decoded_output.audio_blocks.empty()) {
+        return fail("The subtitle burn-in path unexpectedly contains audio.");
     }
 
     for (std::size_t index = 1; index < decoded_output.video_frames.size(); ++index) {
@@ -308,8 +316,8 @@ int run_burn_in_assertion(
         return fail("Subtitle burn-in output decode failed unexpectedly.");
     }
 
-    if (assert_decoded_output(*plain_output_decode.decoded_media_source, 48U) != 0 ||
-        assert_decoded_output(*burned_output_decode.decoded_media_source, 48U) != 0) {
+    if (assert_decoded_output(*plain_output_decode.decoded_media_source, 48U, true) != 0 ||
+        assert_decoded_output(*burned_output_decode.decoded_media_source, 48U, true) != 0) {
         return 1;
     }
 
@@ -402,8 +410,8 @@ int run_timeline_burn_in_assertion(
         return fail("Timeline subtitle output decode failed unexpectedly.");
     }
 
-    if (assert_decoded_output(*plain_output_decode.decoded_media_source, 96U) != 0 ||
-        assert_decoded_output(*burned_output_decode.decoded_media_source, 96U) != 0) {
+    if (assert_decoded_output(*plain_output_decode.decoded_media_source, 96U, true) != 0 ||
+        assert_decoded_output(*burned_output_decode.decoded_media_source, 96U, true) != 0) {
         return 1;
     }
 
@@ -506,8 +514,8 @@ int run_timeline_full_output_burn_in_assertion(
         return fail("Full-output timeline subtitle output decode failed unexpectedly.");
     }
 
-    if (assert_decoded_output(*plain_output_decode.decoded_media_source, 96U) != 0 ||
-        assert_decoded_output(*burned_output_decode.decoded_media_source, 96U) != 0) {
+    if (assert_decoded_output(*plain_output_decode.decoded_media_source, 96U, true) != 0 ||
+        assert_decoded_output(*burned_output_decode.decoded_media_source, 96U, true) != 0) {
         return 1;
     }
 

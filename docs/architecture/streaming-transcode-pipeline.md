@@ -11,7 +11,7 @@ The active stages are:
 1. Demux packets from one segment input at a time.
 2. Decode video and audio incrementally from bounded packet queues.
 3. Composite subtitles per video frame at streaming time.
-4. Encode video frames incrementally.
+4. Encode video and audio incrementally.
 5. Mux encoded packets incrementally.
 
 The old full-buffer helpers still exist for isolated decode/report tests, but the job runner no longer uses:
@@ -55,16 +55,18 @@ Frame and packet lifetime is explicit:
 - A packet queue owns each packet until decode pops it and sends it to FFmpeg.
 - Decode owns the temporary FFmpeg frame only until normalization finishes.
 - The decoded-video queue owns a normalized `DecodedVideoFrame` until the composite stage pops it.
+- The decoded-audio queue owns a normalized `DecodedAudioSamples` block until the audio output stage pops it.
 - The composite stage mutates the frame in place, rebases its output timestamp, and moves it into the composited-video queue.
 - The composited-video queue owns that frame until encode pops it.
 - Encode converts the RGBA frame to a temporary YUV frame, sends it to the codec, then the RGBA frame is destroyed when the local variable leaves scope.
+- The audio output stage rebases one decoded audio block onto the output audio timeline, sends it to the audio encoder, and then the normalized audio block is destroyed when the local variable leaves scope.
 - The encoded-packet queue owns muxable packets until mux pops and writes them.
-- Audio blocks are decoded into the audio-block queue, validated/counted, and destroyed immediately because the current output remains video-only.
 
 In practice, frame memory is released at three points:
 
 - After a packet has been decoded and the temporary FFmpeg decode frame is unreferenced.
 - After a composited `DecodedVideoFrame` is encoded and falls out of scope in the encode stage.
+- After a rebased `DecodedAudioSamples` block is encoded and falls out of scope in the audio encode stage.
 - After an encoded packet is muxed and its owning packet handle is destroyed.
 
 ## Memory Budget
@@ -140,18 +142,28 @@ The streaming runner creates one subtitle render session and uses it per frame:
 
 No full subtitle-burned clip is created anymore. Bitmaps are rendered, composited into one frame, encoded, and then released.
 
-## Audio In The Current Milestone
+## Audio Path
 
-Audio is still decoded incrementally even though the muxed output remains video-only.
+The active streaming path now emits muxed audio when `TimelinePlan.output_audio_stream` is present.
 
-That preserves the existing behavior needed for validation and reporting:
+The audio flow is:
 
-- Segment audio compatibility is still checked
-- Audio block counts are still reported
-- Silence insertion accounting for clips without audio still matches the existing timeline summary
-- Audio and video duration drift no longer aborts the active encode path because the current muxed output is still video-only
+1. Demux compressed packets from the selected segment audio stream.
+2. Decode audio frames incrementally.
+3. Normalize decoded audio into planar-float blocks at the timeline sample rate and channel count.
+4. Hold only a bounded decoded-audio queue until enough video cadence has been emitted for the corresponding output-time audio budget.
+5. Rebase audio block timestamps onto the monotonic output audio timeline.
+6. Feed rebased blocks into the AAC encoder.
+7. Mux encoded audio packets through the same encoded-packet queue used by video.
 
-Decoded audio blocks are not retained after validation/counting.
+Segment sequencing follows the same intro/main/outro order as video:
+
+- If a segment has no audio stream but the output timeline does, the pipeline synthesizes bounded silence blocks for that segment.
+- If a segment decodes more audio than its video duration at the main cadence allows, the final drain trims the overflow instead of extending the output timeline.
+- If a segment decodes less audio than required for its video duration, the pipeline pads the tail with silence so the next segment stays in sync.
+- If the output container, audio encoder, sample rate, or channel layout is unsupported, the job fails clearly instead of silently dropping audio.
+
+The regression that caused silent output during the streaming refactor was architectural: audio decode and normalization were still active, but the output session only created a video stream and the segment processor only counted decoded audio blocks instead of sending them to an audio encoder and muxer.
 
 ## Maintenance Notes
 

@@ -69,14 +69,19 @@ bool frames_are_identical(
 
 int assert_output_decode(
     const DecodedMediaSource &decoded_output,
-    const std::size_t expected_frame_count
+    const std::size_t expected_frame_count,
+    const bool expect_audio
 ) {
     if (decoded_output.video_frames.size() != expected_frame_count) {
         return fail("Unexpected job-output video frame count.");
     }
 
-    if (!decoded_output.audio_blocks.empty()) {
-        return fail("The current encode-job output should still be video-only.");
+    if (expect_audio && decoded_output.audio_blocks.empty()) {
+        return fail("The encode-job output unexpectedly dropped audio.");
+    }
+
+    if (!expect_audio && !decoded_output.audio_blocks.empty()) {
+        return fail("The encode-job output unexpectedly contains audio.");
     }
 
     for (std::size_t index = 1; index < decoded_output.video_frames.size(); ++index) {
@@ -110,8 +115,15 @@ int assert_main_only_summary(
         return fail("Unexpected main-only output cadence.");
     }
 
+    if (!summary.encoded_media_summary.output_info.primary_audio_stream.has_value()) {
+        return fail("The main-only encode-job output is missing audio.");
+    }
+
+    const auto &output_audio = *summary.encoded_media_summary.output_info.primary_audio_stream;
     if (summary.encoded_media_summary.output_info.primary_video_stream->codec_name != expected_codec_name ||
-        summary.encoded_media_summary.output_info.primary_audio_stream.has_value()) {
+        output_audio.codec_name != "aac" ||
+        output_audio.sample_rate != 48000 ||
+        output_audio.channel_count != 1) {
         return fail("Unexpected main-only encoded output streams.");
     }
 
@@ -161,8 +173,15 @@ int assert_timeline_summary(const EncodeJobSummary &summary) {
         return fail("Unexpected intro/main/outro output cadence.");
     }
 
+    if (!summary.encoded_media_summary.output_info.primary_audio_stream.has_value()) {
+        return fail("The intro/main/outro encode-job output is missing audio.");
+    }
+
+    const auto &output_audio = *summary.encoded_media_summary.output_info.primary_audio_stream;
     if (summary.subtitled_video_frame_count != 0 ||
-        summary.encoded_media_summary.output_info.primary_audio_stream.has_value()) {
+        output_audio.codec_name != "aac" ||
+        output_audio.sample_rate != 48000 ||
+        output_audio.channel_count != 1) {
         return fail("Unexpected intro/main/outro encode-job output state.");
     }
 
@@ -316,7 +335,7 @@ int run_main_only_job_assertion(
         return fail(error_message);
     }
 
-    const auto structure_result = assert_output_decode(*output_decode_result.decoded_media_source, 48U);
+    const auto structure_result = assert_output_decode(*output_decode_result.decoded_media_source, 48U, true);
     if (structure_result != 0) {
         return structure_result;
     }
@@ -391,7 +410,7 @@ int run_timeline_h264_assertion(
         return fail(error_message);
     }
 
-    const auto structure_result = assert_output_decode(*output_decode_result.decoded_media_source, 96U);
+    const auto structure_result = assert_output_decode(*output_decode_result.decoded_media_source, 96U, true);
     if (structure_result != 0) {
         return structure_result;
     }

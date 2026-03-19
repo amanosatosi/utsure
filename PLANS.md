@@ -40,7 +40,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The libassmod subtitle burn-in milestone is also being pulled ahead of intro/outro and broader timeline work by explicit user request, and it remains limited to main-source ASS subtitle burn-in before final encode.
 - The timeline composition milestone now includes ordered intro/main/outro segment assembly, decoded-stream stitching with aligned normalized audio, and encode-job integration while the output backend remains video-only.
 - The hardening and handoff milestone is limited to validation coverage for the current pipeline, practical build/setup notes, packaging and release guidance, and a clearer roadmap split between near-term and later work.
-- The current milestone is limited to replacing the full-clip decoded buffering path with a bounded-memory streaming pipeline while preserving the existing video-only output behavior, subtitle burn-in behavior, cadence rules, and intro/outro sequencing.
+- The current milestone is limited to replacing the full-clip decoded buffering path with a bounded-memory streaming pipeline while preserving cadence rules, subtitle burn-in behavior, intro/outro sequencing, and streamed A/V output.
 
 ## Architecture direction
 
@@ -498,8 +498,12 @@ Scope:
 - Replace the current whole-clip decode, subtitle burn-in, and timeline composition path with a bounded-memory streaming pipeline.
 - Keep the stage split explicit: demux, decode, subtitle/composite, encode, and mux.
 - Process intro, main, and outro segments sequentially instead of decoding all segments into memory together.
-- Preserve current output behavior, including main-source cadence ownership, subtitle timing modes, and existing video-only muxed output.
+- Preserve current output behavior, including main-source cadence ownership, subtitle timing modes, and muxed output with synchronized audio when the timeline defines one.
 - Replace duration-scaled working-set estimation with queue-depth-scaled budgeting and document explicit frame/packet lifetime rules.
+
+Scope change:
+- M16 originally landed with a working streaming video path but regressed the older audible-output expectation by dropping audio after decode/resample.
+- M16 now explicitly includes restoring incremental audio encode and mux support, plus clear failures when an audio-bearing timeline cannot be emitted correctly.
 
 Likely files/modules:
 - `src/core/include/utsure/core/job/`
@@ -515,17 +519,21 @@ Risks:
 - Regressing subtitle timing when switching from whole-clip burn-in to per-frame render/composite at encode time.
 - Leaving frame ownership ambiguous between decode, composite, and encode stages.
 - Accidentally preserving old full-buffer behavior behind the new API surface and keeping the memory pressure problem hidden.
+- Regressing A/V sync while rebasing decoded audio blocks onto the output timeline and interleaving audio/video packets in one muxer.
 
 Validation:
 - Build and run the focused core encode/preflight tests that exercise main-only, intro/main/outro, and subtitle cases.
 - Verify that memory-heavy 1080p jobs are no longer rejected by duration-scaled decoded-memory estimates.
-- Document the new stage flow, queue limits, and where decoded/composited frame memory is released.
+- Verify that audio-bearing inputs produce muxed outputs with an expected audio stream and coherent durations.
+- Document the new stage flow, queue limits, where decoded/composited frame memory is released, and where audio frames/packets are released.
 
 Done criteria:
 - Encode orchestration no longer scales decoded-memory usage with full clip duration.
 - Queue ownership, queue limits, and frame lifetime rules are explicit in code and docs.
 - Subtitle burn-in happens per frame during streaming encode, not by cloning whole decoded clips.
 - Intro and outro segments are processed sequentially through the same streaming stages.
+- Audio-bearing timelines emit synchronized audio instead of silently dropping it.
+- Unsupported audio-output cases fail clearly instead of silently producing video-only output.
 - The old full-clip buffering path is removed or isolated away from the active encode path.
 
 ## Immediate next milestone

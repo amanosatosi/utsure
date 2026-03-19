@@ -119,6 +119,14 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
 
     report << "output.audio.present="
            << (encode_job_summary.encoded_media_summary.output_info.primary_audio_stream.has_value() ? "yes" : "no");
+    if (encode_job_summary.encoded_media_summary.output_info.primary_audio_stream.has_value()) {
+        const auto &output_audio = *encode_job_summary.encoded_media_summary.output_info.primary_audio_stream;
+        report << '\n';
+        report << "output.audio.codec=" << output_audio.codec_name << '\n';
+        report << "output.audio.sample_rate=" << output_audio.sample_rate << '\n';
+        report << "output.audio.channels=" << output_audio.channel_count << '\n';
+        report << "output.audio.channel_layout=" << output_audio.channel_layout_name;
+    }
 
     for (std::size_t index = 0; index < encode_job_summary.timeline_summary.segments.size(); ++index) {
         const auto &segment = encode_job_summary.timeline_summary.segments[index];

@@ -134,6 +134,14 @@ public:
         return queue_.size();
     }
 
+    [[nodiscard]] const T &front() const {
+        if (queue_.empty()) {
+            throw std::runtime_error("A streaming pipeline queue front was requested while empty.");
+        }
+
+        return queue_.front();
+    }
+
     void push(T value) {
         if (full()) {
             throw std::runtime_error("A streaming pipeline queue exceeded its configured depth.");
@@ -172,6 +180,13 @@ struct VideoOutputPlan final {
     std::int64_t frame_duration_microseconds{0};
 };
 
+struct AudioOutputPlan final {
+    int sample_rate{0};
+    int channel_count{0};
+    Rational time_base{};
+    std::string channel_layout_name{"unknown"};
+};
+
 struct SegmentDecoderResources final {
     FormatContextHandle format_context{};
     CodecContextHandle video_decoder{};
@@ -189,6 +204,12 @@ struct SegmentProcessResult final {
 
 struct EncoderSelection final {
     const char *encoder_name{""};
+};
+
+struct EncodedPacketQueueEntry final {
+    PacketHandle packet{};
+    AVStream *stream{nullptr};
+    Rational encoder_time_base{};
 };
 
 StreamingTranscodeResult make_error(std::string message, std::string actionable_hint) {
@@ -1070,15 +1091,179 @@ CodecContextHandle create_video_encoder_context(
     return codec_context;
 }
 
+AVSampleFormat choose_audio_encoder_sample_format(const AVCodec &encoder) {
+    if (encoder.sample_fmts == nullptr) {
+        return AV_SAMPLE_FMT_FLTP;
+    }
+
+    for (const AVSampleFormat *sample_format = encoder.sample_fmts;
+         *sample_format != AV_SAMPLE_FMT_NONE;
+         ++sample_format) {
+        if (*sample_format == AV_SAMPLE_FMT_FLTP) {
+            return *sample_format;
+        }
+    }
+
+    throw std::runtime_error(
+        "The default audio encoder does not support planar float audio input for the streaming pipeline."
+    );
+}
+
+bool audio_encoder_supports_sample_rate(const AVCodec &encoder, const int sample_rate) {
+    if (encoder.supported_samplerates == nullptr) {
+        return true;
+    }
+
+    for (const int *supported_sample_rate = encoder.supported_samplerates;
+         *supported_sample_rate != 0;
+         ++supported_sample_rate) {
+        if (*supported_sample_rate == sample_rate) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+AVChannelLayout make_default_audio_channel_layout(const int channel_count) {
+    if (channel_count <= 0) {
+        throw std::runtime_error("The streaming pipeline requires a positive output audio channel count.");
+    }
+
+    AVChannelLayout channel_layout{};
+    av_channel_layout_default(&channel_layout, channel_count);
+    if (channel_layout.nb_channels != channel_count) {
+        throw std::runtime_error("The streaming pipeline could not derive a default output audio channel layout.");
+    }
+
+    return channel_layout;
+}
+
+bool audio_encoder_supports_channel_layout(
+    const AVCodec &encoder,
+    const AVChannelLayout &requested_channel_layout
+) {
+    if (encoder.ch_layouts == nullptr) {
+        return true;
+    }
+
+    for (const AVChannelLayout *supported_layout = encoder.ch_layouts;
+         supported_layout->nb_channels != 0;
+         ++supported_layout) {
+        if (av_channel_layout_compare(supported_layout, &requested_channel_layout) == 0 ||
+            supported_layout->nb_channels == requested_channel_layout.nb_channels) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool audio_encoder_supports_short_frame_samples(const AVCodecContext &codec_context) {
+    if (codec_context.frame_size <= 0) {
+        return true;
+    }
+
+    if (codec_context.codec == nullptr) {
+        return false;
+    }
+
+    return (codec_context.codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE) != 0 ||
+        (codec_context.codec->capabilities & AV_CODEC_CAP_SMALL_LAST_FRAME) != 0;
+}
+
+CodecContextHandle create_audio_encoder_context(
+    AVFormatContext &output_context,
+    AVStream &audio_stream,
+    const AudioOutputPlan &plan
+) {
+    const AVCodec *encoder = avcodec_find_encoder_by_name("aac");
+    if (encoder == nullptr) {
+        throw std::runtime_error(
+            "The default AAC audio encoder is not available for the streaming pipeline."
+        );
+    }
+
+    if (avformat_query_codec(output_context.oformat, encoder->id, FF_COMPLIANCE_NORMAL) == 0) {
+        throw std::runtime_error(
+            "The selected output container does not support AAC audio in the streaming pipeline."
+        );
+    }
+
+    if (!audio_encoder_supports_sample_rate(*encoder, plan.sample_rate)) {
+        throw std::runtime_error(
+            "The default AAC audio encoder does not support the required sample rate " +
+            std::to_string(plan.sample_rate) + "."
+        );
+    }
+
+    const AVSampleFormat sample_format = choose_audio_encoder_sample_format(*encoder);
+    AVChannelLayout requested_channel_layout = make_default_audio_channel_layout(plan.channel_count);
+    if (!audio_encoder_supports_channel_layout(*encoder, requested_channel_layout)) {
+        av_channel_layout_uninit(&requested_channel_layout);
+        throw std::runtime_error(
+            "The default AAC audio encoder does not support the required channel count " +
+            std::to_string(plan.channel_count) + "."
+        );
+    }
+
+    CodecContextHandle codec_context(avcodec_alloc_context3(encoder));
+    if (!codec_context) {
+        av_channel_layout_uninit(&requested_channel_layout);
+        throw std::runtime_error("Failed to allocate an FFmpeg audio encoder context.");
+    }
+
+    codec_context->codec_id = encoder->id;
+    codec_context->codec_type = AVMEDIA_TYPE_AUDIO;
+    codec_context->sample_fmt = sample_format;
+    codec_context->sample_rate = plan.sample_rate;
+    codec_context->time_base = to_av_rational(plan.time_base);
+    codec_context->bit_rate = 128000;
+    const auto channel_layout_copy_result =
+        av_channel_layout_copy(&codec_context->ch_layout, &requested_channel_layout);
+    av_channel_layout_uninit(&requested_channel_layout);
+    if (channel_layout_copy_result < 0) {
+        throw std::runtime_error(
+            "Failed to configure the streaming audio encoder channel layout. FFmpeg reported: " +
+            ffmpeg_support::ffmpeg_error_to_string(channel_layout_copy_result)
+        );
+    }
+
+    if ((output_context.oformat->flags & AVFMT_GLOBALHEADER) != 0) {
+        codec_context->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    }
+
+    const auto open_result = avcodec_open2(codec_context.get(), encoder, nullptr);
+    if (open_result < 0) {
+        throw std::runtime_error(
+            "Failed to open the default AAC audio encoder. FFmpeg reported: " +
+            ffmpeg_support::ffmpeg_error_to_string(open_result)
+        );
+    }
+
+    audio_stream.time_base = codec_context->time_base;
+    const auto parameters_result = avcodec_parameters_from_context(audio_stream.codecpar, codec_context.get());
+    if (parameters_result < 0) {
+        throw std::runtime_error(
+            "Failed to copy encoded audio stream parameters. FFmpeg reported: " +
+            ffmpeg_support::ffmpeg_error_to_string(parameters_result)
+        );
+    }
+
+    return codec_context;
+}
+
 class StreamingOutputSession final {
 public:
     StreamingOutputSession(
         const MediaEncodeRequest &request,
-        const VideoOutputPlan &plan,
+        const VideoOutputPlan &video_plan,
+        const std::optional<AudioOutputPlan> &audio_plan,
         const PipelineQueueLimits &queue_limits
     )
         : request_(request),
-          plan_(plan),
+          video_plan_(video_plan),
+          audio_plan_(audio_plan),
           encoded_packet_queue_(queue_limits.encoded_packet_queue_depth) {
         const auto output_path = request.output_path.lexically_normal();
         const auto output_path_string = output_path.string();
@@ -1086,7 +1271,7 @@ public:
             throw std::runtime_error("The output path must not be empty.");
         }
 
-        if ((plan.width % 2) != 0 || (plan.height % 2) != 0) {
+        if ((video_plan.width % 2) != 0 || (video_plan.height % 2) != 0) {
             throw std::runtime_error("The software encoder backends require even frame dimensions for yuv420p output.");
         }
 
@@ -1097,7 +1282,18 @@ public:
         }
 
         video_stream_ = raw_video_stream;
-        codec_context_ = create_video_encoder_context(*output_context_, *video_stream_, request, plan);
+        video_codec_context_ = create_video_encoder_context(*output_context_, *video_stream_, request, video_plan);
+
+        if (audio_plan_.has_value()) {
+            AVStream *raw_audio_stream = avformat_new_stream(output_context_.get(), nullptr);
+            if (raw_audio_stream == nullptr) {
+                throw std::runtime_error("Failed to create the output audio stream.");
+            }
+
+            audio_stream_ = raw_audio_stream;
+            audio_codec_context_ = create_audio_encoder_context(*output_context_, *audio_stream_, *audio_plan_);
+        }
+
         open_output_file(*output_context_, output_path);
 
         const auto header_result = avformat_write_header(output_context_.get(), nullptr);
@@ -1108,12 +1304,19 @@ public:
             );
         }
 
-        reusable_receive_packet_ = allocate_packet();
+        reusable_video_receive_packet_ = allocate_packet();
+        if (audio_codec_context_) {
+            reusable_audio_receive_packet_ = allocate_packet();
+        }
+    }
+
+    [[nodiscard]] bool audio_enabled() const noexcept {
+        return audio_codec_context_ != nullptr;
     }
 
     void push_frame(const DecodedVideoFrame &decoded_frame) {
         auto encoded_frame = build_encoded_video_frame(decoded_frame);
-        const auto send_result = avcodec_send_frame(codec_context_.get(), encoded_frame.get());
+        const auto send_result = avcodec_send_frame(video_codec_context_.get(), encoded_frame.get());
         if (send_result < 0) {
             throw std::runtime_error(
                 "Failed to send a frame to the video encoder. FFmpeg reported: " +
@@ -1122,21 +1325,51 @@ public:
         }
 
         ++encoded_video_frame_count_;
-        drain_encoder_into_queue();
+        drain_video_encoder_into_queue();
+        drain_mux_queue();
+    }
+
+    void push_audio_block(const DecodedAudioSamples &audio_block) {
+        if (!audio_codec_context_ || !audio_plan_.has_value() || audio_stream_ == nullptr) {
+            throw std::runtime_error("The streaming output session was asked to encode audio without an audio stream.");
+        }
+
+        auto encoded_frame = build_encoded_audio_frame(audio_block);
+        const auto send_result = avcodec_send_frame(audio_codec_context_.get(), encoded_frame.get());
+        if (send_result < 0) {
+            throw std::runtime_error(
+                "Failed to send an audio block to the audio encoder. FFmpeg reported: " +
+                ffmpeg_support::ffmpeg_error_to_string(send_result)
+            );
+        }
+
+        ++encoded_audio_block_count_;
+        drain_audio_encoder_into_queue();
         drain_mux_queue();
     }
 
     EncodedMediaSummary finish() {
         if (!finalized_) {
-            const auto flush_result = avcodec_send_frame(codec_context_.get(), nullptr);
-            if (flush_result < 0) {
+            const auto flush_video_result = avcodec_send_frame(video_codec_context_.get(), nullptr);
+            if (flush_video_result < 0) {
                 throw std::runtime_error(
                     "Failed to flush the video encoder. FFmpeg reported: " +
-                    ffmpeg_support::ffmpeg_error_to_string(flush_result)
+                    ffmpeg_support::ffmpeg_error_to_string(flush_video_result)
                 );
             }
 
-            drain_encoder_into_queue();
+            drain_video_encoder_into_queue();
+            if (audio_codec_context_) {
+                const auto flush_audio_result = avcodec_send_frame(audio_codec_context_.get(), nullptr);
+                if (flush_audio_result < 0) {
+                    throw std::runtime_error(
+                        "Failed to flush the audio encoder. FFmpeg reported: " +
+                        ffmpeg_support::ffmpeg_error_to_string(flush_audio_result)
+                    );
+                }
+
+                drain_audio_encoder_into_queue();
+            }
             drain_mux_queue();
 
             const auto trailer_result = av_write_trailer(output_context_.get());
@@ -1178,12 +1411,12 @@ private:
 
         if (!scale_context_) {
             SwsContext *raw_scale_context = sws_getContext(
-                plan_.width,
-                plan_.height,
+                video_plan_.width,
+                video_plan_.height,
                 AV_PIX_FMT_RGBA,
-                plan_.width,
-                plan_.height,
-                codec_context_->pix_fmt,
+                video_plan_.width,
+                video_plan_.height,
+                video_codec_context_->pix_fmt,
                 SWS_BILINEAR,
                 nullptr,
                 nullptr,
@@ -1197,9 +1430,9 @@ private:
         }
 
         auto encoded_frame = allocate_frame();
-        encoded_frame->format = codec_context_->pix_fmt;
-        encoded_frame->width = codec_context_->width;
-        encoded_frame->height = codec_context_->height;
+        encoded_frame->format = video_codec_context_->pix_fmt;
+        encoded_frame->width = video_codec_context_->width;
+        encoded_frame->height = video_codec_context_->height;
 
         const auto buffer_result = av_frame_get_buffer(encoded_frame.get(), 1);
         if (buffer_result < 0) {
@@ -1227,7 +1460,7 @@ private:
             source_data,
             source_linesize,
             0,
-            plan_.height,
+            video_plan_.height,
             encoded_frame->data,
             encoded_frame->linesize
         );
@@ -1236,13 +1469,96 @@ private:
         }
 
         encoded_frame->pts = decoded_frame.timestamp.source_pts.value_or(0);
-        encoded_frame->duration = decoded_frame.timestamp.source_duration.value_or(plan_.frame_duration_pts);
+        encoded_frame->duration = decoded_frame.timestamp.source_duration.value_or(video_plan_.frame_duration_pts);
         return encoded_frame;
     }
 
-    void drain_encoder_into_queue() {
+    FrameHandle build_encoded_audio_frame(const DecodedAudioSamples &audio_block) {
+        if (!audio_codec_context_ || !audio_plan_.has_value()) {
+            throw std::runtime_error("The streaming output session cannot build an audio frame without an audio plan.");
+        }
+
+        if (audio_block.sample_format != NormalizedAudioSampleFormat::f32_planar) {
+            throw std::runtime_error("The streaming audio encoder currently only supports planar float audio blocks.");
+        }
+
+        if (audio_block.sample_rate != audio_plan_->sample_rate ||
+            audio_block.channel_count != audio_plan_->channel_count) {
+            throw std::runtime_error("The streaming audio block shape does not match the output audio plan.");
+        }
+
+        if (audio_block.samples_per_channel <= 0) {
+            throw std::runtime_error("The streaming audio encoder received an empty audio block.");
+        }
+
+        if (audio_block.channel_samples.size() != static_cast<std::size_t>(audio_plan_->channel_count)) {
+            throw std::runtime_error("The streaming audio block channel buffer count does not match the output plan.");
+        }
+
+        int frame_sample_count = audio_block.samples_per_channel;
+        if (audio_codec_context_->frame_size > 0 && frame_sample_count != audio_codec_context_->frame_size) {
+            if (frame_sample_count > audio_codec_context_->frame_size) {
+                throw std::runtime_error(
+                    "The streaming audio block size exceeds the audio encoder frame size and is not supported."
+                );
+            }
+
+            if (!audio_encoder_supports_short_frame_samples(*audio_codec_context_)) {
+                frame_sample_count = audio_codec_context_->frame_size;
+            }
+        }
+
+        auto encoded_frame = allocate_frame();
+        encoded_frame->format = audio_codec_context_->sample_fmt;
+        encoded_frame->sample_rate = audio_codec_context_->sample_rate;
+        encoded_frame->nb_samples = frame_sample_count;
+        const auto layout_copy_result =
+            av_channel_layout_copy(&encoded_frame->ch_layout, &audio_codec_context_->ch_layout);
+        if (layout_copy_result < 0) {
+            throw std::runtime_error(
+                "Failed to copy the audio encoder channel layout into an output frame. FFmpeg reported: " +
+                ffmpeg_support::ffmpeg_error_to_string(layout_copy_result)
+            );
+        }
+
+        const auto buffer_result = av_frame_get_buffer(encoded_frame.get(), 0);
+        if (buffer_result < 0) {
+            throw std::runtime_error(
+                "Failed to allocate the encoded streaming audio frame buffer. FFmpeg reported: " +
+                ffmpeg_support::ffmpeg_error_to_string(buffer_result)
+            );
+        }
+
+        const auto writable_result = av_frame_make_writable(encoded_frame.get());
+        if (writable_result < 0) {
+            throw std::runtime_error(
+                "Failed to make the encoded streaming audio frame writable. FFmpeg reported: " +
+                ffmpeg_support::ffmpeg_error_to_string(writable_result)
+            );
+        }
+
+        for (int channel_index = 0; channel_index < audio_plan_->channel_count; ++channel_index) {
+            const auto &channel_samples = audio_block.channel_samples[static_cast<std::size_t>(channel_index)];
+            if (channel_samples.size() != static_cast<std::size_t>(audio_block.samples_per_channel)) {
+                throw std::runtime_error(
+                    "The streaming audio block does not contain the expected sample count for every channel."
+                );
+            }
+
+            auto *destination =
+                reinterpret_cast<float *>(encoded_frame->extended_data[static_cast<std::size_t>(channel_index)]);
+            std::copy_n(channel_samples.begin(), audio_block.samples_per_channel, destination);
+            std::fill(destination + audio_block.samples_per_channel, destination + frame_sample_count, 0.0F);
+        }
+
+        encoded_frame->pts = audio_block.timestamp.source_pts.value_or(0);
+        return encoded_frame;
+    }
+
+    void drain_video_encoder_into_queue() {
         while (true) {
-            const auto receive_result = avcodec_receive_packet(codec_context_.get(), reusable_receive_packet_.get());
+            const auto receive_result =
+                avcodec_receive_packet(video_codec_context_.get(), reusable_video_receive_packet_.get());
             if (receive_result == AVERROR(EAGAIN) || receive_result == AVERROR_EOF) {
                 return;
             }
@@ -1255,22 +1571,59 @@ private:
             }
 
             PacketHandle owned_packet = allocate_packet();
-            av_packet_move_ref(owned_packet.get(), reusable_receive_packet_.get());
+            av_packet_move_ref(owned_packet.get(), reusable_video_receive_packet_.get());
             if (encoded_packet_queue_.full()) {
                 drain_mux_queue();
             }
 
-            encoded_packet_queue_.push(std::move(owned_packet));
+            encoded_packet_queue_.push(EncodedPacketQueueEntry{
+                .packet = std::move(owned_packet),
+                .stream = video_stream_,
+                .encoder_time_base = video_plan_.time_base
+            });
+        }
+    }
+
+    void drain_audio_encoder_into_queue() {
+        while (true) {
+            const auto receive_result =
+                avcodec_receive_packet(audio_codec_context_.get(), reusable_audio_receive_packet_.get());
+            if (receive_result == AVERROR(EAGAIN) || receive_result == AVERROR_EOF) {
+                return;
+            }
+
+            if (receive_result < 0) {
+                throw std::runtime_error(
+                    "Failed to receive an encoded streaming audio packet. FFmpeg reported: " +
+                    ffmpeg_support::ffmpeg_error_to_string(receive_result)
+                );
+            }
+
+            PacketHandle owned_packet = allocate_packet();
+            av_packet_move_ref(owned_packet.get(), reusable_audio_receive_packet_.get());
+            if (encoded_packet_queue_.full()) {
+                drain_mux_queue();
+            }
+
+            encoded_packet_queue_.push(EncodedPacketQueueEntry{
+                .packet = std::move(owned_packet),
+                .stream = audio_stream_,
+                .encoder_time_base = audio_plan_->time_base
+            });
         }
     }
 
     void drain_mux_queue() {
         while (!encoded_packet_queue_.empty()) {
-            PacketHandle packet = encoded_packet_queue_.pop();
-            av_packet_rescale_ts(packet.get(), codec_context_->time_base, video_stream_->time_base);
-            packet->stream_index = video_stream_->index;
+            EncodedPacketQueueEntry queue_entry = encoded_packet_queue_.pop();
+            av_packet_rescale_ts(
+                queue_entry.packet.get(),
+                to_av_rational(queue_entry.encoder_time_base),
+                queue_entry.stream->time_base
+            );
+            queue_entry.packet->stream_index = queue_entry.stream->index;
 
-            const auto write_result = av_interleaved_write_frame(output_context_.get(), packet.get());
+            const auto write_result = av_interleaved_write_frame(output_context_.get(), queue_entry.packet.get());
             if (write_result < 0) {
                 throw std::runtime_error(
                     "Failed to mux an encoded streaming packet. FFmpeg reported: " +
@@ -1281,14 +1634,19 @@ private:
     }
 
     MediaEncodeRequest request_{};
-    VideoOutputPlan plan_{};
+    VideoOutputPlan video_plan_{};
+    std::optional<AudioOutputPlan> audio_plan_{};
     OutputFormatContextHandle output_context_{};
-    CodecContextHandle codec_context_{};
+    CodecContextHandle video_codec_context_{};
+    CodecContextHandle audio_codec_context_{};
     AVStream *video_stream_{nullptr};
-    PacketHandle reusable_receive_packet_{};
+    AVStream *audio_stream_{nullptr};
+    PacketHandle reusable_video_receive_packet_{};
+    PacketHandle reusable_audio_receive_packet_{};
     SwsContextHandle scale_context_{};
-    BoundedQueue<PacketHandle> encoded_packet_queue_;
+    BoundedQueue<EncodedPacketQueueEntry> encoded_packet_queue_;
     std::int64_t encoded_video_frame_count_{0};
+    std::int64_t encoded_audio_block_count_{0};
     bool finalized_{false};
 };
 
@@ -1323,6 +1681,95 @@ VideoOutputPlan build_video_output_plan(const timeline::TimelinePlan &timeline_p
         .frame_duration_pts = frame_duration_pts,
         .frame_duration_microseconds = rescale_to_microseconds(frame_duration_pts, timeline_plan.output_video_time_base)
     };
+}
+
+std::optional<AudioOutputPlan> build_audio_output_plan(const timeline::TimelinePlan &timeline_plan) {
+    if (!timeline_plan.output_audio_stream.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto &output_audio_stream = *timeline_plan.output_audio_stream;
+    if (output_audio_stream.sample_rate <= 0 || output_audio_stream.channel_count <= 0) {
+        throw std::runtime_error("The streaming pipeline requires a usable output audio sample rate and channel count.");
+    }
+
+    Rational time_base = output_audio_stream.timestamps.time_base;
+    if (!rational_is_positive(time_base)) {
+        time_base = Rational{
+            .numerator = 1,
+            .denominator = output_audio_stream.sample_rate
+        };
+    }
+
+    if (!rational_is_positive(time_base)) {
+        throw std::runtime_error("The streaming pipeline requires a usable output audio time base.");
+    }
+
+    return AudioOutputPlan{
+        .sample_rate = output_audio_stream.sample_rate,
+        .channel_count = output_audio_stream.channel_count,
+        .time_base = time_base,
+        .channel_layout_name = output_audio_stream.channel_layout_name
+    };
+}
+
+DecodedAudioSamples make_output_audio_block(
+    const AudioStreamInfo &output_audio_stream,
+    const DecodeNormalizationPolicy &normalization_policy,
+    const std::int64_t block_index,
+    const std::int64_t output_pts,
+    const int samples_per_channel,
+    const bool silent,
+    const std::vector<std::vector<float>> &channel_samples
+) {
+    std::vector<std::vector<float>> output_channels{};
+    if (silent) {
+        output_channels.resize(
+            static_cast<std::size_t>(output_audio_stream.channel_count),
+            std::vector<float>(static_cast<std::size_t>(samples_per_channel), 0.0F)
+        );
+    } else {
+        output_channels = channel_samples;
+    }
+
+    return DecodedAudioSamples{
+        .stream_index = output_audio_stream.stream_index,
+        .block_index = block_index,
+        .timestamp = MediaTimestamp{
+            .source_time_base = output_audio_stream.timestamps.time_base,
+            .source_pts = output_pts,
+            .source_duration = samples_per_channel,
+            .origin = TimestampOrigin::stream_cursor,
+            .start_microseconds = rescale_to_microseconds(output_pts, output_audio_stream.timestamps.time_base),
+            .duration_microseconds = rescale_to_microseconds(
+                samples_per_channel,
+                output_audio_stream.timestamps.time_base
+            )
+        },
+        .sample_rate = output_audio_stream.sample_rate,
+        .channel_count = output_audio_stream.channel_count,
+        .channel_layout_name = output_audio_stream.channel_layout_name,
+        .sample_format = normalization_policy.audio_sample_format,
+        .samples_per_channel = samples_per_channel,
+        .channel_samples = std::move(output_channels)
+    };
+}
+
+std::vector<std::vector<float>> copy_audio_block_prefix(
+    const std::vector<std::vector<float>> &channel_samples,
+    const int samples_per_channel
+) {
+    std::vector<std::vector<float>> prefix{};
+    prefix.reserve(channel_samples.size());
+    for (const auto &channel : channel_samples) {
+        if (channel.size() < static_cast<std::size_t>(samples_per_channel)) {
+            throw std::runtime_error("The streaming pipeline could not trim an audio block because its samples were incomplete.");
+        }
+
+        prefix.emplace_back(channel.begin(), channel.begin() + samples_per_channel);
+    }
+
+    return prefix;
 }
 
 void validate_video_frame_for_segment(
@@ -1390,22 +1837,6 @@ void validate_video_frame_for_segment(
     previous_pts_in_output_time_base = current_pts;
 }
 
-std::int64_t count_silence_audio_blocks(
-    const std::int64_t expected_segment_samples,
-    const DecodeNormalizationPolicy &normalization_policy
-) {
-    if (expected_segment_samples <= 0) {
-        return 0;
-    }
-
-    if (normalization_policy.audio_block_samples <= 0) {
-        throw std::runtime_error("Streaming audio validation requires a positive normalized audio block size.");
-    }
-
-    const auto block_size = static_cast<std::int64_t>(normalization_policy.audio_block_samples);
-    return (expected_segment_samples + block_size - 1) / block_size;
-}
-
 SegmentProcessResult process_segment(
     const timeline::TimelinePlan &timeline_plan,
     const timeline::TimelineSegmentPlan &segment_plan,
@@ -1416,7 +1847,8 @@ SegmentProcessResult process_segment(
     const PipelineQueueLimits &queue_limits,
     StreamingOutputSession &output_session,
     std::int64_t &next_output_frame_index,
-    std::int64_t &next_output_video_pts
+    std::int64_t &next_output_video_pts,
+    std::int64_t &next_output_audio_pts
 ) {
     SegmentProcessResult result{
         .segment_summary = timeline::TimelineSegmentSummary{
@@ -1453,7 +1885,8 @@ SegmentProcessResult process_segment(
             : 0;
     bool first_output_source_pts_initialized = false;
     std::int64_t emitted_audio_samples = 0;
-    std::int64_t actual_segment_audio_samples = 0;
+    std::int64_t decoded_segment_audio_samples = 0;
+    std::int64_t emitted_segment_audio_samples = 0;
     std::optional<std::int64_t> previous_video_pts_in_output_time_base{};
 
     if (resources.audio_decoder) {
@@ -1504,6 +1937,69 @@ SegmentProcessResult process_segment(
     const auto &main_video_stream =
         *timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info.primary_video_stream;
 
+    const auto expected_segment_audio_samples_for_emitted_video = [&]() -> std::int64_t {
+        if (!timeline_plan.output_audio_stream.has_value()) {
+            return 0;
+        }
+
+        return rescale_value(
+            result.segment_summary.video_frame_count * video_output_plan.frame_duration_pts,
+            timeline_plan.output_video_time_base,
+            timeline_plan.output_audio_stream->timestamps.time_base
+        );
+    };
+
+    const auto emit_output_audio_block = [&](
+        const DecodedAudioSamples &source_block,
+        const int samples_to_emit,
+        const bool silent
+    ) {
+        if (!timeline_plan.output_audio_stream.has_value() || samples_to_emit <= 0) {
+            return;
+        }
+
+        const auto &output_audio_stream = *timeline_plan.output_audio_stream;
+        const auto output_channels = silent
+            ? std::vector<std::vector<float>>{}
+            : copy_audio_block_prefix(source_block.channel_samples, samples_to_emit);
+        auto output_block = make_output_audio_block(
+            output_audio_stream,
+            normalization_policy,
+            result.segment_summary.audio_block_count,
+            next_output_audio_pts,
+            samples_to_emit,
+            silent,
+            output_channels
+        );
+        output_session.push_audio_block(output_block);
+        next_output_audio_pts += samples_to_emit;
+        emitted_segment_audio_samples += samples_to_emit;
+        ++result.segment_summary.audio_block_count;
+        ++result.decoded_audio_block_count;
+        if (silent) {
+            result.segment_summary.inserted_silence = true;
+        }
+    };
+
+    const auto emit_trailing_silence = [&](std::int64_t missing_samples) {
+        if (missing_samples <= 0) {
+            return;
+        }
+
+        if (normalization_policy.audio_block_samples <= 0) {
+            throw std::runtime_error("The streaming audio output path requires a positive normalized audio block size.");
+        }
+
+        while (missing_samples > 0) {
+            const int block_size = static_cast<int>(std::min<std::int64_t>(
+                missing_samples,
+                normalization_policy.audio_block_samples
+            ));
+            emit_output_audio_block(DecodedAudioSamples{}, block_size, true);
+            missing_samples -= block_size;
+        }
+    };
+
     const auto drain_composited_video_queue = [&]() {
         while (!composited_video_queue.empty()) {
             DecodedVideoFrame output_frame = composited_video_queue.pop();
@@ -1511,9 +2007,9 @@ SegmentProcessResult process_segment(
         }
     };
 
-    const auto drain_audio_queue = [&]() {
+    const auto drain_audio_queue = [&](const bool final_drain) {
         while (!decoded_audio_queue.empty()) {
-            auto ready_block = decoded_audio_queue.pop();
+            const auto &ready_block = decoded_audio_queue.front();
             const auto &output_audio_stream = *timeline_plan.output_audio_stream;
             if (ready_block.sample_format != normalization_policy.audio_sample_format ||
                 ready_block.sample_rate != output_audio_stream.sample_rate ||
@@ -1524,9 +2020,30 @@ SegmentProcessResult process_segment(
                 );
             }
 
-            actual_segment_audio_samples += ready_block.samples_per_channel;
-            ++result.segment_summary.audio_block_count;
-            ++result.decoded_audio_block_count;
+            const auto available_segment_samples =
+                expected_segment_audio_samples_for_emitted_video() - emitted_segment_audio_samples;
+            if (available_segment_samples <= 0) {
+                if (!final_drain) {
+                    break;
+                }
+
+                auto dropped_block = decoded_audio_queue.pop();
+                decoded_segment_audio_samples += dropped_block.samples_per_channel;
+                continue;
+            }
+
+            if (!final_drain &&
+                ready_block.samples_per_channel > available_segment_samples) {
+                break;
+            }
+
+            auto emitted_block = decoded_audio_queue.pop();
+            decoded_segment_audio_samples += emitted_block.samples_per_channel;
+            const int samples_to_emit = static_cast<int>(std::min<std::int64_t>(
+                emitted_block.samples_per_channel,
+                available_segment_samples
+            ));
+            emit_output_audio_block(emitted_block, samples_to_emit, false);
         }
     };
 
@@ -1585,7 +2102,7 @@ SegmentProcessResult process_segment(
 
     const auto stage_audio_block = [&](DecodedAudioSamples audio_block) {
         if (decoded_audio_queue.full()) {
-            drain_audio_queue();
+            drain_audio_queue(false);
         }
 
         decoded_audio_queue.push(std::move(audio_block));
@@ -1739,7 +2256,7 @@ SegmentProcessResult process_segment(
         }
 
         if (timeline_plan.output_audio_stream.has_value()) {
-            drain_audio_queue();
+            drain_audio_queue(false);
         }
     }
 
@@ -1779,7 +2296,7 @@ SegmentProcessResult process_segment(
 
     process_decoded_video_queue();
     if (timeline_plan.output_audio_stream.has_value()) {
-        drain_audio_queue();
+        drain_audio_queue(true);
     }
 
     result.segment_summary.duration_microseconds = rescale_to_microseconds(
@@ -1794,15 +2311,19 @@ SegmentProcessResult process_segment(
             timeline_plan.output_audio_stream->timestamps.time_base
         );
 
-        // Keep reporting audio timing expectations for summaries, but do not fail the active video-only
-        // transcode path when a real-world segment's decoded audio duration drifts from its video duration.
         if (!segment_plan.inspected_source_info.primary_audio_stream.has_value()) {
-            result.segment_summary.inserted_silence = expected_segment_samples > 0;
-            result.segment_summary.audio_block_count = count_silence_audio_blocks(
-                expected_segment_samples,
-                normalization_policy
-            );
-            result.decoded_audio_block_count = result.segment_summary.audio_block_count;
+            emit_trailing_silence(expected_segment_samples - emitted_segment_audio_samples);
+        } else {
+            if (decoded_segment_audio_samples == 0 && expected_segment_samples > 0) {
+                throw std::runtime_error(
+                    "The decoded " + std::string(timeline::to_string(segment_plan.kind)) +
+                    " segment exposed an audio stream but did not produce any audio samples."
+                );
+            }
+
+            if (emitted_segment_audio_samples < expected_segment_samples) {
+                emit_trailing_silence(expected_segment_samples - emitted_segment_audio_samples);
+            }
         }
     }
 
@@ -1854,9 +2375,11 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
 
     try {
         const VideoOutputPlan video_output_plan = build_video_output_plan(timeline_plan);
+        const auto audio_output_plan = build_audio_output_plan(timeline_plan);
         StreamingOutputSession output_session(
             request.media_encode_request,
             video_output_plan,
+            audio_output_plan,
             request.queue_limits
         );
 
@@ -1889,6 +2412,7 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
 
         std::int64_t next_output_frame_index = 0;
         std::int64_t next_output_video_pts = 0;
+        std::int64_t next_output_audio_pts = 0;
         std::int64_t decoded_video_frame_count = 0;
         std::int64_t decoded_audio_block_count = 0;
         std::int64_t subtitled_video_frame_count = 0;
@@ -1906,7 +2430,8 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
                 request.queue_limits,
                 output_session,
                 next_output_frame_index,
-                next_output_video_pts
+                next_output_video_pts,
+                next_output_audio_pts
             );
 
             timeline_summary.segments.push_back(segment_result.segment_summary);
