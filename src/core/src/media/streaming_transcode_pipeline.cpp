@@ -111,7 +111,9 @@ struct SwrContextDeleter final {
 
 using SwrContextHandle = std::unique_ptr<SwrContext, SwrContextDeleter>;
 
-constexpr std::uint64_t kEstimatedPacketSlotBytes = 512ULL * 1024ULL;
+constexpr std::uint64_t kEstimatedPacketSlotBytes = 128ULL * 1024ULL;
+constexpr std::uint64_t kInFlightRgbaSurfaceCount = 1ULL;
+constexpr std::uint64_t kEncoderWorkingSurfaceCount = 2ULL;
 
 template <typename T>
 class BoundedQueue final {
@@ -205,12 +207,6 @@ struct SegmentProcessResult final {
 
 struct EncoderSelection final {
     const char *encoder_name{""};
-};
-
-struct EncodedPacketQueueEntry final {
-    PacketHandle packet{};
-    AVStream *stream{nullptr};
-    Rational encoder_time_base{};
 };
 
 StreamingTranscodeResult make_error(std::string message, std::string actionable_hint) {
@@ -362,24 +358,21 @@ std::optional<PipelineMemoryBudget> build_memory_budget(
     }
 
     std::uint64_t estimated_peak_bytes = 0;
-    const std::uint64_t rgba_surface_count =
-        static_cast<std::uint64_t>(queue_limits.decoded_video_frame_queue_depth) +
-        static_cast<std::uint64_t>(queue_limits.composited_video_frame_queue_depth) +
-        2U;
-
     std::uint64_t rgba_surfaces_bytes = 0;
-    if (!checked_mul_u64(*rgba_frame_bytes, rgba_surface_count, rgba_surfaces_bytes) ||
+    if (!checked_mul_u64(*rgba_frame_bytes, kInFlightRgbaSurfaceCount, rgba_surfaces_bytes) ||
         !checked_add_u64(estimated_peak_bytes, rgba_surfaces_bytes, estimated_peak_bytes)) {
         return std::nullopt;
     }
 
+    std::uint64_t subtitle_scratch_bytes = 0;
     if (subtitles_present &&
-        !checked_add_u64(estimated_peak_bytes, *rgba_frame_bytes, estimated_peak_bytes)) {
+        (!checked_mul_u64(*rgba_frame_bytes, 1U, subtitle_scratch_bytes) ||
+         !checked_add_u64(estimated_peak_bytes, subtitle_scratch_bytes, estimated_peak_bytes))) {
         return std::nullopt;
     }
 
     std::uint64_t encoder_frame_bytes = 0;
-    if (!checked_mul_u64(*yuv420_frame_bytes, 2U, encoder_frame_bytes) ||
+    if (!checked_mul_u64(*yuv420_frame_bytes, kEncoderWorkingSurfaceCount, encoder_frame_bytes) ||
         !checked_add_u64(estimated_peak_bytes, encoder_frame_bytes, estimated_peak_bytes)) {
         return std::nullopt;
     }
@@ -393,30 +386,32 @@ std::optional<PipelineMemoryBudget> build_memory_budget(
         return std::nullopt;
     }
 
-    std::uint64_t packet_slots = 0;
-    if (!checked_add_u64(
-            static_cast<std::uint64_t>(queue_limits.video_packet_queue_depth),
+    std::uint64_t compressed_audio_packet_reserve_bytes = 0;
+    if (!checked_mul_u64(
             static_cast<std::uint64_t>(queue_limits.audio_packet_queue_depth),
-            packet_slots) ||
+            kEstimatedPacketSlotBytes,
+            compressed_audio_packet_reserve_bytes) ||
         !checked_add_u64(
-            packet_slots,
-            static_cast<std::uint64_t>(queue_limits.encoded_packet_queue_depth),
-            packet_slots)) {
+            estimated_peak_bytes,
+            compressed_audio_packet_reserve_bytes,
+            estimated_peak_bytes)) {
         return std::nullopt;
     }
 
-    std::uint64_t packet_queue_reserve_bytes = 0;
-    if (!checked_mul_u64(packet_slots, kEstimatedPacketSlotBytes, packet_queue_reserve_bytes) ||
-        !checked_add_u64(estimated_peak_bytes, packet_queue_reserve_bytes, estimated_peak_bytes)) {
+    std::uint64_t audio_encoder_carry_bytes = 0;
+    if (!checked_mul_u64(*audio_block_bytes, 1U, audio_encoder_carry_bytes) ||
+        !checked_add_u64(estimated_peak_bytes, audio_encoder_carry_bytes, estimated_peak_bytes)) {
         return std::nullopt;
     }
 
     return PipelineMemoryBudget{
         .queue_limits = queue_limits,
         .normalized_rgba_frame_bytes = *rgba_frame_bytes,
+        .subtitle_scratch_bytes = subtitle_scratch_bytes,
         .encoder_yuv420_frame_bytes = *yuv420_frame_bytes,
         .normalized_audio_block_bytes = *audio_block_bytes,
-        .packet_queue_reserve_bytes = packet_queue_reserve_bytes,
+        .compressed_audio_packet_reserve_bytes = compressed_audio_packet_reserve_bytes,
+        .audio_encoder_carry_bytes = audio_encoder_carry_bytes,
         .estimated_peak_bytes = estimated_peak_bytes
     };
 }
@@ -443,15 +438,6 @@ PacketHandle allocate_packet() {
     }
 
     return packet;
-}
-
-PacketHandle clone_packet(const AVPacket &packet) {
-    PacketHandle cloned_packet(av_packet_clone(&packet));
-    if (!cloned_packet) {
-        throw std::runtime_error("Failed to clone an FFmpeg packet into a bounded pipeline queue.");
-    }
-
-    return cloned_packet;
 }
 
 TimestampSeed choose_timestamp_seed(const AVFrame &frame, const std::int64_t fallback_source_pts) {
@@ -1234,13 +1220,11 @@ public:
     StreamingOutputSession(
         const MediaEncodeRequest &request,
         const VideoOutputPlan &video_plan,
-        const std::optional<AudioOutputPlan> &audio_plan,
-        const PipelineQueueLimits &queue_limits
+        const std::optional<AudioOutputPlan> &audio_plan
     )
         : request_(request),
           video_plan_(video_plan),
-          audio_plan_(audio_plan),
-          encoded_packet_queue_(queue_limits.encoded_packet_queue_depth) {
+          audio_plan_(audio_plan) {
         const auto output_path = request.output_path.lexically_normal();
         const auto output_path_string = output_path.string();
         if (output_path_string.empty()) {
@@ -1301,8 +1285,7 @@ public:
         }
 
         ++encoded_video_frame_count_;
-        drain_video_encoder_into_queue();
-        drain_mux_queue();
+        drain_video_encoder();
     }
 
     void push_audio_block(const DecodedAudioSamples &audio_block) {
@@ -1313,7 +1296,6 @@ public:
         validate_audio_block_for_output(audio_block);
         append_pending_audio_block(audio_block);
         drain_ready_audio_blocks_into_encoder(false);
-        drain_mux_queue();
     }
 
     EncodedMediaSummary finish() {
@@ -1326,7 +1308,7 @@ public:
                 );
             }
 
-            drain_video_encoder_into_queue();
+            drain_video_encoder();
             if (audio_codec_context_) {
                 drain_ready_audio_blocks_into_encoder(true);
                 const auto flush_audio_result = avcodec_send_frame(audio_codec_context_.get(), nullptr);
@@ -1337,9 +1319,8 @@ public:
                     );
                 }
 
-                drain_audio_encoder_into_queue();
+                drain_audio_encoder();
             }
-            drain_mux_queue();
 
             const auto trailer_result = av_write_trailer(output_context_.get());
             if (trailer_result < 0) {
@@ -1645,7 +1626,7 @@ private:
         }
 
         ++encoded_audio_block_count_;
-        drain_audio_encoder_into_queue();
+        drain_audio_encoder();
     }
 
     void drain_ready_audio_blocks_into_encoder(const bool final_drain) {
@@ -1678,7 +1659,29 @@ private:
         }
     }
 
-    void drain_video_encoder_into_queue() {
+    void mux_encoded_packet(
+        AVPacket &packet,
+        AVStream &stream,
+        const Rational &encoder_time_base
+    ) {
+        av_packet_rescale_ts(
+            &packet,
+            to_av_rational(encoder_time_base),
+            stream.time_base
+        );
+        packet.stream_index = stream.index;
+
+        const auto write_result = av_interleaved_write_frame(output_context_.get(), &packet);
+        av_packet_unref(&packet);
+        if (write_result < 0) {
+            throw std::runtime_error(
+                "Failed to mux an encoded streaming packet. FFmpeg reported: " +
+                ffmpeg_support::ffmpeg_error_to_string(write_result)
+            );
+        }
+    }
+
+    void drain_video_encoder() {
         while (true) {
             const auto receive_result =
                 avcodec_receive_packet(video_codec_context_.get(), reusable_video_receive_packet_.get());
@@ -1693,21 +1696,11 @@ private:
                 );
             }
 
-            PacketHandle owned_packet = allocate_packet();
-            av_packet_move_ref(owned_packet.get(), reusable_video_receive_packet_.get());
-            if (encoded_packet_queue_.full()) {
-                drain_mux_queue();
-            }
-
-            encoded_packet_queue_.push(EncodedPacketQueueEntry{
-                .packet = std::move(owned_packet),
-                .stream = video_stream_,
-                .encoder_time_base = video_plan_.time_base
-            });
+            mux_encoded_packet(*reusable_video_receive_packet_, *video_stream_, video_plan_.time_base);
         }
     }
 
-    void drain_audio_encoder_into_queue() {
+    void drain_audio_encoder() {
         while (true) {
             const auto receive_result =
                 avcodec_receive_packet(audio_codec_context_.get(), reusable_audio_receive_packet_.get());
@@ -1722,37 +1715,7 @@ private:
                 );
             }
 
-            PacketHandle owned_packet = allocate_packet();
-            av_packet_move_ref(owned_packet.get(), reusable_audio_receive_packet_.get());
-            if (encoded_packet_queue_.full()) {
-                drain_mux_queue();
-            }
-
-            encoded_packet_queue_.push(EncodedPacketQueueEntry{
-                .packet = std::move(owned_packet),
-                .stream = audio_stream_,
-                .encoder_time_base = audio_plan_->time_base
-            });
-        }
-    }
-
-    void drain_mux_queue() {
-        while (!encoded_packet_queue_.empty()) {
-            EncodedPacketQueueEntry queue_entry = encoded_packet_queue_.pop();
-            av_packet_rescale_ts(
-                queue_entry.packet.get(),
-                to_av_rational(queue_entry.encoder_time_base),
-                queue_entry.stream->time_base
-            );
-            queue_entry.packet->stream_index = queue_entry.stream->index;
-
-            const auto write_result = av_interleaved_write_frame(output_context_.get(), queue_entry.packet.get());
-            if (write_result < 0) {
-                throw std::runtime_error(
-                    "Failed to mux an encoded streaming packet. FFmpeg reported: " +
-                    ffmpeg_support::ffmpeg_error_to_string(write_result)
-                );
-            }
+            mux_encoded_packet(*reusable_audio_receive_packet_, *audio_stream_, audio_plan_->time_base);
         }
     }
 
@@ -1770,7 +1733,6 @@ private:
     std::vector<std::vector<float>> pending_audio_channels_{};
     std::optional<std::int64_t> pending_audio_start_pts_{};
     std::int64_t pending_audio_sample_count_{0};
-    BoundedQueue<EncodedPacketQueueEntry> encoded_packet_queue_;
     std::int64_t encoded_video_frame_count_{0};
     std::int64_t encoded_audio_block_count_{0};
     bool finalized_{false};
@@ -2054,10 +2016,9 @@ SegmentProcessResult process_segment(
         }
     }
 
-    BoundedQueue<PacketHandle> video_packet_queue(queue_limits.video_packet_queue_depth);
-    BoundedQueue<PacketHandle> audio_packet_queue(queue_limits.audio_packet_queue_depth);
-    BoundedQueue<DecodedVideoFrame> decoded_video_queue(queue_limits.decoded_video_frame_queue_depth);
-    BoundedQueue<DecodedVideoFrame> composited_video_queue(queue_limits.composited_video_frame_queue_depth);
+    // Audio packets can briefly outrun video cadence in normal interleaving, so keep only a small
+    // compressed-packet cushion rather than letting decoded audio blocks grow without bound.
+    BoundedQueue<PacketHandle> pending_audio_packet_queue(queue_limits.audio_packet_queue_depth);
     BoundedQueue<DecodedAudioSamples> decoded_audio_queue(queue_limits.decoded_audio_block_queue_depth);
 
     const auto &main_video_stream =
@@ -2126,13 +2087,6 @@ SegmentProcessResult process_segment(
         }
     };
 
-    const auto drain_composited_video_queue = [&]() {
-        while (!composited_video_queue.empty()) {
-            DecodedVideoFrame output_frame = composited_video_queue.pop();
-            output_session.push_frame(output_frame);
-        }
-    };
-
     const auto drain_audio_queue = [&](const bool final_drain) {
         while (!decoded_audio_queue.empty()) {
             const auto &ready_block = decoded_audio_queue.front();
@@ -2173,62 +2127,63 @@ SegmentProcessResult process_segment(
         }
     };
 
-    const auto process_decoded_video_queue = [&]() {
-        while (!decoded_video_queue.empty()) {
-            DecodedVideoFrame video_frame = decoded_video_queue.pop();
-            validate_video_frame_for_segment(
-                segment_plan.kind,
-                video_frame,
-                video_output_plan,
-                timeline_plan.output_video_time_base,
-                previous_video_pts_in_output_time_base
-            );
+    const auto process_video_frame = [&](DecodedVideoFrame video_frame) {
+        validate_video_frame_for_segment(
+            segment_plan.kind,
+            video_frame,
+            video_output_plan,
+            timeline_plan.output_video_time_base,
+            previous_video_pts_in_output_time_base
+        );
 
-            std::int64_t subtitle_timestamp_microseconds = 0;
-            if (segment_plan.subtitles_enabled && subtitle_settings.has_value()) {
-                subtitle_timestamp_microseconds =
-                    subtitle_settings->timing_mode == timeline::SubtitleTimingMode::full_output_timeline
-                        ? rescale_to_microseconds(next_output_video_pts, timeline_plan.output_video_time_base)
-                        : video_frame.timestamp.start_microseconds;
-            }
-
-            if (maybe_composite_subtitles(
-                    video_frame,
-                    subtitle_session,
-                    subtitle_settings,
-                    segment_plan.subtitles_enabled,
-                    subtitle_timestamp_microseconds)) {
-                ++result.subtitled_video_frame_count;
-            }
-
-            video_frame.stream_index = main_video_stream.stream_index;
-            video_frame.frame_index = next_output_frame_index;
-            video_frame.timestamp.source_time_base = timeline_plan.output_video_time_base;
-            video_frame.timestamp.source_pts = next_output_video_pts;
-            video_frame.timestamp.source_duration = video_output_plan.frame_duration_pts;
-            video_frame.timestamp.origin = TimestampOrigin::stream_cursor;
-            video_frame.timestamp.start_microseconds =
-                rescale_to_microseconds(next_output_video_pts, timeline_plan.output_video_time_base);
-            video_frame.timestamp.duration_microseconds = video_output_plan.frame_duration_microseconds;
-            video_frame.sample_aspect_ratio = video_output_plan.sample_aspect_ratio;
-
-            if (composited_video_queue.full()) {
-                drain_composited_video_queue();
-            }
-
-            composited_video_queue.push(std::move(video_frame));
-            ++result.segment_summary.video_frame_count;
-            ++result.decoded_video_frame_count;
-            ++next_output_frame_index;
-            next_output_video_pts += video_output_plan.frame_duration_pts;
+        std::int64_t subtitle_timestamp_microseconds = 0;
+        if (segment_plan.subtitles_enabled && subtitle_settings.has_value()) {
+            subtitle_timestamp_microseconds =
+                subtitle_settings->timing_mode == timeline::SubtitleTimingMode::full_output_timeline
+                    ? rescale_to_microseconds(next_output_video_pts, timeline_plan.output_video_time_base)
+                    : video_frame.timestamp.start_microseconds;
         }
 
-        drain_composited_video_queue();
+        if (maybe_composite_subtitles(
+                video_frame,
+                subtitle_session,
+                subtitle_settings,
+                segment_plan.subtitles_enabled,
+                subtitle_timestamp_microseconds)) {
+            ++result.subtitled_video_frame_count;
+        }
+
+        video_frame.stream_index = main_video_stream.stream_index;
+        video_frame.frame_index = next_output_frame_index;
+        video_frame.timestamp.source_time_base = timeline_plan.output_video_time_base;
+        video_frame.timestamp.source_pts = next_output_video_pts;
+        video_frame.timestamp.source_duration = video_output_plan.frame_duration_pts;
+        video_frame.timestamp.origin = TimestampOrigin::stream_cursor;
+        video_frame.timestamp.start_microseconds =
+            rescale_to_microseconds(next_output_video_pts, timeline_plan.output_video_time_base);
+        video_frame.timestamp.duration_microseconds = video_output_plan.frame_duration_microseconds;
+        video_frame.sample_aspect_ratio = video_output_plan.sample_aspect_ratio;
+
+        output_session.push_frame(video_frame);
+        ++result.segment_summary.video_frame_count;
+        ++result.decoded_video_frame_count;
+        ++next_output_frame_index;
+        next_output_video_pts += video_output_plan.frame_duration_pts;
+
+        if (timeline_plan.output_audio_stream.has_value()) {
+            drain_audio_queue(false);
+        }
     };
 
     const auto stage_audio_block = [&](DecodedAudioSamples audio_block) {
         if (decoded_audio_queue.full()) {
             drain_audio_queue(false);
+        }
+
+        if (decoded_audio_queue.full()) {
+            throw std::runtime_error(
+                "The streaming audio pipeline exhausted its decoded-audio queue before video cadence advanced."
+            );
         }
 
         decoded_audio_queue.push(std::move(audio_block));
@@ -2265,15 +2220,6 @@ SegmentProcessResult process_segment(
         }
     };
 
-    const auto stage_video_frame = [&](DecodedVideoFrame video_frame) {
-        if (decoded_video_queue.full()) {
-            process_decoded_video_queue();
-        }
-
-        decoded_video_queue.push(std::move(video_frame));
-        process_decoded_video_queue();
-    };
-
     const auto receive_video_frames = [&]() {
         std::int64_t decoded_frame_index = result.decoded_video_frame_count;
         while (true) {
@@ -2305,7 +2251,7 @@ SegmentProcessResult process_segment(
             normalized_frame.timestamp.source_duration = fallback_video_duration_pts;
             normalized_frame.timestamp.duration_microseconds =
                 rescale_to_microseconds(fallback_video_duration_pts, normalized_frame.timestamp.source_time_base);
-            stage_video_frame(std::move(normalized_frame));
+            process_video_frame(std::move(normalized_frame));
             ++decoded_frame_index;
             av_frame_unref(decoded_video_frame.get());
         }
@@ -2349,40 +2295,49 @@ SegmentProcessResult process_segment(
         }
     };
 
+    const auto flush_pending_audio_packets = [&]() {
+        while (!pending_audio_packet_queue.empty()) {
+            if (decoded_audio_queue.full()) {
+                drain_audio_queue(false);
+                if (decoded_audio_queue.full()) {
+                    return;
+                }
+            }
+
+            PacketHandle packet = pending_audio_packet_queue.pop();
+            send_packet_or_throw(*resources.audio_decoder, packet.get());
+            receive_audio_frames();
+        }
+    };
+
     while (av_read_frame(resources.format_context.get(), demux_packet.get()) >= 0) {
         if (demux_packet->stream_index == segment_plan.inspected_source_info.primary_video_stream->stream_index) {
-            if (video_packet_queue.full()) {
-                send_packet_or_throw(*resources.video_decoder, video_packet_queue.pop().get());
-                receive_video_frames();
-            }
-
-            video_packet_queue.push(clone_packet(*demux_packet));
+            send_packet_or_throw(*resources.video_decoder, demux_packet.get());
+            receive_video_frames();
         } else if (resources.audio_decoder &&
                    demux_packet->stream_index == segment_plan.inspected_source_info.primary_audio_stream->stream_index) {
-            if (audio_packet_queue.full()) {
-                send_packet_or_throw(*resources.audio_decoder, audio_packet_queue.pop().get());
-                receive_audio_frames();
+            if (pending_audio_packet_queue.full()) {
+                drain_audio_queue(false);
+                flush_pending_audio_packets();
             }
 
-            audio_packet_queue.push(clone_packet(*demux_packet));
+            if (pending_audio_packet_queue.full()) {
+                throw std::runtime_error(
+                    "The streaming audio pipeline exhausted its compressed-audio packet queue before video cadence advanced."
+                );
+            }
+
+            auto queued_packet = allocate_packet();
+            av_packet_move_ref(queued_packet.get(), demux_packet.get());
+            pending_audio_packet_queue.push(std::move(queued_packet));
+            flush_pending_audio_packets();
         }
 
         av_packet_unref(demux_packet.get());
 
-        while (!video_packet_queue.empty()) {
-            PacketHandle packet = video_packet_queue.pop();
-            send_packet_or_throw(*resources.video_decoder, packet.get());
-            receive_video_frames();
-        }
-
-        while (!audio_packet_queue.empty()) {
-            PacketHandle packet = audio_packet_queue.pop();
-            send_packet_or_throw(*resources.audio_decoder, packet.get());
-            receive_audio_frames();
-        }
-
         if (timeline_plan.output_audio_stream.has_value()) {
             drain_audio_queue(false);
+            flush_pending_audio_packets();
         }
     }
 
@@ -2390,6 +2345,7 @@ SegmentProcessResult process_segment(
     receive_video_frames();
 
     if (resources.audio_decoder) {
+        flush_pending_audio_packets();
         send_packet_or_throw(*resources.audio_decoder, nullptr);
         receive_audio_frames();
 
@@ -2420,7 +2376,6 @@ SegmentProcessResult process_segment(
         }
     }
 
-    process_decoded_video_queue();
     if (timeline_plan.output_audio_stream.has_value()) {
         drain_audio_queue(true);
     }
@@ -2505,8 +2460,7 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
         StreamingOutputSession output_session(
             request.media_encode_request,
             video_output_plan,
-            audio_output_plan,
-            request.queue_limits
+            audio_output_plan
         );
 
         std::unique_ptr<subtitles::SubtitleRenderSession> subtitle_session{};

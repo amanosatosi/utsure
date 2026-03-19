@@ -2,17 +2,16 @@
 
 This document describes the active encode path used by `EncodeJobRunner`.
 
-## Goal
+## Foundation
 
-The encode path now runs as a bounded-memory streaming pipeline instead of decoding, compositing, and storing whole clips in RAM.
+The active transcoder is intentionally pinned to FFmpeg `7.1.x` and uses only the core libraries that the current app pipeline needs:
 
-The active stages are:
+- `libavformat` for demux and mux
+- `libavcodec` for decode and encode
+- `libswscale` for video normalization and encoder pixel-format conversion
+- `libswresample` for audio normalization
 
-1. Demux packets from one segment input at a time.
-2. Decode video and audio incrementally from bounded packet queues.
-3. Composite subtitles per video frame at streaming time.
-4. Encode video and audio incrementally.
-5. Mux encoded packets incrementally.
+`libavfilter` is not part of the active dependency surface. Subtitle burn-in stays inside the app through the subtitle renderer/compositor boundary.
 
 The old full-buffer helpers still exist for isolated decode/report tests, but the job runner no longer uses:
 
@@ -20,106 +19,110 @@ The old full-buffer helpers still exist for isolated decode/report tests, but th
 - `TimelineComposer::compose(...)`
 - `subtitles::burn_in::apply(...)`
 
-## Segment Model
+## Segment Flow
 
-Intro, main, and outro clips are still assembled by `TimelineAssembler`, but they are processed sequentially.
+Intro, main, and outro clips are still assembled by `TimelineAssembler`, but they are processed sequentially through one streaming output session:
 
-The streaming runner:
+1. Build one output muxer plus video/audio encoders from the main-segment cadence and output settings.
+2. Open one input segment at a time with `libavformat`.
+3. Demux packets incrementally.
+4. Decode video/audio frames incrementally with `libavcodec`.
+5. Normalize video to RGBA with `libswscale` and audio to planar float with `libswresample`.
+6. Render and composite subtitle bitmaps onto each video frame inside the app when the segment/timing mode requires it.
+7. Encode video/audio incrementally.
+8. Mux packets incrementally with `av_interleaved_write_frame(...)`.
+9. Finalize the muxer after the last segment.
 
-1. Opens the output encoder and muxer once from the main-segment cadence and output settings.
-2. Streams the intro segment through the pipeline.
-3. Streams the main segment through the same pipeline.
-4. Streams the outro segment through the same pipeline.
-5. Finalizes the encoder and muxer.
+Decoded media from earlier segments is never retained after that segment has cleared the downstream stage boundaries.
 
-Decoded media from earlier segments is never retained after that segment has cleared the downstream queues.
+## Bounded Buffers
 
-## Queue Limits
+The current bounded state comes from `media::streaming::kDefaultPipelineQueueLimits`:
 
-The active queue depths come from `media::streaming::kDefaultPipelineQueueLimits`:
+- Pending compressed audio packet queue: `32`
+- Decoded normalized audio block queue: `8`
 
-- Video packet queue: `16`
-- Audio packet queue: `16`
-- Decoded video frame queue: `2`
-- Composited video frame queue: `2`
-- Decoded audio block queue: `8`
-- Encoded packet queue: `16`
+Video is now a direct synchronous path inside the single-threaded loop:
 
-These are ownership boundaries, not advisory targets. Each queue owns the items moved into it until the downstream stage pops them.
+- demux packet
+- decode frame
+- normalize to RGBA
+- optionally subtitle-composite
+- encode
+- mux
 
-## Lifetime Rules
+There is no longer a separate bounded queue for video packets, decoded video frames, composited video frames, or encoded mux packets in the active path.
 
-Frame and packet lifetime is explicit:
+The compressed-audio packet queue exists only to prevent audio decode from outrunning the video-timed audio budget when interleaved packet order temporarily favors audio.
 
-- Demux owns compressed packets until they are moved into a packet queue.
-- A packet queue owns each packet until decode pops it and sends it to FFmpeg.
-- Decode owns the temporary FFmpeg frame only until normalization finishes.
-- The decoded-video queue owns a normalized `DecodedVideoFrame` until the composite stage pops it.
-- The decoded-audio queue owns a normalized `DecodedAudioSamples` block until the audio output stage pops it.
-- The composite stage mutates the frame in place, rebases its output timestamp, and moves it into the composited-video queue.
-- The composited-video queue owns that frame until encode pops it.
-- Encode converts the RGBA frame to a temporary YUV frame, sends it to the codec, then the RGBA frame is destroyed when the local variable leaves scope.
-- The audio output stage rebases decoded audio blocks onto the output audio timeline, buffers at most one encoder-frame worth of carry samples across segment boundaries, sends encoder-sized frames downstream, and then destroys the normalized block data after handoff.
-- The encoded-packet queue owns muxable packets until mux pops and writes them.
+## Allocation And Release
 
-In practice, frame memory is released at three points:
+### Video
 
-- After a packet has been decoded and the temporary FFmpeg decode frame is unreferenced.
-- After a composited `DecodedVideoFrame` is encoded and falls out of scope in the encode stage.
-- After a rebased `DecodedAudioSamples` block is encoded and falls out of scope in the audio encode stage.
-- After an encoded packet is muxed and its owning packet handle is destroyed.
+For each decoded video frame:
 
-## Memory Budget
+1. `avcodec_receive_frame(...)` fills a reusable FFmpeg decode frame.
+2. `normalize_video_frame(...)` allocates one temporary RGBA `AVFrame`, copies its bytes into one owned `DecodedVideoFrame`, and unrefs the temporary FFmpeg frame.
+3. Subtitle composition mutates that owned RGBA frame in place.
+4. `StreamingOutputSession::build_encoded_video_frame(...)` allocates one YUV encoder frame, uses `sws_scale(...)`, sends it to the encoder, and releases it after the send/drain step.
+5. `avcodec_receive_packet(...)` fills a reusable packet, `av_interleaved_write_frame(...)` muxes it, and `av_packet_unref(...)` releases packet storage immediately.
 
-The old guard scaled memory with full clip duration. The new guard scales with queue depth.
+### Audio
 
-The new estimate is built from:
+For each decoded audio frame:
 
-- RGBA frame bytes for the main resolution
-- YUV420 encoder frame bytes for the main resolution
-- Audio block bytes for one normalized audio block
-- Fixed packet-queue reserve bytes
-- Queue depths listed above
+1. `avcodec_receive_frame(...)` fills a reusable FFmpeg audio decode frame.
+2. `resample_audio_frame(...)` converts it to planar-float channel vectors.
+3. Normalized samples accumulate into bounded decoded-audio blocks.
+4. When enough output-timeline audio budget exists, a rebased `DecodedAudioSamples` block is built and passed to the audio encoder.
+5. `StreamingOutputSession::build_encoded_audio_frame(...)` allocates an encoder input frame, copies planar floats into FFmpeg-owned buffers, sends it to the encoder, and releases it after the send/drain step.
+6. Encoded audio packets are muxed immediately and unreffed immediately.
 
-The estimate does not multiply by segment duration or by total frame count.
+### Subtitle Tiles
 
-Current estimate formula:
+Subtitle tiles are owned only for one frame render/composite pass:
 
-- RGBA surfaces: `(decoded_video_queue + composited_video_queue + 2 in-flight surfaces) * rgba_frame_bytes`
-- Subtitle scratch: `+ rgba_frame_bytes` when subtitles are enabled
-- Encoder surfaces: `2 * yuv420_frame_bytes`
-- Audio queue: `decoded_audio_block_queue * audio_block_bytes`
-- Audio encoder carry buffer: `+ 1 * audio_block_bytes`
-- Packet reserve: `(video_packets + audio_packets + encoded_packets) * 512 KiB`
+1. `ass_render_frame_rgba(...)` returns libassmod-owned RGBA images.
+2. The adapter copies each image into an owned `SubtitleBitmap`.
+3. `ass_free_images_rgba(...)` releases the libassmod allocation immediately after the copy.
+4. `subtitle_bitmap_compositor.cpp` blends the copied premultiplied RGBA bitmaps into the current frame.
+5. The subtitle bitmap vectors are destroyed after that frame is encoded.
 
-That keeps peak memory roughly proportional to resolution and queue depth, not clip length.
+## Audio Rules
 
-For a 1920x1080 job with the default queue depths:
+The active streaming path emits muxed audio when `TimelinePlan.output_audio_stream` is present.
 
-- No subtitles, no audio: about `77.39 MiB`
-- Subtitles enabled, no audio: about `85.30 MiB`
-- Stereo 48 kHz audio adds only about `64 KiB` for the audio-block queue
+Rules:
 
-## Why The Old Path Reported About 66.77 GiB
+- If a segment has no audio stream but the output timeline does, bounded silence blocks are synthesized for that segment.
+- If decoded segment audio exceeds the video-defined segment duration, the final drain trims the overflow instead of extending the output timeline.
+- If decoded segment audio falls short of the expected segment duration, the pipeline pads the tail with silence.
+- If the output container, audio encoder, sample rate, or channel layout is unsupported, the job fails clearly instead of silently dropping audio.
 
-The previous guard in `encode_job_working_set_guard.hpp` estimated whole-clip decoded storage and then multiplied it by pipeline copies.
+## Subtitle Path
 
-For a 1920x1080, 24 fps, about 90 second job with subtitles:
+Subtitle rendering stays behind the existing abstraction. The active libassmod adapter uses the RGBA-capable path unconditionally for rendered frames so RGBA-only effects are not forced back through the old `ASS_Image` bitmap flow.
 
-- One decoded RGBA frame = `1920 * 1080 * 4 = 8,294,400` bytes
-- About `90 * 24 = 2160` frames
-- One full decoded clip = `8,294,400 * 2160 = 17,915,904,000` bytes, about `16.69 GiB`
+The libassmod calls currently used in the adapter are:
 
-The old guard then assumed:
+- `ass_library_init`
+- `ass_set_extract_fonts`
+- `ass_renderer_init`
+- `ass_set_frame_size`
+- `ass_set_storage_size`
+- `ass_set_pixel_aspect`
+- `ass_set_margins`
+- `ass_set_use_margins`
+- `ass_set_fonts`
+- `ass_read_file`
+- `ass_render_frame_rgba`
+- `ass_free_images_rgba`
+- `ass_clear_tag_images`
+- `ass_renderer_done`
+- `ass_free_track`
+- `ass_library_done`
 
-- Full decoded segments in memory: `+16.69 GiB`
-- Another full decoded copy for composed timeline output: `+16.69 GiB`
-- Another full decoded copy for encode input staging: `+16.69 GiB`
-- Another full decoded copy for subtitle burn-in target when subtitles were enabled: `+16.69 GiB`
-
-Total: about `66.75 GiB`, which matches the reported `~66.77 GiB` once container-duration rounding is included.
-
-The important flaw was architectural, not arithmetic: the estimate grew linearly with full clip duration because the pipeline really did keep whole decoded clips alive.
+The compositor expects premultiplied RGBA subtitle tiles and blends them into RGBA video frames with source-over math in premultiplied space.
 
 ## Cadence Rules
 
@@ -127,51 +130,55 @@ The output frame rate still comes from the main source.
 
 The streaming pipeline enforces this by:
 
-- Building the output encoder from `TimelinePlan.output_frame_rate` and `TimelinePlan.output_video_time_base`
-- Validating every streamed frame duration against the main cadence after rescaling into the output time base
-- Validating inter-frame timestamp deltas per segment
-- Rebasing output frame timestamps onto a single monotonically increasing output timeline
+- building the output encoder from `TimelinePlan.output_frame_rate` and `TimelinePlan.output_video_time_base`
+- validating every streamed frame duration against the main cadence after rescaling into the output time base
+- validating inter-frame timestamp deltas per segment
+- rebasing output frame timestamps onto a single monotonically increasing output timeline
 
-## Subtitle Timing
+FFmpeg 7.1-specific implementation choices:
 
-The subtitle renderer stays behind the existing abstraction boundary.
+- output video time base is chosen from the inverse authoritative frame rate when the container stream time base is too coarse for exact CFR validation
+- channel-layout handling uses `AVChannelLayout`-based APIs that are available in FFmpeg 7.1
+- audio normalization uses `swr_alloc_set_opts2(...)`, which matches the FFmpeg 7.1 channel-layout model
 
-The streaming runner creates one subtitle render session and uses it per frame:
+## Memory Budget
 
-- `main_segment_only`: render timestamps come from the main segment's decoded frame timestamps
-- `full_output_timeline`: render timestamps come from the rebased output-timeline timestamps, so intro and outro frames participate too
+The working-set estimate now scales with queue depth and in-flight surfaces, not clip duration.
 
-No full subtitle-burned clip is created anymore. Bitmaps are rendered, composited into one frame, encoded, and then released.
+Current estimate formula:
 
-## Audio Path
+- one in-flight owned RGBA video surface
+- `+ rgba_frame_bytes` subtitle scratch when subtitles are enabled
+- `2 * yuv420_frame_bytes` for encoder-side working surfaces
+- `decoded_audio_block_queue * audio_block_bytes`
+- `audio_packet_queue * 128 KiB` compressed-audio reserve
+- `1 * audio_block_bytes` for the audio encoder carry buffer
 
-The active streaming path now emits muxed audio when `TimelinePlan.output_audio_stream` is present.
+That keeps peak memory proportional to resolution plus the small bounded audio queues, not to total clip length.
 
-The audio flow is:
+## GitHub Actions Validation
 
-1. Demux compressed packets from the selected segment audio stream.
-2. Decode audio frames incrementally.
-3. Normalize decoded audio into planar-float blocks at the timeline sample rate and channel count.
-4. Hold only a bounded decoded-audio queue until enough video cadence has been emitted for the corresponding output-time audio budget.
-5. Rebase audio block timestamps onto the monotonic output audio timeline.
-6. Feed rebased blocks into the AAC encoder.
-7. Mux encoded audio packets through the same encoded-packet queue used by video.
+The Windows GitHub Actions job should verify:
 
-Segment sequencing follows the same intro/main/outro order as video:
+1. dependency audit succeeds with FFmpeg `7.1.x`, `libx264`, `libx265`, and the pinned `libassmod` prefix
+2. CMake configure/build succeeds without requiring `libavfilter`
+3. core tests still cover inspection, decode, legacy encode helpers, timeline assembly, encode-job streaming output, subtitle rendering, subtitle composition, and subtitle burn-in
+4. audio-bearing encode-job outputs still contain synchronized audio streams
+5. RGBA-capable libassmod subtitle scripts still render and burn in correctly
+6. the packaged Windows bundle still launches
 
-- If a segment has no audio stream but the output timeline does, the pipeline synthesizes bounded silence blocks for that segment.
-- If a segment decodes more audio than its video duration at the main cadence allows, the final drain trims the overflow instead of extending the output timeline.
-- If a segment decodes less audio than required for its video duration, the pipeline pads the tail with silence so the next segment stays in sync.
-- If the output container, audio encoder, sample rate, or channel layout is unsupported, the job fails clearly instead of silently dropping audio.
+## Remaining Limits
 
-The regression that caused silent output during the streaming refactor was architectural: audio decode and normalization were still active, but the output session only created a video stream and the segment processor only counted decoded audio blocks instead of sending them to an audio encoder and muxer.
+- Host-side `\img` resource registration is still not wired. Scripts that reference `\img` fail explicitly during subtitle-session creation.
+- The active output audio encoder is AAC-only.
+- Hardware-accelerated decode/encode is not part of this slice.
 
 ## Maintenance Notes
 
 When changing this pipeline:
 
-- Keep queue ownership single-owner and move-only.
-- Do not reintroduce vectors of whole decoded segments into the active job path.
-- Keep subtitle rendering on the frame path, not as a pre-rendered clip transform.
-- Keep segment sequencing generic so intro/main/outro all use the same pipeline code.
-- If queue depths change, update both `kDefaultPipelineQueueLimits` and the memory-budget explanation above.
+- keep queue ownership single-owner and move-only
+- do not reintroduce vectors of whole decoded segments into the active job path
+- keep subtitle rendering on the frame path, not as a pre-rendered clip transform
+- keep segment sequencing generic so intro/main/outro all use the same pipeline code
+- if queue depths or packet reserves change, update both `kDefaultPipelineQueueLimits` and the memory-budget explanation above

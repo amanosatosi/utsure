@@ -47,11 +47,11 @@ The packaging entry point is `scripts/ci/windows-msys2-package-portable.sh`.
 - No code signing is wired into CI.
 - The smoke test proves launchability, not full encode validation on a clean machine.
 - Linux and macOS packaging are not implemented.
-- Audio output encode is still not part of the shipped pipeline.
+- libassmod `\img` host-side resource registration is still not part of the shipped pipeline.
 
 ## What GitHub Actions should continue to verify
 
 - configure and build the core library, app, and test executables
-- run the core pipeline tests, including preflight, timeline, encode, and subtitle-burn paths
+- run the core pipeline tests, including preflight, timeline, audio-bearing streaming encode, and subtitle-burn paths
 - launch the Qt Widgets app in offscreen smoke-test mode
 - package the portable bundle, extract it, and launch it again outside the build tree

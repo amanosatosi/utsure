@@ -74,10 +74,12 @@ UTSURE_CMAKE_BUILD_TYPE=Release ./scripts/ci/windows-msys2-build.sh
 - `UTSURE_LIBASSMOD_ROOT` should point at `.deps/libassmod/prefix` if you invoke CMake manually.
 - `PKG_CONFIG_PATH` must resolve `libass` from the `libassmod` prefix before any system `libass`.
 - `CMAKE_PREFIX_PATH` should include `/ucrt64` for the MSYS2 Qt and FFmpeg packages.
+- Configure now fails if the discovered FFmpeg core libraries are outside the supported `7.1.x` series.
 
 ## Current limits
 
 - GitHub Actions is still the authoritative source of build verification for this repository state.
 - The supported local path is Windows-first via MSYS2 UCRT64.
 - The only documented release output today is the portable Windows bundle.
-- Large jobs can now be rejected during preflight if the current in-memory decode/compose pipeline is estimated to exceed its safety limit.
+- Large jobs can still be rejected during preflight if the bounded-memory streaming pipeline estimate exceeds its safety limit.
+- libassmod `\img` subtitle scripts still require future host-side image registration and currently fail explicitly.

@@ -1,6 +1,8 @@
 include_guard(GLOBAL)
 
 set(UTSURE_QT_MIN_VERSION "6.5" CACHE STRING "Minimum supported Qt 6 version.")
+set(UTSURE_FFMPEG_REQUIRED_SERIES "7.1" CACHE STRING "Required FFmpeg major.minor series for the active media pipeline.")
+set(UTSURE_FFMPEG_NEXT_UNTESTED_SERIES "7.2" CACHE STRING "First FFmpeg series outside the currently supported range.")
 option(UTSURE_ENABLE_DEPENDENCY_AUDIT "Verify the planned external dependency stack at configure time." ON)
 option(UTSURE_REQUIRE_LIBASSMOD "Require libassmod to be available during dependency audit." ON)
 set(
@@ -33,6 +35,22 @@ function(utsure_resolve_existing_path output_variable input_path)
     set(${output_variable} "${_resolved_path}" PARENT_SCOPE)
 endfunction()
 
+function(utsure_require_ffmpeg_series component_name component_version)
+    if("${component_version}" STREQUAL "")
+        message(FATAL_ERROR
+            "FFmpeg component '${component_name}' did not report a version through pkg-config."
+        )
+    endif()
+
+    if(NOT "${component_version}" VERSION_GREATER_EQUAL "${UTSURE_FFMPEG_REQUIRED_SERIES}" OR
+       "${component_version}" VERSION_GREATER_EQUAL "${UTSURE_FFMPEG_NEXT_UNTESTED_SERIES}")
+        message(FATAL_ERROR
+            "FFmpeg component '${component_name}' resolved to version '${component_version}', but this project is "
+            "pinned to the FFmpeg ${UTSURE_FFMPEG_REQUIRED_SERIES}.x series."
+        )
+    endif()
+endfunction()
+
 macro(utsure_configure_dependencies)
     if(UTSURE_BUILD_APP)
         find_package(Qt6 ${UTSURE_QT_MIN_VERSION} REQUIRED COMPONENTS Widgets)
@@ -44,7 +62,6 @@ macro(utsure_configure_dependencies)
         find_package(PkgConfig REQUIRED)
 
         pkg_check_modules(UTSURE_LIBAVCODEC REQUIRED IMPORTED_TARGET GLOBAL libavcodec)
-        pkg_check_modules(UTSURE_LIBAVFILTER REQUIRED IMPORTED_TARGET GLOBAL libavfilter)
         pkg_check_modules(UTSURE_LIBAVFORMAT REQUIRED IMPORTED_TARGET GLOBAL libavformat)
         pkg_check_modules(UTSURE_LIBAVUTIL REQUIRED IMPORTED_TARGET GLOBAL libavutil)
         pkg_check_modules(UTSURE_LIBSWRESAMPLE REQUIRED IMPORTED_TARGET GLOBAL libswresample)
@@ -52,13 +69,18 @@ macro(utsure_configure_dependencies)
         pkg_check_modules(UTSURE_X264 REQUIRED IMPORTED_TARGET GLOBAL x264)
         pkg_check_modules(UTSURE_X265 REQUIRED IMPORTED_TARGET GLOBAL x265)
 
+        utsure_require_ffmpeg_series("libavcodec" "${UTSURE_LIBAVCODEC_VERSION}")
+        utsure_require_ffmpeg_series("libavformat" "${UTSURE_LIBAVFORMAT_VERSION}")
+        utsure_require_ffmpeg_series("libavutil" "${UTSURE_LIBAVUTIL_VERSION}")
+        utsure_require_ffmpeg_series("libswresample" "${UTSURE_LIBSWRESAMPLE_VERSION}")
+        utsure_require_ffmpeg_series("libswscale" "${UTSURE_LIBSWSCALE_VERSION}")
+
         if(NOT TARGET utsure_ffmpeg)
             add_library(utsure_ffmpeg INTERFACE)
             add_library(utsure::ffmpeg ALIAS utsure_ffmpeg)
             target_link_libraries(utsure_ffmpeg
                 INTERFACE
                     PkgConfig::UTSURE_LIBAVCODEC
-                    PkgConfig::UTSURE_LIBAVFILTER
                     PkgConfig::UTSURE_LIBAVFORMAT
                     PkgConfig::UTSURE_LIBAVUTIL
                     PkgConfig::UTSURE_LIBSWRESAMPLE
@@ -153,7 +175,6 @@ macro(utsure_configure_dependencies)
             message(STATUS "  Qt6 Widgets: found via CMake package config")
         endif()
         message(STATUS "  FFmpeg libavcodec: ${UTSURE_LIBAVCODEC_VERSION}")
-        message(STATUS "  FFmpeg libavfilter: ${UTSURE_LIBAVFILTER_VERSION}")
         message(STATUS "  FFmpeg libavformat: ${UTSURE_LIBAVFORMAT_VERSION}")
         message(STATUS "  FFmpeg libavutil: ${UTSURE_LIBAVUTIL_VERSION}")
         message(STATUS "  FFmpeg libswresample: ${UTSURE_LIBSWRESAMPLE_VERSION}")
