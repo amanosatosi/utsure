@@ -1868,7 +1868,7 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
             auto session_result = create_subtitle_session(
                 *request.subtitle_renderer,
                 timeline_plan,
-                *request.subtitle_settings
+                request.subtitle_settings->value()
             );
             if (!session_result.succeeded()) {
                 return make_error(
