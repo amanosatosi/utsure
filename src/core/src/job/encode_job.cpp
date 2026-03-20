@@ -5,6 +5,7 @@
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 #include "utsure/core/timeline/timeline.hpp"
 
+#include <algorithm>
 #include <exception>
 #include <memory>
 #include <optional>
@@ -40,6 +41,10 @@ int calculate_total_steps(const EncodeJob &job) {
     return total_steps;
 }
 
+double clamp_fraction(const double value) {
+    return std::clamp(value, 0.0, 1.0);
+}
+
 void notify_progress(
     EncodeJobTelemetry &telemetry,
     const EncodeJobStage stage,
@@ -58,6 +63,45 @@ void notify_progress(
     });
 }
 
+void notify_encode_progress(
+    EncodeJobTelemetry &telemetry,
+    const media::streaming::StreamingEncodeProgress &streaming_progress
+) {
+    if (telemetry.observer == nullptr) {
+        return;
+    }
+
+    const double stage_fraction = clamp_fraction(streaming_progress.stage_fraction);
+    const double overall_fraction = telemetry.total_steps > 0
+        ? clamp_fraction(
+            (static_cast<double>(std::max(telemetry.current_step - 1, 0)) + stage_fraction) /
+            static_cast<double>(telemetry.total_steps)
+        )
+        : stage_fraction;
+
+    telemetry.observer->on_progress(EncodeJobProgress{
+        .stage = EncodeJobStage::encoding_output,
+        .current_step = telemetry.current_step,
+        .total_steps = telemetry.total_steps,
+        .message = "Encoding output...",
+        .overall_fraction = overall_fraction,
+        .stage_fraction = stage_fraction,
+        .encoded_video_frames = streaming_progress.encoded_video_frames > 0
+            ? std::optional<std::uint64_t>(streaming_progress.encoded_video_frames)
+            : std::nullopt,
+        .total_video_frames = streaming_progress.total_video_frames > 0
+            ? std::optional<std::uint64_t>(streaming_progress.total_video_frames)
+            : std::nullopt,
+        .encoded_video_duration_us = streaming_progress.encoded_video_duration_us > 0
+            ? std::optional<std::int64_t>(streaming_progress.encoded_video_duration_us)
+            : std::nullopt,
+        .total_video_duration_us = streaming_progress.total_video_duration_us > 0
+            ? std::optional<std::int64_t>(streaming_progress.total_video_duration_us)
+            : std::nullopt,
+        .encoded_fps = streaming_progress.encoded_fps
+    });
+}
+
 void notify_final_progress(EncodeJobTelemetry &telemetry, std::string message) {
     if (telemetry.observer == nullptr) {
         return;
@@ -67,7 +111,8 @@ void notify_final_progress(EncodeJobTelemetry &telemetry, std::string message) {
         .stage = EncodeJobStage::completed,
         .current_step = telemetry.total_steps,
         .total_steps = telemetry.total_steps,
-        .message = std::move(message)
+        .message = std::move(message),
+        .overall_fraction = 1.0
     });
 }
 
@@ -307,7 +352,10 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                 .subtitle_settings = &job.subtitles,
                 .media_encode_request = build_media_encode_request(job),
                 .normalization_policy = options.decode_normalization_policy,
-                .subtitle_renderer = subtitle_renderer.get()
+                .subtitle_renderer = subtitle_renderer.get(),
+                .progress_callback = [&telemetry](const media::streaming::StreamingEncodeProgress &progress) {
+                    notify_encode_progress(telemetry, progress);
+                }
             }
         );
         if (!streaming_result.succeeded()) {

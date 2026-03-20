@@ -12,6 +12,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -247,6 +248,12 @@ struct EncoderSelection final {
     const char *encoder_name{""};
 };
 
+struct EstimatedVideoProgressTotals final {
+    std::uint64_t total_video_frames{0};
+    std::int64_t total_video_duration_pts{0};
+    std::int64_t total_video_duration_us{0};
+};
+
 StreamingTranscodeResult make_error(std::string message, std::string actionable_hint) {
     return StreamingTranscodeResult{
         .summary = std::nullopt,
@@ -266,6 +273,10 @@ AVRational to_av_rational(const Rational &value) {
 
 bool rational_is_positive(const Rational &value) {
     return value.is_valid() && value.numerator > 0 && value.denominator > 0;
+}
+
+double clamp_progress_fraction(const double value) {
+    return std::clamp(value, 0.0, 1.0);
 }
 
 bool rationals_equal(const Rational &left, const Rational &right) {
@@ -545,6 +556,257 @@ std::int64_t compute_frame_duration_pts(const Rational &frame_rate, const Ration
 
     return frame_duration_pts;
 }
+
+std::optional<std::int64_t> estimate_segment_duration_pts(
+    const timeline::TimelineSegmentPlan &segment_plan,
+    const Rational &output_video_time_base,
+    const Rational &output_frame_rate
+) {
+    if (!segment_plan.inspected_source_info.primary_video_stream.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto &video_stream = *segment_plan.inspected_source_info.primary_video_stream;
+    if (video_stream.timestamps.duration_pts.has_value() &&
+        *video_stream.timestamps.duration_pts > 0 &&
+        rational_is_positive(video_stream.timestamps.time_base)) {
+        const auto duration_pts = rescale_value(
+            *video_stream.timestamps.duration_pts,
+            video_stream.timestamps.time_base,
+            output_video_time_base
+        );
+        if (duration_pts > 0) {
+            return duration_pts;
+        }
+    }
+
+    if (video_stream.frame_count.has_value() &&
+        *video_stream.frame_count > 0 &&
+        rational_is_positive(output_frame_rate)) {
+        const auto duration_pts = av_rescale_q(
+            *video_stream.frame_count,
+            av_inv_q(to_av_rational(output_frame_rate)),
+            to_av_rational(output_video_time_base)
+        );
+        if (duration_pts > 0) {
+            return duration_pts;
+        }
+    }
+
+    if (segment_plan.inspected_source_info.container_duration_microseconds.has_value() &&
+        *segment_plan.inspected_source_info.container_duration_microseconds > 0) {
+        const auto duration_pts = av_rescale_q(
+            *segment_plan.inspected_source_info.container_duration_microseconds,
+            AV_TIME_BASE_Q,
+            to_av_rational(output_video_time_base)
+        );
+        if (duration_pts > 0) {
+            return duration_pts;
+        }
+    }
+
+    return std::nullopt;
+}
+
+EstimatedVideoProgressTotals estimate_video_progress_totals(const timeline::TimelinePlan &timeline_plan) {
+    EstimatedVideoProgressTotals totals{};
+    bool all_segment_frame_counts_known = true;
+    bool all_segment_durations_known = true;
+
+    for (const auto &segment_plan : timeline_plan.segments) {
+        if (!segment_plan.inspected_source_info.primary_video_stream.has_value()) {
+            all_segment_frame_counts_known = false;
+            all_segment_durations_known = false;
+            continue;
+        }
+
+        const auto &video_stream = *segment_plan.inspected_source_info.primary_video_stream;
+        if (video_stream.frame_count.has_value() && *video_stream.frame_count > 0) {
+            totals.total_video_frames += static_cast<std::uint64_t>(*video_stream.frame_count);
+        } else {
+            all_segment_frame_counts_known = false;
+        }
+
+        const auto estimated_segment_duration_pts = estimate_segment_duration_pts(
+            segment_plan,
+            timeline_plan.output_video_time_base,
+            timeline_plan.output_frame_rate
+        );
+        if (estimated_segment_duration_pts.has_value()) {
+            totals.total_video_duration_pts += *estimated_segment_duration_pts;
+        } else {
+            all_segment_durations_known = false;
+        }
+    }
+
+    if (!all_segment_durations_known) {
+        totals.total_video_duration_pts = 0;
+    }
+
+    if (!all_segment_frame_counts_known) {
+        totals.total_video_frames = 0;
+    }
+
+    if (totals.total_video_duration_pts <= 0 &&
+        totals.total_video_frames > 0 &&
+        rational_is_positive(timeline_plan.output_frame_rate)) {
+        totals.total_video_duration_pts = av_rescale_q(
+            static_cast<std::int64_t>(totals.total_video_frames),
+            av_inv_q(to_av_rational(timeline_plan.output_frame_rate)),
+            to_av_rational(timeline_plan.output_video_time_base)
+        );
+    }
+
+    if (totals.total_video_duration_pts > 0) {
+        totals.total_video_duration_us = rescale_to_microseconds(
+            totals.total_video_duration_pts,
+            timeline_plan.output_video_time_base
+        );
+    }
+
+    if (totals.total_video_frames == 0 &&
+        totals.total_video_duration_pts > 0 &&
+        rational_is_positive(timeline_plan.output_frame_rate)) {
+        // When container metadata does not expose an exact frame count, use the planned output duration
+        // and authoritative output frame rate to derive a stable estimate for progress reporting.
+        const auto estimated_total_frames = av_rescale_q_rnd(
+            totals.total_video_duration_pts,
+            to_av_rational(timeline_plan.output_video_time_base),
+            av_inv_q(to_av_rational(timeline_plan.output_frame_rate)),
+            AV_ROUND_NEAR_INF
+        );
+        if (estimated_total_frames > 0) {
+            totals.total_video_frames = static_cast<std::uint64_t>(estimated_total_frames);
+        }
+    }
+
+    return totals;
+}
+
+class StreamingEncodeProgressEmitter final {
+public:
+    StreamingEncodeProgressEmitter(
+        EstimatedVideoProgressTotals totals,
+        std::function<void(const StreamingEncodeProgress &)> callback
+    )
+        : totals_(std::move(totals)),
+          callback_(std::move(callback)),
+          start_time_(Clock::now()),
+          last_emit_time_(start_time_) {}
+
+    void record_frame_written(
+        const std::uint64_t encoded_video_frames,
+        const std::int64_t encoded_video_duration_us
+    ) {
+        latest_encoded_video_frames_ = encoded_video_frames;
+        latest_encoded_video_duration_us_ = encoded_video_duration_us;
+
+        if (!callback_ || encoded_video_frames == 0U) {
+            return;
+        }
+
+        if (encoded_video_frames == 1U ||
+            encoded_video_frames >= (last_emitted_frame_count_ + kFrameEmitInterval)) {
+            emit_progress(false);
+        }
+    }
+
+    void finish(
+        const std::uint64_t encoded_video_frames,
+        const std::int64_t encoded_video_duration_us
+    ) {
+        latest_encoded_video_frames_ = encoded_video_frames;
+        latest_encoded_video_duration_us_ = encoded_video_duration_us;
+
+        if (!callback_) {
+            return;
+        }
+
+        emit_progress(true);
+    }
+
+private:
+    using Clock = std::chrono::steady_clock;
+
+    static constexpr std::uint64_t kFrameEmitInterval = 12U;
+    static constexpr double kFpsSmoothingAlpha = 0.25;
+
+    [[nodiscard]] double stage_fraction() const {
+        if (totals_.total_video_duration_us > 0 && latest_encoded_video_duration_us_ > 0) {
+            return clamp_progress_fraction(
+                static_cast<double>(latest_encoded_video_duration_us_) /
+                static_cast<double>(totals_.total_video_duration_us)
+            );
+        }
+
+        if (totals_.total_video_frames > 0 && latest_encoded_video_frames_ > 0U) {
+            return clamp_progress_fraction(
+                static_cast<double>(latest_encoded_video_frames_) /
+                static_cast<double>(totals_.total_video_frames)
+            );
+        }
+
+        return 0.0;
+    }
+
+    [[nodiscard]] std::optional<double> encoded_fps(const Clock::time_point now) {
+        if (latest_encoded_video_frames_ == 0U) {
+            return std::nullopt;
+        }
+
+        const auto total_elapsed_seconds = std::chrono::duration<double>(now - start_time_).count();
+        if (total_elapsed_seconds <= 0.0) {
+            return std::nullopt;
+        }
+
+        const auto emit_elapsed_seconds = std::chrono::duration<double>(now - last_emit_time_).count();
+        const auto emitted_frame_delta =
+            latest_encoded_video_frames_ >= last_emitted_frame_count_
+                ? (latest_encoded_video_frames_ - last_emitted_frame_count_)
+                : 0U;
+        if (emitted_frame_delta > 0U && emit_elapsed_seconds > 0.0) {
+            const double instant_fps =
+                static_cast<double>(emitted_frame_delta) / emit_elapsed_seconds;
+            smoothed_fps_ = smoothed_fps_.has_value()
+                ? (((1.0 - kFpsSmoothingAlpha) * *smoothed_fps_) + (kFpsSmoothingAlpha * instant_fps))
+                : std::optional<double>(instant_fps);
+        }
+
+        const double average_fps =
+            static_cast<double>(latest_encoded_video_frames_) / total_elapsed_seconds;
+        if (smoothed_fps_.has_value()) {
+            return *smoothed_fps_;
+        }
+
+        return average_fps > 0.0
+            ? std::optional<double>(average_fps)
+            : std::nullopt;
+    }
+
+    void emit_progress(const bool force_final) {
+        const auto now = Clock::now();
+        callback_(StreamingEncodeProgress{
+            .stage_fraction = force_final ? 1.0 : stage_fraction(),
+            .encoded_video_frames = latest_encoded_video_frames_,
+            .total_video_frames = totals_.total_video_frames,
+            .encoded_video_duration_us = latest_encoded_video_duration_us_,
+            .total_video_duration_us = totals_.total_video_duration_us,
+            .encoded_fps = encoded_fps(now)
+        });
+
+        last_emit_time_ = now;
+        last_emitted_frame_count_ = latest_encoded_video_frames_;
+    }
+
+    EstimatedVideoProgressTotals totals_{};
+    std::function<void(const StreamingEncodeProgress &)> callback_{};
+    Clock::time_point start_time_{};
+    Clock::time_point last_emit_time_{};
+    std::uint64_t last_emitted_frame_count_{0};
+    std::uint64_t latest_encoded_video_frames_{0};
+    std::int64_t latest_encoded_video_duration_us_{0};
+    std::optional<double> smoothed_fps_{};
+};
 
 FormatContextHandle open_format_context(const std::string &input_path_string) {
     AVFormatContext *raw_format_context = nullptr;
@@ -2113,6 +2375,7 @@ SegmentProcessResult process_segment(
     const PipelineQueueLimits &queue_limits,
     const std::optional<AudioOutputPlan> &audio_output_plan,
     StreamingOutputSession &output_session,
+    StreamingEncodeProgressEmitter &progress_emitter,
     std::int64_t &next_output_frame_index,
     std::int64_t &next_output_video_pts,
     std::int64_t &next_output_audio_pts
@@ -2483,6 +2746,10 @@ SegmentProcessResult process_segment(
         segment_output_end_pts = std::max(segment_output_end_pts, frame_end_pts);
         ++result.segment_summary.video_frame_count;
         ++result.decoded_video_frame_count;
+        progress_emitter.record_frame_written(
+            static_cast<std::uint64_t>(next_output_frame_index + 1),
+            rescale_to_microseconds(frame_end_pts, timeline_plan.output_video_time_base)
+        );
         ++next_output_frame_index;
 
         if (encode_audio) {
@@ -2909,6 +3176,10 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
         std::int64_t decoded_video_frame_count = 0;
         std::int64_t decoded_audio_block_count = 0;
         std::int64_t subtitled_video_frame_count = 0;
+        StreamingEncodeProgressEmitter progress_emitter(
+            estimate_video_progress_totals(timeline_plan),
+            request.progress_callback
+        );
 
         for (const auto &segment_plan : timeline_plan.segments) {
             const auto segment_result = process_segment(
@@ -2923,6 +3194,7 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
                 request.queue_limits,
                 audio_output_plan,
                 output_session,
+                progress_emitter,
                 next_output_frame_index,
                 next_output_video_pts,
                 next_output_audio_pts
@@ -2938,6 +3210,11 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
         timeline_summary.output_audio_block_count = decoded_audio_block_count;
         timeline_summary.output_duration_microseconds =
             rescale_to_microseconds(next_output_video_pts, timeline_plan.output_video_time_base);
+        auto encoded_media_summary = output_session.finish();
+        progress_emitter.finish(
+            static_cast<std::uint64_t>(encoded_media_summary.encoded_video_frame_count),
+            timeline_summary.output_duration_microseconds
+        );
 
         return StreamingTranscodeResult{
             .summary = StreamingTranscodeSummary{
@@ -2945,7 +3222,7 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
                 .decoded_video_frame_count = decoded_video_frame_count,
                 .decoded_audio_block_count = decoded_audio_block_count,
                 .subtitled_video_frame_count = subtitled_video_frame_count,
-                .encoded_media_summary = output_session.finish()
+                .encoded_media_summary = std::move(encoded_media_summary)
             }
         };
     } catch (const std::exception &exception) {

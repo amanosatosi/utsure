@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -49,6 +50,15 @@ struct StreamingTranscodeResult final {
     [[nodiscard]] bool succeeded() const noexcept;
 };
 
+struct StreamingEncodeProgress final {
+    double stage_fraction{0.0};
+    std::uint64_t encoded_video_frames{0};
+    std::uint64_t total_video_frames{0};
+    std::int64_t encoded_video_duration_us{0};
+    std::int64_t total_video_duration_us{0};
+    std::optional<double> encoded_fps{};
+};
+
 struct StreamingTranscodeRequest final {
     const timeline::TimelinePlan *timeline_plan{nullptr};
     const std::optional<job::EncodeJobSubtitleSettings> *subtitle_settings{nullptr};
@@ -56,6 +66,7 @@ struct StreamingTranscodeRequest final {
     DecodeNormalizationPolicy normalization_policy{};
     subtitles::SubtitleRenderer *subtitle_renderer{nullptr};
     PipelineQueueLimits queue_limits{kDefaultPipelineQueueLimits};
+    std::function<void(const StreamingEncodeProgress &progress)> progress_callback{};
 };
 
 [[nodiscard]] std::optional<PipelineMemoryBudget> build_memory_budget(

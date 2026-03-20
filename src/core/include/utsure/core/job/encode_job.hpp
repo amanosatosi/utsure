@@ -30,6 +30,13 @@ struct EncodeJobProgress final {
     int current_step{0};
     int total_steps{0};
     std::string message{};
+    std::optional<double> overall_fraction{};
+    std::optional<double> stage_fraction{};
+    std::optional<std::uint64_t> encoded_video_frames{};
+    std::optional<std::uint64_t> total_video_frames{};
+    std::optional<std::int64_t> encoded_video_duration_us{};
+    std::optional<std::int64_t> total_video_duration_us{};
+    std::optional<double> encoded_fps{};
 };
 
 struct EncodeJobLogMessage final {

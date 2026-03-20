@@ -27,6 +27,7 @@
 #include <QWidget>
 
 #include <algorithm>
+#include <cmath>
 #include <string_view>
 
 namespace {
@@ -133,6 +134,69 @@ PathRowWidgets create_path_row(
         .browse_button = browse_button,
         .clear_button = clear_button
     };
+}
+
+double clamp_progress_fraction(const double value) {
+    return std::clamp(value, 0.0, 1.0);
+}
+
+bool has_fine_encode_progress(const utsure::core::job::EncodeJobProgress &progress) {
+    return progress.stage == utsure::core::job::EncodeJobStage::encoding_output &&
+        (progress.stage_fraction.has_value() ||
+         progress.encoded_video_frames.has_value() ||
+         progress.encoded_video_duration_us.has_value() ||
+         progress.encoded_fps.has_value());
+}
+
+QString format_duration_text(const std::int64_t microseconds) {
+    const auto total_seconds = std::max<std::int64_t>(0, microseconds / 1000000);
+    const auto hours = total_seconds / 3600;
+    const auto minutes = (total_seconds % 3600) / 60;
+    const auto seconds = total_seconds % 60;
+    if (hours > 0) {
+        return QString("%1:%2:%3")
+            .arg(hours)
+            .arg(minutes, 2, 10, QChar('0'))
+            .arg(seconds, 2, 10, QChar('0'));
+    }
+
+    return QString("%1:%2")
+        .arg(minutes, 2, 10, QChar('0'))
+        .arg(seconds, 2, 10, QChar('0'));
+}
+
+QString format_encode_progress_bar_text(const utsure::core::job::EncodeJobProgress &progress) {
+    const double fraction = clamp_progress_fraction(
+        progress.stage_fraction.value_or(progress.overall_fraction.value_or(0.0))
+    );
+    const int percent = static_cast<int>(std::lround(fraction * 100.0));
+
+    QStringList parts{QString("Encoding %1%").arg(percent)};
+    if (progress.encoded_video_frames.has_value() &&
+        progress.total_video_frames.has_value() &&
+        *progress.total_video_frames > 0U) {
+        parts.push_back(
+            QString("%1/%2 frames")
+                .arg(QString::number(*progress.encoded_video_frames))
+                .arg(QString::number(*progress.total_video_frames))
+        );
+    }
+
+    if (progress.encoded_video_duration_us.has_value() &&
+        progress.total_video_duration_us.has_value() &&
+        *progress.total_video_duration_us > 0) {
+        parts.push_back(
+            QString("%1 / %2")
+                .arg(format_duration_text(*progress.encoded_video_duration_us))
+                .arg(format_duration_text(*progress.total_video_duration_us))
+        );
+    }
+
+    if (progress.encoded_fps.has_value() && *progress.encoded_fps > 0.0) {
+        parts.push_back(QString("%1 EFPS").arg(QString::number(*progress.encoded_fps, 'f', 1)));
+    }
+
+    return parts.join(" | ");
 }
 
 }  // namespace
@@ -633,21 +697,33 @@ void MainWindow::handle_running_changed(const bool running) {
     }
 }
 
-void MainWindow::handle_progress_changed(
-    const int current_step,
-    const int total_steps,
-    const QString &status_text
-) {
-    if (total_steps > 0) {
-        progress_bar_->setRange(0, total_steps);
-        progress_bar_->setValue(current_step);
-        progress_bar_->setFormat(QString("Step %1 of %2").arg(current_step).arg(total_steps));
+void MainWindow::handle_progress_changed(const utsure::core::job::EncodeJobProgress &progress) {
+    if (has_fine_encode_progress(progress)) {
+        const double stage_fraction = clamp_progress_fraction(
+            progress.stage_fraction.value_or(progress.overall_fraction.value_or(0.0))
+        );
+        progress_bar_->setRange(0, 1000);
+        progress_bar_->setValue(static_cast<int>(std::lround(stage_fraction * 1000.0)));
+        progress_bar_->setFormat(format_encode_progress_bar_text(progress));
+        set_status_text(
+            progress.message.empty() ? "Encoding output..." : to_qstring(progress.message),
+            false
+        );
+        return;
+    }
+
+    if (progress.total_steps > 0) {
+        progress_bar_->setRange(0, progress.total_steps);
+        progress_bar_->setValue(progress.current_step);
+        progress_bar_->setFormat(
+            QString("Step %1 of %2").arg(progress.current_step).arg(progress.total_steps)
+        );
     } else {
         progress_bar_->setRange(0, 0);
         progress_bar_->setFormat("Working...");
     }
 
-    set_status_text(status_text, false);
+    set_status_text(to_qstring(progress.message), false);
 }
 
 void MainWindow::handle_job_finished(

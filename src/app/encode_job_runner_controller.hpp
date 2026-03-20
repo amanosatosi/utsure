@@ -20,7 +20,7 @@ public:
 
 signals:
     void running_changed(bool running);
-    void progress_changed(int current_step, int total_steps, const QString &status_text);
+    void progress_changed(utsure::core::job::EncodeJobProgress progress);
     void log_message(const QString &line);
     void job_finished(bool succeeded, const QString &status_text, const QString &details_text);
 

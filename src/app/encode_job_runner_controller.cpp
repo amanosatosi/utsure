@@ -2,9 +2,12 @@
 
 #include "encode_job_runner_worker.hpp"
 
+#include <QMetaType>
 #include <QMetaObject>
 
 EncodeJobRunnerController::EncodeJobRunnerController(QObject *parent) : QObject(parent) {
+    qRegisterMetaType<utsure::core::job::EncodeJobProgress>("utsure::core::job::EncodeJobProgress");
+
     worker_ = new EncodeJobRunnerWorker();
     worker_->moveToThread(&worker_thread_);
 
@@ -37,7 +40,12 @@ void EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &jo
 
     running_ = true;
     emit running_changed(true);
-    emit progress_changed(0, 0, "Starting encode job.");
+    emit progress_changed(utsure::core::job::EncodeJobProgress{
+        .stage = utsure::core::job::EncodeJobStage::assembling_timeline,
+        .current_step = 0,
+        .total_steps = 0,
+        .message = "Starting encode job."
+    });
     emit log_message("[info] Starting encode job.");
 
     QMetaObject::invokeMethod(

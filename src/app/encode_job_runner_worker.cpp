@@ -75,7 +75,7 @@ void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
 }
 
 void EncodeJobRunnerWorker::on_progress(const utsure::core::job::EncodeJobProgress &progress) {
-    emit progress_changed(progress.current_step, progress.total_steps, to_qstring(progress.message));
+    emit progress_changed(progress);
 }
 
 void EncodeJobRunnerWorker::on_log(const utsure::core::job::EncodeJobLogMessage &message) {

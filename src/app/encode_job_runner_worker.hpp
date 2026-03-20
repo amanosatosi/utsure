@@ -2,8 +2,11 @@
 
 #include "utsure/core/job/encode_job.hpp"
 
+#include <QMetaType>
 #include <QObject>
 #include <QString>
+
+Q_DECLARE_METATYPE(utsure::core::job::EncodeJobProgress)
 
 class EncodeJobRunnerWorker final
     : public QObject,
@@ -19,7 +22,7 @@ public:
     void on_log(const utsure::core::job::EncodeJobLogMessage &message) override;
 
 signals:
-    void progress_changed(int current_step, int total_steps, const QString &status_text);
+    void progress_changed(utsure::core::job::EncodeJobProgress progress);
     void log_message(const QString &line);
     void job_finished(bool succeeded, const QString &status_text, const QString &details_text);
 };

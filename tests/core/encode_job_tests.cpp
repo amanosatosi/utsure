@@ -3,6 +3,7 @@
 #include "utsure/core/media/media_decoder.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <filesystem>
@@ -342,6 +343,120 @@ int assert_observer_flow(
     return 0;
 }
 
+std::vector<const EncodeJobProgress *> collect_fine_encode_updates(const CollectingObserver &observer) {
+    std::vector<const EncodeJobProgress *> updates{};
+    updates.reserve(observer.progress_updates.size());
+
+    for (const auto &progress : observer.progress_updates) {
+        if (progress.stage == EncodeJobStage::encoding_output && progress.stage_fraction.has_value()) {
+            updates.push_back(&progress);
+        }
+    }
+
+    return updates;
+}
+
+int assert_fine_encode_progress(
+    const CollectingObserver &observer,
+    const EncodeJobSummary &summary
+) {
+    const auto fine_updates = collect_fine_encode_updates(observer);
+    if (fine_updates.empty()) {
+        return fail("The encode job did not report any fine-grained streaming encode progress.");
+    }
+
+    std::optional<std::uint64_t> expected_total_frames{};
+    std::optional<std::int64_t> expected_total_duration_us{};
+    std::uint64_t previous_encoded_frames = 0;
+    std::int64_t previous_encoded_duration_us = 0;
+    double previous_stage_fraction = 0.0;
+    bool saw_positive_encoded_fps = false;
+
+    for (const auto *progress : fine_updates) {
+        if (!progress->encoded_video_frames.has_value() ||
+            !progress->total_video_frames.has_value() ||
+            !progress->encoded_video_duration_us.has_value() ||
+            !progress->total_video_duration_us.has_value()) {
+            return fail("A fine-grained encode progress update was missing frame or duration totals.");
+        }
+
+        if (*progress->stage_fraction < 0.0 || *progress->stage_fraction > 1.0) {
+            return fail("A fine-grained encode progress update reported an invalid stage fraction.");
+        }
+
+        if (*progress->stage_fraction + 1e-9 < previous_stage_fraction) {
+            return fail("Fine-grained encode progress stage fractions must be monotonic.");
+        }
+
+        if (*progress->encoded_video_frames < previous_encoded_frames) {
+            return fail("Fine-grained encode progress encoded-frame counts must be monotonic.");
+        }
+
+        if (*progress->encoded_video_duration_us < previous_encoded_duration_us) {
+            return fail("Fine-grained encode progress encoded durations must be monotonic.");
+        }
+
+        if (*progress->total_video_frames == 0U || *progress->total_video_duration_us <= 0) {
+            return fail("Fine-grained encode progress reported unusable total estimates.");
+        }
+
+        if (!expected_total_frames.has_value()) {
+            expected_total_frames = *progress->total_video_frames;
+        } else if (*progress->total_video_frames != *expected_total_frames) {
+            return fail("Fine-grained encode progress total-frame estimates changed mid-encode.");
+        }
+
+        if (!expected_total_duration_us.has_value()) {
+            expected_total_duration_us = *progress->total_video_duration_us;
+        } else if (*progress->total_video_duration_us != *expected_total_duration_us) {
+            return fail("Fine-grained encode progress total-duration estimates changed mid-encode.");
+        }
+
+        if (progress->encoded_fps.has_value()) {
+            if (*progress->encoded_fps <= 0.0) {
+                return fail("Fine-grained encode progress reported a non-positive EFPS value.");
+            }
+
+            saw_positive_encoded_fps = true;
+        }
+
+        previous_stage_fraction = *progress->stage_fraction;
+        previous_encoded_frames = *progress->encoded_video_frames;
+        previous_encoded_duration_us = *progress->encoded_video_duration_us;
+    }
+
+    const auto &final_progress = *fine_updates.back();
+    if (std::fabs(*final_progress.stage_fraction - 1.0) > 1e-9) {
+        return fail("The final fine-grained encode progress update did not report 100% completion.");
+    }
+
+    if (*final_progress.encoded_video_frames !=
+        static_cast<std::uint64_t>(summary.encoded_media_summary.encoded_video_frame_count)) {
+        return fail("The final fine-grained encode progress update reported the wrong encoded frame count.");
+    }
+
+    if (*final_progress.encoded_video_duration_us != summary.timeline_summary.output_duration_microseconds) {
+        return fail("The final fine-grained encode progress update reported the wrong encoded duration.");
+    }
+
+    if (std::llabs(
+            static_cast<long long>(*final_progress.total_video_frames) -
+            static_cast<long long>(summary.timeline_summary.output_video_frame_count)) > 1) {
+        return fail("The final fine-grained encode progress total-frame estimate drifted too far.");
+    }
+
+    if (std::llabs(*final_progress.total_video_duration_us - summary.timeline_summary.output_duration_microseconds) >
+        100000) {
+        return fail("The final fine-grained encode progress total-duration estimate drifted too far.");
+    }
+
+    if (!saw_positive_encoded_fps) {
+        return fail("The encode job never reported a positive EFPS value during fine-grained progress.");
+    }
+
+    return 0;
+}
+
 int assert_streaming_memory_observer_flow(const CollectingObserver &observer) {
     if (observer.progress_updates.empty()) {
         return fail("The streaming-memory encode job did not report any progress.");
@@ -444,6 +559,11 @@ int run_main_only_job_assertion(
         return observer_result;
     }
 
+    const auto fine_progress_result = assert_fine_encode_progress(observer, *job_result.encode_job_summary);
+    if (fine_progress_result != 0) {
+        return fine_progress_result;
+    }
+
     std::cout << build_validation_report(
         *job_result.encode_job_summary,
         *output_decode_result.decoded_media_source
@@ -526,6 +646,11 @@ int run_timeline_h264_assertion(
         return observer_result;
     }
 
+    const auto fine_progress_result = assert_fine_encode_progress(observer, *job_result.encode_job_summary);
+    if (fine_progress_result != 0) {
+        return fine_progress_result;
+    }
+
     std::cout << build_validation_report(
         *job_result.encode_job_summary,
         *output_decode_result.decoded_media_source
@@ -589,6 +714,10 @@ int run_streaming_memory_budget_assertion(
         return 1;
     }
 
+    if (assert_fine_encode_progress(observer, *job_result.encode_job_summary) != 0) {
+        return 1;
+    }
+
     std::cout << "streaming_memory_budget=passed\n";
     std::cout << "output.video.resolution=1920x1080\n";
     std::cout << "output.encoded_video_frames=" << summary.encoded_media_summary.encoded_video_frame_count << '\n';
@@ -649,6 +778,10 @@ int run_disable_audio_assertion(
         summary.encoded_media_summary.output_info.primary_audio_stream.has_value() ||
         summary.encoded_media_summary.resolved_audio_output.resolved_mode != ResolvedAudioOutputMode::disabled) {
         return fail("Unexpected output state for the disable-audio encode job.");
+    }
+
+    if (assert_fine_encode_progress(observer, summary) != 0) {
+        return 1;
     }
 
     std::cout << build_validation_report(
@@ -720,6 +853,10 @@ int run_copy_audio_assertion(
         output_audio.sample_rate != 48000 ||
         output_audio.channel_count != 1) {
         return fail("Unexpected copied output audio stream.");
+    }
+
+    if (assert_fine_encode_progress(observer, summary) != 0) {
+        return 1;
     }
 
     std::cout << build_validation_report(
@@ -814,6 +951,11 @@ int run_coarse_timebase_ntsc_assertion(
     const auto observer_result = assert_observer_flow(observer, 1, false);
     if (observer_result != 0) {
         return observer_result;
+    }
+
+    const auto fine_progress_result = assert_fine_encode_progress(observer, summary);
+    if (fine_progress_result != 0) {
+        return fine_progress_result;
     }
 
     std::cout << build_validation_report(
@@ -938,6 +1080,11 @@ int run_irregular_timestamp_assertion(
     const auto observer_result = assert_observer_flow(observer, 1, false);
     if (observer_result != 0) {
         return observer_result;
+    }
+
+    const auto fine_progress_result = assert_fine_encode_progress(observer, summary);
+    if (fine_progress_result != 0) {
+        return fine_progress_result;
     }
 
     std::cout << build_validation_report(

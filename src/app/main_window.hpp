@@ -40,7 +40,7 @@ private:
     void start_encode();
     void apply_codec_defaults();
     void handle_running_changed(bool running);
-    void handle_progress_changed(int current_step, int total_steps, const QString &status_text);
+    void handle_progress_changed(const utsure::core::job::EncodeJobProgress &progress);
     void handle_job_finished(bool succeeded, const QString &status_text, const QString &details_text);
     void append_log_line(const QString &line);
     void mark_preview_stale();
