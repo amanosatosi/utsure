@@ -196,7 +196,7 @@ std::string format_encode_log_message(const EncodeJob &job) {
 std::string format_encode_runtime_log_message(const EncodeJob &job) {
     const auto runtime_behavior = media::streaming::resolve_streaming_runtime_behavior();
     return "Encoding runtime: encoder threads " +
-        media::streaming::format_encoder_threading_summary(runtime_behavior) +
+        media::streaming::format_encoder_threading_summary(runtime_behavior, job.output.video.codec) +
         ", video queue " + std::to_string(runtime_behavior.video_frame_queue_depth) +
         " frames, priority " + std::string(to_display_string(job.execution.process_priority)) + '.';
 }

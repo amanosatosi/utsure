@@ -86,7 +86,10 @@ struct StreamingTranscodeRequest final {
 [[nodiscard]] StreamingRuntimeBehavior resolve_streaming_runtime_behavior(
     const PipelineQueueLimits &queue_limits = kDefaultPipelineQueueLimits
 ) noexcept;
-[[nodiscard]] std::string format_encoder_threading_summary(const StreamingRuntimeBehavior &behavior);
+[[nodiscard]] std::string format_encoder_threading_summary(
+    const StreamingRuntimeBehavior &behavior,
+    OutputVideoCodec codec = OutputVideoCodec::h264
+);
 
 class StreamingTranscoder final {
 public:

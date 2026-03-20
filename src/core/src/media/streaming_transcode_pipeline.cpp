@@ -260,6 +260,43 @@ struct EstimatedVideoProgressTotals final {
     std::int64_t total_video_duration_us{0};
 };
 
+EncoderSelection select_encoder(OutputVideoCodec codec);
+int choose_video_encoder_thread_type(const AVCodec &encoder);
+
+struct ResolvedVideoEncoderBackend final {
+    const char *encoder_name{""};
+    const AVCodec *encoder{nullptr};
+    int thread_type{0};
+};
+
+ResolvedVideoEncoderBackend resolve_video_encoder_backend(const OutputVideoCodec codec) {
+    const auto selection = select_encoder(codec);
+    const AVCodec *encoder = avcodec_find_encoder_by_name(selection.encoder_name);
+    return ResolvedVideoEncoderBackend{
+        .encoder_name = selection.encoder_name,
+        .encoder = encoder,
+        .thread_type = encoder != nullptr ? choose_video_encoder_thread_type(*encoder) : 0
+    };
+}
+
+std::string format_encoder_thread_type_detail(const int thread_type) {
+    const bool frame_threads = (thread_type & FF_THREAD_FRAME) != 0;
+    const bool slice_threads = (thread_type & FF_THREAD_SLICE) != 0;
+    if (frame_threads && slice_threads) {
+        return "FFmpeg frame+slice threading";
+    }
+
+    if (frame_threads) {
+        return "FFmpeg frame threading";
+    }
+
+    if (slice_threads) {
+        return "FFmpeg slice threading";
+    }
+
+    return "backend-managed threading (no explicit FFmpeg frame/slice flags)";
+}
+
 StreamingTranscodeResult make_error(std::string message, std::string actionable_hint) {
     return StreamingTranscodeResult{
         .summary = std::nullopt,
@@ -481,12 +518,29 @@ StreamingRuntimeBehavior resolve_streaming_runtime_behavior(const PipelineQueueL
     };
 }
 
-std::string format_encoder_threading_summary(const StreamingRuntimeBehavior &behavior) {
-    if (behavior.detected_logical_core_count > 0U) {
-        return "auto (" + std::to_string(behavior.detected_logical_core_count) + " logical cores)";
+std::string format_encoder_threading_summary(
+    const StreamingRuntimeBehavior &behavior,
+    const OutputVideoCodec codec
+) {
+    std::string summary = behavior.detected_logical_core_count > 0U
+        ? "auto (" + std::to_string(behavior.detected_logical_core_count) + " logical cores"
+        : "auto (1 logical core fallback";
+
+    const auto backend = resolve_video_encoder_backend(codec);
+    if (backend.encoder == nullptr) {
+        summary += "; ";
+        summary += backend.encoder_name;
+        summary += " unavailable";
+        summary += ')';
+        return summary;
     }
 
-    return "auto (1 logical core fallback)";
+    summary += "; ";
+    summary += backend.encoder_name;
+    summary += ' ';
+    summary += format_encoder_thread_type_detail(backend.thread_type);
+    summary += ')';
+    return summary;
 }
 
 bool StreamingTranscodeResult::succeeded() const noexcept {
@@ -1338,20 +1392,20 @@ CodecContextHandle create_video_encoder_context(
     const MediaEncodeRequest &request,
     const VideoOutputPlan &plan
 ) {
-    const auto selection = select_encoder(request.video_settings.codec);
-    const AVCodec *encoder = avcodec_find_encoder_by_name(selection.encoder_name);
-    if (encoder == nullptr) {
+    const auto encoder_backend = resolve_video_encoder_backend(request.video_settings.codec);
+    if (encoder_backend.encoder == nullptr) {
         throw std::runtime_error(
-            "The requested software encoder backend '" + std::string(selection.encoder_name) + "' is not available."
+            "The requested software encoder backend '" + std::string(encoder_backend.encoder_name) +
+            "' is not available."
         );
     }
 
-    CodecContextHandle codec_context(avcodec_alloc_context3(encoder));
+    CodecContextHandle codec_context(avcodec_alloc_context3(encoder_backend.encoder));
     if (!codec_context) {
         throw std::runtime_error("Failed to allocate an FFmpeg video encoder context.");
     }
 
-    codec_context->codec_id = encoder->id;
+    codec_context->codec_id = encoder_backend.encoder->id;
     codec_context->codec_type = AVMEDIA_TYPE_VIDEO;
     codec_context->width = plan.width;
     codec_context->height = plan.height;
@@ -1360,9 +1414,8 @@ CodecContextHandle create_video_encoder_context(
     codec_context->framerate = to_av_rational(plan.average_frame_rate);
     codec_context->sample_aspect_ratio = to_av_rational(plan.sample_aspect_ratio);
     codec_context->thread_count = 0;
-    const int thread_type = choose_video_encoder_thread_type(*encoder);
-    if (thread_type != 0) {
-        codec_context->thread_type = thread_type;
+    if (encoder_backend.thread_type != 0) {
+        codec_context->thread_type = encoder_backend.thread_type;
     }
 
     if ((output_context.oformat->flags & AVFMT_GLOBALHEADER) != 0) {
@@ -1393,7 +1446,7 @@ CodecContextHandle create_video_encoder_context(
         );
     }
 
-    const auto open_result = avcodec_open2(codec_context.get(), encoder, nullptr);
+    const auto open_result = avcodec_open2(codec_context.get(), encoder_backend.encoder, nullptr);
     if (open_result < 0) {
         throw std::runtime_error(
             "Failed to open the requested video encoder backend. FFmpeg reported: " +

@@ -585,7 +585,8 @@ EncodeJobPreflightResult EncodeJobPreflight::inspect(const EncodeJob &job) noexc
             ),
             .output_audio_summary = media::format_resolved_audio_output_summary(resolved_audio_output),
             .encoder_threading_summary = media::streaming::format_encoder_threading_summary(
-                media::streaming::resolve_streaming_runtime_behavior()
+                media::streaming::resolve_streaming_runtime_behavior(),
+                job.output.video.codec
             ),
             .video_frame_queue_depth = media::streaming::kDefaultPipelineQueueLimits.video_frame_queue_depth,
             .process_priority = job.execution.process_priority,

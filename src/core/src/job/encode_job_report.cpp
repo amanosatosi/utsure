@@ -85,7 +85,11 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
            << encode_job_summary.decode_normalization_policy.audio_block_samples << '\n';
     const auto runtime_behavior = media::streaming::resolve_streaming_runtime_behavior();
     report << "streaming.encoder_threads="
-           << media::streaming::format_encoder_threading_summary(runtime_behavior) << '\n';
+           << media::streaming::format_encoder_threading_summary(
+                  runtime_behavior,
+                  encode_job_summary.job.output.video.codec
+              )
+           << '\n';
     report << "streaming.video_queue_frames=" << runtime_behavior.video_frame_queue_depth << '\n';
     report << "streaming.audio_queue_blocks=" << runtime_behavior.decoded_audio_block_queue_depth << '\n';
     report << "input.container=" << encode_job_summary.inspected_input_info.container_format_name << '\n';

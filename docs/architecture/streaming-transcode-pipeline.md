@@ -39,19 +39,19 @@ Decoded media from earlier segments is never retained after that segment has cle
 
 The current bounded state comes from `media::streaming::kDefaultPipelineQueueLimits`:
 
+- Queued normalized video frames waiting for subtitle/composite + encode: `70`
 - Decoded normalized audio block queue: `8`
 - Startup audio preroll before the first written video frame: `250 ms`
 
-Video is now a direct synchronous path inside the single-threaded loop:
+Video flow keeps one explicit bounded handoff queue plus one single-frame timing hold:
 
-- demux packet
-- decode frame
-- normalize to RGBA
-- optionally subtitle-composite
-- encode
-- mux
+- `PendingVideoFrameOutput` keeps at most one normalized RGBA frame so the next decoded timestamp can define its exact output duration.
+- Once that duration is known, `enqueue_video_frame(...)` moves the frame into `BoundedQueue<QueuedVideoFrameOutput>` with a hard depth of `70`.
+- If that queue is full, `enqueue_video_frame(...)` immediately calls `drain_video_frame_queue(false)` before accepting another frame.
+- `drain_video_frame_queue(false)` dequeues one frame, subtitle-composites it if needed, sends it to the encoder, muxes any produced packets, and returns.
+- Decode/normalize cannot continue once the queue is full, so the producer side cannot outrun encode indefinitely.
 
-There is no longer a separate bounded queue for video packets, decoded video frames, composited video frames, or encoded mux packets in the active path.
+There is still no extra queue for encoded video packets or mux packets. Those packets are drained and released immediately after the encoder emits them.
 
 Audio flow control now uses timestamp horizons in a common microsecond time base:
 
@@ -76,10 +76,11 @@ For each decoded video frame:
 
 1. `avcodec_receive_frame(...)` fills a reusable FFmpeg decode frame.
 2. `normalize_video_frame(...)` allocates one temporary RGBA `AVFrame`, copies its bytes into one owned `DecodedVideoFrame`, and unrefs the temporary FFmpeg frame.
-3. The segment loop keeps at most one normalized video frame pending so the previous frame duration can be derived from the next decoded timestamp.
-4. Subtitle composition mutates that owned RGBA frame in place.
-5. `StreamingOutputSession::build_encoded_video_frame(...)` allocates one YUV encoder frame, uses `sws_scale(...)`, sends it to the encoder, and releases it after the send/drain step.
-6. `avcodec_receive_packet(...)` fills a reusable packet, `av_interleaved_write_frame(...)` muxes it, and `av_packet_unref(...)` releases packet storage immediately.
+3. The segment loop keeps at most one normalized frame in `PendingVideoFrameOutput` so the previous frame duration can be derived from the next decoded timestamp.
+4. Once that duration is known, ownership moves into `BoundedQueue<QueuedVideoFrameOutput>`, which holds at most `70` RGBA frames for the segment.
+5. When the queue drains, subtitle composition mutates that owned RGBA frame in place immediately before encode.
+6. `StreamingOutputSession::build_encoded_video_frame(...)` allocates one YUV encoder frame, uses `sws_scale(...)`, sends it to the encoder, and releases it after the send/drain step.
+7. `avcodec_receive_packet(...)` fills a reusable packet, `av_interleaved_write_frame(...)` muxes it, and `av_packet_unref(...)` releases packet storage immediately.
 
 ### Audio
 
@@ -167,6 +168,25 @@ FFmpeg 7.1-specific implementation choices:
 - channel-layout handling uses `AVChannelLayout`-based APIs that are available in FFmpeg 7.1
 - audio normalization uses `swr_alloc_set_opts2(...)`, which matches the FFmpeg 7.1 channel-layout model
 
+## Runtime Controls
+
+Video threading stays backend-managed inside one encoder context:
+
+- `create_video_encoder_context(...)` sets `AVCodecContext.thread_count = 0`, so FFmpeg/libx264/libx265 stay in auto-thread mode instead of the app building extra encode worker pools.
+- When the selected encoder advertises FFmpeg frame and/or slice threading flags, the pipeline applies those flags to `AVCodecContext.thread_type`.
+- When the encoder does not advertise explicit FFmpeg frame/slice flags, the app leaves `thread_type` untouched and relies on backend-managed threading instead of inventing a duplicate thread pool.
+- The Qt desktop shell still uses one worker thread to keep the UI responsive, but the core streaming pipeline itself does not fan out extra host-side encode thread pools around the encoder backend.
+
+Windows priority stays outside `encoder-core` and is applied only by the desktop app worker:
+
+- The Run section exposes `High`, `Above Normal`, `Normal`, `Below Normal`, and `Low`.
+- Default is `Below Normal`.
+- `Low` maps internally to Windows `IDLE_PRIORITY_CLASS`, which is the lowest safe non-realtime class.
+- `Real Time` is intentionally not exposed.
+- The worker applies the selected priority with `SetPriorityClass(...)` before `EncodeJobRunner::run(...)` and restores the previous class afterward when possible.
+
+Preview/log/report surfaces show the resolved runtime summary, including encoder auto-threading, the `70`-frame video queue, and the selected priority.
+
 ## Memory Budget
 
 The working-set estimate now scales with queue depth and in-flight surfaces, not clip duration.
@@ -174,6 +194,7 @@ The working-set estimate now scales with queue depth and in-flight surfaces, not
 Current estimate formula:
 
 - one in-flight owned RGBA video surface
+- `+ video_frame_queue_depth * rgba_frame_bytes` for the bounded queued RGBA video frames
 - `+ rgba_frame_bytes` subtitle scratch when subtitles are enabled
 - `2 * yuv420_frame_bytes` for encoder-side working surfaces
 - `decoded_audio_block_queue * audio_block_bytes`
@@ -190,7 +211,8 @@ The Windows GitHub Actions job should verify:
 3. core tests still cover inspection, decode, legacy encode helpers, timeline assembly, encode-job streaming output, subtitle rendering, subtitle composition, and subtitle burn-in
 4. audio-bearing encode-job outputs still contain synchronized audio streams even when decoded video timestamps do not advance by one exact nominal frame step, including a regression sample with monotonic irregular MP4 frame deltas
 5. RGBA-capable libassmod subtitle scripts still render and burn in correctly
-6. the packaged Windows bundle still launches
+6. preflight and encode-job tests still surface `encoder threads`, `video queue 70 frames`, and the selected priority in preview/log/report output
+7. the packaged Windows bundle still launches
 
 ## Remaining Limits
 
@@ -200,6 +222,7 @@ The Windows GitHub Actions job should verify:
 - The last video frame in a segment still falls back to decoded-frame duration metadata or the nominal cadence when no later timestamp exists to derive its exact duration.
 - The legacy full-buffer `TimelineComposer` path still carries stricter CFR-oriented cadence assumptions and is not the active encode-job path.
 - Extremely pathological muxes with unusually long front-loaded audio packet runs can still enlarge the pending compressed-audio backlog until video packets are demuxed, although decoded-audio memory remains bounded by the normalized queue depth.
+- Preview/log/report threading text reflects the selected encoder backend's declared FFmpeg threading capabilities plus auto-threading mode; it does not attempt to report the encoder library's internal live worker count.
 
 ## Maintenance Notes
 

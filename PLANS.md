@@ -518,7 +518,7 @@ Scope change:
 - The current M16 slice also includes upgrading the libassmod-backed subtitle adapter so RGBA-only features such as gradient color/alpha tags render through the correct RGBA API path without leaking libassmod-specific behavior into unrelated pipeline code.
 - Scope update: the adapter now uses libassmod's RGBA rendering path for all subtitle frames instead of mixing legacy and RGBA render calls.
 - Scope update: output video time-base selection now favors the exact inverse main-source frame rate over coarse container stream time bases so CFR validation does not reject normal 24000/1001 material.
-- Scope update: the active transcode path is being tightened around FFmpeg 7.1 core-library APIs only, with `libavfilter` removed from the required dependency surface and the single-threaded streaming loop simplified where queueing was only buffering packets between synchronous stages.
+- Scope update: the active transcode path is being tightened around FFmpeg 7.1 core-library APIs only, with `libavfilter` removed from the required dependency surface and the host-side streaming loop simplified where queueing was only buffering packets between synchronous stages.
 
 Current slice status:
 - Completed: libassmod RGBA subtitle rendering migration for gradient-capable scripts and shared premultiplied-RGBA subtitle composition.
@@ -527,9 +527,9 @@ Current slice status:
 - Completed: FFmpeg 7.1 core-library dependency gating plus removal of `libavfilter` from the active dependency surface.
 - Completed: pinned FFmpeg 7.1.2 source-build workflow plus explicit prefix validation so CI no longer picks up MSYS2's newer FFmpeg package line.
 - Completed: FFmpeg-only GitHub Actions dependency cache keyed to the pinned 7.1 recipe so later workflow runs can skip rebuilding FFmpeg without caching the app build tree.
-- Completed: simplified single-threaded streaming loop with immediate video encode/mux handoff and bounded audio backpressure queues instead of redundant packet/frame staging queues.
+- Completed: simplified the host-side streaming loop so redundant packet and mux staging queues were removed while bounded audio backpressure queues remained in place ahead of the later explicit 70-frame video handoff queue.
 - Completed: fine-grained streaming encode progress for the desktop app, carried from the frame-driven transcoder back through the core observer and Qt worker/controller layers without changing the thread model.
-- In progress: throughput and scheduling controls for the active encode path, limited to encoder-backend threading controls, one explicit 70-frame bounded video queue, and a safe Windows process-priority selector in the GUI.
+- Completed: throughput and scheduling controls for the active encode path, using backend-managed encoder auto-threading, one explicit 70-frame bounded video queue with backpressure, a safe Windows process-priority selector in the GUI, and preview/log/report visibility for the resolved runtime behavior.
 - Deferred: host-side `\img` resource registration remains outside this slice, and `\img` scripts now fail explicitly until that registration path exists.
 
 Likely files/modules:
