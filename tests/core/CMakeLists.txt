@@ -7,6 +7,7 @@ set(UTSURE_TIMELINE_INTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-intro.avi")
 set(UTSURE_TIMELINE_OUTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-outro.avi")
 set(UTSURE_TIMELINE_BAD_FPS_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-bad-fps.avi")
 set(UTSURE_NTSC_COARSE_TIMEBASE_FILE "${UTSURE_TEST_MEDIA_DIR}/ntsc-coarse-timebase.mp4")
+set(UTSURE_IRREGULAR_TIMESTAMP_FILE "${UTSURE_TEST_MEDIA_DIR}/irregular-timestamp-main.mp4")
 set(UTSURE_SUBTITLE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-sample.ass")
 set(UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-gradient-sample.ass")
 set(UTSURE_SUBTITLE_IMG_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-img-sample.ass")
@@ -108,6 +109,24 @@ add_custom_command(
     VERBATIM
 )
 
+add_custom_command(
+    OUTPUT "${UTSURE_IRREGULAR_TIMESTAMP_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "testsrc=size=320x180:rate=48"
+        -f lavfi -i "sine=frequency=1000:sample_rate=48000:duration=4"
+        -vf "select='if(eq(n,0),1,eq(mod(n,2),0)*not(eq(mod(n,14),0)))'"
+        -t 4
+        -fps_mode vfr
+        -c:v libx264
+        -preset ultrafast
+        -pix_fmt yuv420p
+        -c:a aac
+        -b:a 128k
+        -shortest
+        "${UTSURE_IRREGULAR_TIMESTAMP_FILE}"
+    VERBATIM
+)
+
 add_custom_target(
     utsure_generate_sample_media
     DEPENDS
@@ -117,6 +136,7 @@ add_custom_target(
         "${UTSURE_TIMELINE_OUTRO_FILE}"
         "${UTSURE_TIMELINE_BAD_FPS_FILE}"
         "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
+        "${UTSURE_IRREGULAR_TIMESTAMP_FILE}"
 )
 
 add_executable(utsure_core_media_inspection_tests
@@ -262,6 +282,13 @@ add_test(
     COMMAND utsure_core_encode_job_tests --coarse-timebase-ntsc
         "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/job-ntsc-coarse-timebase.mp4"
+)
+
+add_test(
+    NAME utsure.core.job.encode.irregular_timestamps
+    COMMAND utsure_core_encode_job_tests --irregular-timestamps
+        "${UTSURE_IRREGULAR_TIMESTAMP_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-irregular-timestamps.mp4"
 )
 
 add_executable(utsure_core_encode_job_preflight_tests

@@ -61,6 +61,41 @@ std::string format_rational(const Rational &value) {
     return std::to_string(value.numerator) + "/" + std::to_string(value.denominator);
 }
 
+bool rational_is_positive(const Rational &value) {
+    return value.is_valid() && value.numerator > 0 && value.denominator > 0;
+}
+
+bool rational_has_finer_precision(const Rational &left, const Rational &right) {
+    if (!rational_is_positive(left)) {
+        return false;
+    }
+
+    if (!rational_is_positive(right)) {
+        return true;
+    }
+
+    return (left.numerator * right.denominator) < (right.numerator * left.denominator);
+}
+
+Rational choose_expected_output_video_time_base(const Rational &stream_time_base, const Rational &average_frame_rate) {
+    const Rational nominal_frame_time_base = rational_is_positive(average_frame_rate)
+        ? Rational{
+            .numerator = average_frame_rate.denominator,
+            .denominator = average_frame_rate.numerator
+        }
+        : Rational{};
+
+    if (rational_has_finer_precision(stream_time_base, nominal_frame_time_base)) {
+        return stream_time_base;
+    }
+
+    if (rational_is_positive(nominal_frame_time_base)) {
+        return nominal_frame_time_base;
+    }
+
+    return stream_time_base;
+}
+
 bool frames_are_identical(
     const DecodedMediaSource &decoded_output,
     const std::size_t left_index,
@@ -86,6 +121,34 @@ std::int64_t decoded_audio_end_microseconds(const DecodedMediaSource &decoded_ou
 
     const auto &last_block = decoded_output.audio_blocks.back();
     return last_block.timestamp.start_microseconds + last_block.timestamp.duration_microseconds.value_or(0);
+}
+
+bool has_irregular_video_timestamp_deltas(const DecodedMediaSource &decoded_output) {
+    if (decoded_output.video_frames.size() < 3U) {
+        return false;
+    }
+
+    const auto first_delta =
+        decoded_output.video_frames[1].timestamp.start_microseconds -
+        decoded_output.video_frames[0].timestamp.start_microseconds;
+    if (first_delta <= 0) {
+        return false;
+    }
+
+    for (std::size_t index = 2; index < decoded_output.video_frames.size(); ++index) {
+        const auto current_delta =
+            decoded_output.video_frames[index].timestamp.start_microseconds -
+            decoded_output.video_frames[index - 1].timestamp.start_microseconds;
+        if (current_delta <= 0) {
+            return false;
+        }
+
+        if (current_delta != first_delta) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 int assert_output_decode(
@@ -712,8 +775,13 @@ int run_coarse_timebase_ntsc_assertion(
     }
 
     const auto &summary = *job_result.encode_job_summary;
+    const auto expected_output_video_time_base = choose_expected_output_video_time_base(
+        input_video_stream.timestamps.time_base,
+        input_video_stream.average_frame_rate
+    );
     if (format_rational(summary.timeline_summary.output_frame_rate) != "24000/1001" ||
-        format_rational(summary.timeline_summary.output_video_time_base) != "1001/24000" ||
+        format_rational(summary.timeline_summary.output_video_time_base) !=
+            format_rational(expected_output_video_time_base) ||
         !summary.timeline_summary.output_audio_time_base.has_value() ||
         format_rational(*summary.timeline_summary.output_audio_time_base) != "1/48000" ||
         summary.encoded_media_summary.resolved_audio_output.resolved_mode != ResolvedAudioOutputMode::encode_aac) {
@@ -755,6 +823,130 @@ int run_coarse_timebase_ntsc_assertion(
     return 0;
 }
 
+int run_irregular_timestamp_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &output_path
+) {
+    const MediaInspectionResult input_inspection_result = MediaInspector::inspect(main_path);
+    if (!input_inspection_result.succeeded() ||
+        !input_inspection_result.media_source_info->primary_video_stream.has_value()) {
+        return fail("The irregular-timestamp sample could not be inspected.");
+    }
+
+    const MediaDecodeResult input_decode_result = MediaDecoder::decode(main_path);
+    if (!input_decode_result.succeeded()) {
+        const std::string error_message =
+            "The irregular-timestamp sample could not be decoded: " +
+            input_decode_result.error->message +
+            " Hint: " +
+            input_decode_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const auto &decoded_input = *input_decode_result.decoded_media_source;
+    if (decoded_input.video_frames.empty() || decoded_input.audio_blocks.empty()) {
+        return fail("The irregular-timestamp sample did not expose both video and audio.");
+    }
+
+    if (!has_irregular_video_timestamp_deltas(decoded_input)) {
+        return fail("The irregular-timestamp sample unexpectedly decoded at a fixed frame cadence.");
+    }
+
+    CollectingObserver observer{};
+    EncodeJob job{
+        .input = {
+            .main_source_path = main_path
+        },
+        .output = {
+            .output_path = output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+    job.output.audio.mode = AudioOutputMode::encode_aac;
+
+    const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!job_result.succeeded()) {
+        const std::string error_message =
+            "The irregular-timestamp encode job failed unexpectedly: " +
+            job_result.error->message +
+            " Hint: " +
+            job_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const MediaDecodeResult output_decode_result = MediaDecoder::decode(output_path);
+    if (!output_decode_result.succeeded()) {
+        const std::string error_message =
+            "The irregular-timestamp output decode failed unexpectedly: " +
+            output_decode_result.error->message +
+            " Hint: " +
+            output_decode_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const auto &decoded_output = *output_decode_result.decoded_media_source;
+    if (assert_output_decode(decoded_output, decoded_input.video_frames.size(), true) != 0) {
+        return 1;
+    }
+
+    if (!has_irregular_video_timestamp_deltas(decoded_output)) {
+        return fail("The streaming encode output did not preserve monotonic irregular video timestamps.");
+    }
+
+    const auto av_duration_delta = std::llabs(
+        decoded_video_end_microseconds(decoded_output) -
+        decoded_audio_end_microseconds(decoded_output)
+    );
+    if (av_duration_delta > 100000) {
+        return fail("The irregular-timestamp output audio/video durations drifted too far apart.");
+    }
+
+    const auto &input_video_stream = *input_inspection_result.media_source_info->primary_video_stream;
+    const auto &summary = *job_result.encode_job_summary;
+    const auto expected_output_video_time_base = choose_expected_output_video_time_base(
+        input_video_stream.timestamps.time_base,
+        input_video_stream.average_frame_rate
+    );
+    if (format_rational(summary.timeline_summary.output_frame_rate) !=
+            format_rational(input_video_stream.average_frame_rate) ||
+        format_rational(summary.timeline_summary.output_video_time_base) !=
+            format_rational(expected_output_video_time_base) ||
+        !summary.timeline_summary.output_audio_time_base.has_value() ||
+        format_rational(*summary.timeline_summary.output_audio_time_base) != "1/48000" ||
+        summary.timeline_summary.output_video_frame_count !=
+            static_cast<std::int64_t>(decoded_input.video_frames.size()) ||
+        summary.encoded_media_summary.resolved_audio_output.resolved_mode !=
+            ResolvedAudioOutputMode::encode_aac) {
+        return fail("Unexpected summary state for the irregular-timestamp encode job.");
+    }
+
+    const auto output_duration_delta = std::llabs(
+        summary.timeline_summary.output_duration_microseconds -
+        decoded_video_end_microseconds(decoded_output)
+    );
+    if (output_duration_delta > 100000) {
+        return fail("The irregular-timestamp summary duration drifted too far from decoded output video timing.");
+    }
+
+    const auto observer_result = assert_observer_flow(observer, 1, false);
+    if (observer_result != 0) {
+        return observer_result;
+    }
+
+    std::cout << build_validation_report(
+        *job_result.encode_job_summary,
+        decoded_output
+    ) << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -766,7 +958,8 @@ int main(int argc, char *argv[]) {
             "[--streaming-memory-budget] <input> <output> | "
             "[--disable-audio] <input> <output> | "
             "[--copy-audio] <input> <output> | "
-            "[--coarse-timebase-ntsc] <input> <output>"
+            "[--coarse-timebase-ntsc] <input> <output> | "
+            "[--irregular-timestamps] <input> <output>"
         );
     }
 
@@ -822,6 +1015,13 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--coarse-timebase-ntsc" && argc == 4) {
         return run_coarse_timebase_ntsc_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
+        );
+    }
+
+    if (mode == "--irregular-timestamps" && argc == 4) {
+        return run_irregular_timestamp_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3])
         );

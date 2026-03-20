@@ -46,6 +46,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M16 slice is limited to migrating the libassmod subtitle adapter from the legacy `ASS_Image` path to the fork's RGBA-capable render path where required, while preserving the existing renderer abstraction, timestamp rules, and streaming subtitle burn-in flow.
 - The current M16 subtitle-rendering slice now prefers the libassmod RGBA API unconditionally inside the adapter so gradient and other per-pixel effects are not exposed to legacy `ASS_Image` fallback behavior.
 - The current M16 hardening slice also includes fixing cadence validation for real-world CFR sources whose container stream time base is too coarse to represent the authoritative frame rate exactly.
+- The current M16 timing hardening slice also includes replacing exact-step decoded video timestamp validation in the streaming path with monotonic timestamp-driven frame timing, while keeping nominal frame rate as encoder/report metadata instead of a per-frame gate.
 - The current M16 hardening slice also includes replacing compressed-audio byte-guard failures with timestamp-based audio throttling, bounded decoded-audio queues, and a startup preroll rule so normal H.264 decode delay does not abort streaming jobs.
 - The current M16 audio slice also includes fixing the normalized/output audio timeline to use sample-based time units instead of inheriting arbitrary source stream time bases, and adding centralized audio output mode resolution for Auto / Copy / AAC / Disable across core and GUI surfaces.
 - The current M16 audio slice now routes the active streamer through one resolved output-audio plan so AAC encode, single-segment stream copy, and disabled-audio jobs all use the same core compatibility rules and preview/report summaries.
@@ -519,7 +520,8 @@ Scope change:
 
 Current slice status:
 - Completed: libassmod RGBA subtitle rendering migration for gradient-capable scripts and shared premultiplied-RGBA subtitle composition.
-- Completed: cadence-safe output video time-base selection plus regression coverage for CFR sources whose stream time base is coarser than the authoritative main-source frame rate.
+- Completed: output video time-base selection now keeps the finer of the main stream timestamp base and inverse nominal frame step so streaming encode preserves decoded timestamp precision without using nominal fps as a per-frame gate.
+- Completed: monotonic decoded-timestamp-driven main-segment video timing in the streaming path, replacing the exact-step cadence guard that rejected valid MP4 timestamp patterns.
 - Completed: FFmpeg 7.1 core-library dependency gating plus removal of `libavfilter` from the active dependency surface.
 - Completed: pinned FFmpeg 7.1.2 source-build workflow plus explicit prefix validation so CI no longer picks up MSYS2's newer FFmpeg package line.
 - Completed: FFmpeg-only GitHub Actions dependency cache keyed to the pinned 7.1 recipe so later workflow runs can skip rebuilding FFmpeg without caching the app build tree.
@@ -546,7 +548,7 @@ Validation:
 - Build and run the focused core encode/preflight tests that exercise main-only, intro/main/outro, and subtitle cases.
 - Verify that memory-heavy 1080p jobs are no longer rejected by duration-scaled decoded-memory estimates.
 - Verify that audio-bearing inputs produce muxed outputs with an expected audio stream and coherent durations.
-- Verify one 24000/1001 sample whose input stream time base is forced to `1/1000`, and confirm the timeline still uses `1001/24000` for CFR validation.
+- Verify one 24000/1001 sample whose input stream time base is forced to `1/1000`, and confirm the timeline keeps `1/1000` for streamed timestamp precision while still reporting `24000/1001` as the output frame rate.
 - Document the new stage flow, queue limits, where decoded/composited frame memory is released, and where audio frames/packets are released.
 - Verify the subtitle adapter against one normal ASS sample plus one RGBA-only subtitle sample that depends on libassmod gradient rendering, and include `\img` coverage if the host-side image registration path is wired in this slice.
 

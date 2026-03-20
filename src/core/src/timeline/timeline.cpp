@@ -48,6 +48,7 @@ std::int64_t rescale_value(
 std::int64_t rescale_to_microseconds(std::int64_t value, const Rational &time_base);
 bool rational_is_positive(const Rational &value);
 bool rationals_equal(const Rational &left, const Rational &right);
+bool rational_has_finer_precision(const Rational &left, const Rational &right);
 std::optional<std::filesystem::path> normalize_optional_path(const std::optional<std::filesystem::path> &path);
 MediaInspectionResult inspect_segment(TimelineSegmentKind kind, const std::filesystem::path &source_path);
 Rational choose_output_video_time_base(const media::VideoStreamInfo &video_stream);
@@ -455,6 +456,18 @@ bool rationals_equal(const Rational &left, const Rational &right) {
     return (left.numerator * right.denominator) == (right.numerator * left.denominator);
 }
 
+bool rational_has_finer_precision(const Rational &left, const Rational &right) {
+    if (!rational_is_positive(left)) {
+        return false;
+    }
+
+    if (!rational_is_positive(right)) {
+        return true;
+    }
+
+    return (left.numerator * right.denominator) < (right.numerator * left.denominator);
+}
+
 std::optional<std::filesystem::path> normalize_optional_path(const std::optional<std::filesystem::path> &path) {
     if (!path.has_value() || path->empty()) {
         return std::nullopt;
@@ -484,15 +497,24 @@ MediaInspectionResult inspect_segment(
 }
 
 Rational choose_output_video_time_base(const media::VideoStreamInfo &video_stream) {
-    if (rational_is_positive(video_stream.average_frame_rate)) {
-        return Rational{
+    const Rational stream_time_base = video_stream.timestamps.time_base;
+    const Rational nominal_frame_time_base = rational_is_positive(video_stream.average_frame_rate)
+        ? Rational{
             .numerator = video_stream.average_frame_rate.denominator,
             .denominator = video_stream.average_frame_rate.numerator
-        };
+        }
+        : Rational{};
+
+    if (rational_has_finer_precision(stream_time_base, nominal_frame_time_base)) {
+        return stream_time_base;
     }
 
-    if (rational_is_positive(video_stream.timestamps.time_base)) {
-        return video_stream.timestamps.time_base;
+    if (rational_is_positive(nominal_frame_time_base)) {
+        return nominal_frame_time_base;
+    }
+
+    if (rational_is_positive(stream_time_base)) {
+        return stream_time_base;
     }
 
     throw std::runtime_error("The main video stream does not expose a usable time base for timeline composition.");

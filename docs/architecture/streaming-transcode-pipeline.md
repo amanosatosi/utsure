@@ -29,7 +29,7 @@ Intro, main, and outro clips are still assembled by `TimelineAssembler`, but the
 4. Decode video/audio frames incrementally with `libavcodec`.
 5. Normalize video to RGBA with `libswscale` and audio to planar float with `libswresample`.
 6. Render and composite subtitle bitmaps onto each video frame inside the app when the segment/timing mode requires it.
-7. Encode video/audio incrementally.
+7. Rebase video frames onto the output timeline from decoded timestamps, then encode video/audio incrementally.
 8. Mux packets incrementally with `av_interleaved_write_frame(...)`.
 9. Finalize the muxer after the last segment.
 
@@ -76,9 +76,10 @@ For each decoded video frame:
 
 1. `avcodec_receive_frame(...)` fills a reusable FFmpeg decode frame.
 2. `normalize_video_frame(...)` allocates one temporary RGBA `AVFrame`, copies its bytes into one owned `DecodedVideoFrame`, and unrefs the temporary FFmpeg frame.
-3. Subtitle composition mutates that owned RGBA frame in place.
-4. `StreamingOutputSession::build_encoded_video_frame(...)` allocates one YUV encoder frame, uses `sws_scale(...)`, sends it to the encoder, and releases it after the send/drain step.
-5. `avcodec_receive_packet(...)` fills a reusable packet, `av_interleaved_write_frame(...)` muxes it, and `av_packet_unref(...)` releases packet storage immediately.
+3. The segment loop keeps at most one normalized video frame pending so the previous frame duration can be derived from the next decoded timestamp.
+4. Subtitle composition mutates that owned RGBA frame in place.
+5. `StreamingOutputSession::build_encoded_video_frame(...)` allocates one YUV encoder frame, uses `sws_scale(...)`, sends it to the encoder, and releases it after the send/drain step.
+6. `avcodec_receive_packet(...)` fills a reusable packet, `av_interleaved_write_frame(...)` muxes it, and `av_packet_unref(...)` releases packet storage immediately.
 
 ### Audio
 
@@ -118,8 +119,8 @@ Rules:
 - `Auto` uses stream copy only when that copy path is clearly safe; otherwise it falls back to AAC encode.
 - AAC encode always rebases audio onto a sample-based output timeline (`1 / sample_rate`) instead of inheriting an arbitrary source stream time base.
 - If a segment has no audio stream but the output timeline does, bounded silence blocks are synthesized for that segment.
-- If decoded segment audio exceeds the video-defined segment duration, the final drain trims the overflow instead of extending the output timeline.
-- If decoded segment audio falls short of the expected segment duration, the pipeline pads the tail with silence.
+- If decoded segment audio exceeds the written video duration on the output timeline, the final drain trims the overflow instead of extending the output timeline.
+- If decoded segment audio falls short of the written video duration, the pipeline pads the tail with silence.
 - If the output container, audio encoder, sample rate, or channel layout is unsupported, the job fails clearly instead of silently dropping audio.
 
 ## Subtitle Path
@@ -154,13 +155,15 @@ The output frame rate still comes from the main source.
 The streaming pipeline enforces this by:
 
 - building the output encoder from `TimelinePlan.output_frame_rate` and `TimelinePlan.output_video_time_base`
-- validating every streamed frame duration against the main cadence after rescaling into the output time base
-- validating inter-frame timestamp deltas per segment
-- rebasing output frame timestamps onto a single monotonically increasing output timeline
+- keeping `TimelinePlan.output_video_time_base` at the finer of the main stream timestamp base and the inverse nominal frame step so decoded timestamps are not collapsed before encode
+- choosing each decoded frame timestamp from `AVFrame.pts`, then `best_effort_timestamp`, and only falling back to a synthesized stream cursor when neither exists
+- comparing successive decoded frame timestamps for monotonic forward progress instead of requiring one exact nominal frame step every time
+- rebasing decoded frame timestamps into `TimelinePlan.output_video_time_base` before writing them to the encoder
+- deriving each emitted frame duration from the next decoded frame timestamp delta, with a decoded-frame duration or nominal-cadence fallback only for the final frame in a segment
 
 FFmpeg 7.1-specific implementation choices:
 
-- output video time base is chosen from the inverse authoritative frame rate when the container stream time base is too coarse for exact CFR validation
+- decoded frame timing uses `AVFrame.pts`, `best_effort_timestamp`, and `AVFrame.duration` as exposed by FFmpeg 7.1, with a synthesized fallback only when FFmpeg does not provide usable frame timestamps
 - channel-layout handling uses `AVChannelLayout`-based APIs that are available in FFmpeg 7.1
 - audio normalization uses `swr_alloc_set_opts2(...)`, which matches the FFmpeg 7.1 channel-layout model
 
@@ -185,7 +188,7 @@ The Windows GitHub Actions job should verify:
 1. dependency audit succeeds with source-built FFmpeg `7.1.2`, `libx264`, `libx265`, and the pinned `libassmod` prefix
 2. CMake configure/build succeeds without requiring `libavfilter`
 3. core tests still cover inspection, decode, legacy encode helpers, timeline assembly, encode-job streaming output, subtitle rendering, subtitle composition, and subtitle burn-in
-4. audio-bearing encode-job outputs still contain synchronized audio streams
+4. audio-bearing encode-job outputs still contain synchronized audio streams even when decoded video timestamps do not advance by one exact nominal frame step, including a regression sample with monotonic irregular MP4 frame deltas
 5. RGBA-capable libassmod subtitle scripts still render and burn in correctly
 6. the packaged Windows bundle still launches
 
@@ -194,6 +197,8 @@ The Windows GitHub Actions job should verify:
 - Host-side `\img` resource registration is still not wired. Scripts that reference `\img` fail explicitly during subtitle-session creation.
 - The active output audio encoder is AAC-only.
 - Hardware-accelerated decode/encode is not part of this slice.
+- The last video frame in a segment still falls back to decoded-frame duration metadata or the nominal cadence when no later timestamp exists to derive its exact duration.
+- The legacy full-buffer `TimelineComposer` path still carries stricter CFR-oriented cadence assumptions and is not the active encode-job path.
 - Extremely pathological muxes with unusually long front-loaded audio packet runs can still enlarge the pending compressed-audio backlog until video packets are demuxed, although decoded-audio memory remains bounded by the normalized queue depth.
 
 ## Maintenance Notes
