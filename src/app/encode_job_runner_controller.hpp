@@ -1,6 +1,6 @@
 #pragma once
 
-#include "utsure/core/job/encode_job.hpp"
+#include "encode_job_progress_qt_types.hpp"
 
 #include <QObject>
 #include <QString>

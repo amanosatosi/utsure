@@ -1,12 +1,9 @@
 #pragma once
 
-#include "utsure/core/job/encode_job.hpp"
+#include "encode_job_progress_qt_types.hpp"
 
-#include <QMetaType>
 #include <QObject>
 #include <QString>
-
-Q_DECLARE_METATYPE(utsure::core::job::EncodeJobProgress)
 
 class EncodeJobRunnerWorker final
     : public QObject,
