@@ -18,6 +18,7 @@ using utsure::core::job::EncodeJob;
 using utsure::core::job::EncodeJobLogLevel;
 using utsure::core::job::EncodeJobLogMessage;
 using utsure::core::job::EncodeJobObserver;
+using utsure::core::job::EncodeJobProcessPriority;
 using utsure::core::job::EncodeJobProgress;
 using utsure::core::job::EncodeJobResult;
 using utsure::core::job::EncodeJobRunner;
@@ -39,6 +40,10 @@ using utsure::core::timeline::TimelineSegmentKind;
 int fail(std::string_view message) {
     std::cerr << message << '\n';
     return 1;
+}
+
+bool contains_text(const std::string &text, std::string_view needle) {
+    return text.find(needle) != std::string::npos;
 }
 
 struct CollectingObserver final : EncodeJobObserver {
@@ -343,6 +348,41 @@ int assert_observer_flow(
     return 0;
 }
 
+bool observer_logs_contain_text(const CollectingObserver &observer, std::string_view needle) {
+    for (const auto &message : observer.log_messages) {
+        if (contains_text(message.message, needle)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+int assert_runtime_visibility(
+    const CollectingObserver &observer,
+    const EncodeJobSummary &summary
+) {
+    if (summary.job.execution.process_priority != EncodeJobProcessPriority::below_normal) {
+        return fail("Unexpected default encode-job process priority.");
+    }
+
+    const auto report = format_encode_job_report(summary);
+    if (!contains_text(report, "job.execution.priority=below_normal") ||
+        !contains_text(report, "streaming.encoder_threads=auto (") ||
+        !contains_text(report, "streaming.video_queue_frames=70") ||
+        !contains_text(report, "streaming.audio_queue_blocks=8")) {
+        return fail("The encode-job report did not include the expected runtime settings.");
+    }
+
+    if (!observer_logs_contain_text(observer, "Encoding runtime: encoder threads auto (") ||
+        !observer_logs_contain_text(observer, "video queue 70 frames") ||
+        !observer_logs_contain_text(observer, "priority Below Normal")) {
+        return fail("The encode-job observer logs did not include the expected runtime settings.");
+    }
+
+    return 0;
+}
+
 std::vector<const EncodeJobProgress *> collect_fine_encode_updates(const CollectingObserver &observer) {
     std::vector<const EncodeJobProgress *> updates{};
     updates.reserve(observer.progress_updates.size());
@@ -564,6 +604,11 @@ int run_main_only_job_assertion(
         return fine_progress_result;
     }
 
+    const auto runtime_visibility_result = assert_runtime_visibility(observer, *job_result.encode_job_summary);
+    if (runtime_visibility_result != 0) {
+        return runtime_visibility_result;
+    }
+
     std::cout << build_validation_report(
         *job_result.encode_job_summary,
         *output_decode_result.decoded_media_source
@@ -651,6 +696,11 @@ int run_timeline_h264_assertion(
         return fine_progress_result;
     }
 
+    const auto runtime_visibility_result = assert_runtime_visibility(observer, *job_result.encode_job_summary);
+    if (runtime_visibility_result != 0) {
+        return runtime_visibility_result;
+    }
+
     std::cout << build_validation_report(
         *job_result.encode_job_summary,
         *output_decode_result.decoded_media_source
@@ -718,6 +768,10 @@ int run_streaming_memory_budget_assertion(
         return 1;
     }
 
+    if (assert_runtime_visibility(observer, *job_result.encode_job_summary) != 0) {
+        return 1;
+    }
+
     std::cout << "streaming_memory_budget=passed\n";
     std::cout << "output.video.resolution=1920x1080\n";
     std::cout << "output.encoded_video_frames=" << summary.encoded_media_summary.encoded_video_frame_count << '\n';
@@ -781,6 +835,10 @@ int run_disable_audio_assertion(
     }
 
     if (assert_fine_encode_progress(observer, summary) != 0) {
+        return 1;
+    }
+
+    if (assert_runtime_visibility(observer, summary) != 0) {
         return 1;
     }
 
@@ -856,6 +914,10 @@ int run_copy_audio_assertion(
     }
 
     if (assert_fine_encode_progress(observer, summary) != 0) {
+        return 1;
+    }
+
+    if (assert_runtime_visibility(observer, summary) != 0) {
         return 1;
     }
 
@@ -956,6 +1018,11 @@ int run_coarse_timebase_ntsc_assertion(
     const auto fine_progress_result = assert_fine_encode_progress(observer, summary);
     if (fine_progress_result != 0) {
         return fine_progress_result;
+    }
+
+    const auto runtime_visibility_result = assert_runtime_visibility(observer, summary);
+    if (runtime_visibility_result != 0) {
+        return runtime_visibility_result;
     }
 
     std::cout << build_validation_report(
@@ -1085,6 +1152,11 @@ int run_irregular_timestamp_assertion(
     const auto fine_progress_result = assert_fine_encode_progress(observer, summary);
     if (fine_progress_result != 0) {
         return fine_progress_result;
+    }
+
+    const auto runtime_visibility_result = assert_runtime_visibility(observer, summary);
+    if (runtime_visibility_result != 0) {
+        return runtime_visibility_result;
     }
 
     std::cout << build_validation_report(

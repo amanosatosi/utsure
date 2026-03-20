@@ -9,6 +9,7 @@
 namespace {
 
 using utsure::core::job::EncodeJob;
+using utsure::core::job::EncodeJobProcessPriority;
 using utsure::core::job::EncodeJobPreflight;
 using utsure::core::job::EncodeJobPreflightIssueCode;
 using utsure::core::job::EncodeJobPreflightIssueSeverity;
@@ -23,6 +24,10 @@ using utsure::core::timeline::TimelineSegmentKind;
 int fail(std::string_view message) {
     std::cerr << message << '\n';
     return 1;
+}
+
+bool contains_text(const std::string &text, std::string_view needle) {
+    return text.find(needle) != std::string::npos;
 }
 
 void remove_file_if_present(const std::filesystem::path &path) {
@@ -117,7 +122,19 @@ int run_valid_preview_assertion(
         return fail("Unexpected preview audio summary.");
     }
 
+    if (preview.video_frame_queue_depth != 70 ||
+        preview.process_priority != EncodeJobProcessPriority::below_normal ||
+        !contains_text(preview.encoder_threading_summary, "auto (")) {
+        return fail("Unexpected preview runtime summary.");
+    }
+
     const auto preview_text = format_encode_job_preview(preview);
+    if (!contains_text(preview_text, "Encoding runtime: encoder threads auto (") ||
+        !contains_text(preview_text, "video queue 70 frames") ||
+        !contains_text(preview_text, "priority Below Normal")) {
+        return fail("The valid preflight preview text did not include the expected runtime details.");
+    }
+
     std::cout << preview_text << '\n';
     return 0;
 }
@@ -268,6 +285,10 @@ int run_streaming_memory_budget_assertion(
         preview.main_source_info.primary_video_stream->width != 1920 ||
         preview.main_source_info.primary_video_stream->height != 1080) {
         return fail("Unexpected preview resolution for the streaming-memory job.");
+    }
+
+    if (preview.video_frame_queue_depth != 70 || !contains_text(preview.encoder_threading_summary, "auto (")) {
+        return fail("Unexpected streaming-memory preview runtime summary.");
     }
 
     std::cout << "streaming_memory_budget=allowed\n";

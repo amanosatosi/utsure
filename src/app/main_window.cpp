@@ -73,6 +73,23 @@ utsure::core::media::OutputAudioCodec output_audio_codec_from_value(const int va
     }
 }
 
+utsure::core::job::EncodeJobProcessPriority priority_from_value(const int value) {
+    switch (static_cast<utsure::core::job::EncodeJobProcessPriority>(value)) {
+    case utsure::core::job::EncodeJobProcessPriority::high:
+        return utsure::core::job::EncodeJobProcessPriority::high;
+    case utsure::core::job::EncodeJobProcessPriority::above_normal:
+        return utsure::core::job::EncodeJobProcessPriority::above_normal;
+    case utsure::core::job::EncodeJobProcessPriority::normal:
+        return utsure::core::job::EncodeJobProcessPriority::normal;
+    case utsure::core::job::EncodeJobProcessPriority::below_normal:
+        return utsure::core::job::EncodeJobProcessPriority::below_normal;
+    case utsure::core::job::EncodeJobProcessPriority::low:
+        return utsure::core::job::EncodeJobProcessPriority::low;
+    default:
+        return utsure::core::job::EncodeJobProcessPriority::below_normal;
+    }
+}
+
 QString recommended_preset(const utsure::core::media::OutputVideoCodec /*codec*/) {
     return "medium";
 }
@@ -335,17 +352,39 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     progress_bar_->setValue(0);
     progress_bar_->setFormat("Ready");
 
+    priority_combo_ = new QComboBox(run_group);
+    priority_combo_->setObjectName("priorityCombo");
+    priority_combo_->addItem("High", static_cast<int>(utsure::core::job::EncodeJobProcessPriority::high));
+    priority_combo_->addItem(
+        "Above Normal",
+        static_cast<int>(utsure::core::job::EncodeJobProcessPriority::above_normal)
+    );
+    priority_combo_->addItem("Normal", static_cast<int>(utsure::core::job::EncodeJobProcessPriority::normal));
+    priority_combo_->addItem(
+        "Below Normal",
+        static_cast<int>(utsure::core::job::EncodeJobProcessPriority::below_normal)
+    );
+    priority_combo_->addItem("Low", static_cast<int>(utsure::core::job::EncodeJobProcessPriority::low));
+    priority_combo_->setCurrentIndex(priority_combo_->findData(
+        static_cast<int>(utsure::core::job::EncodeJobProcessPriority::below_normal)
+    ));
+    priority_combo_->setToolTip(
+        "Applies a safe process priority during encode and restores the previous priority afterward."
+    );
+
     start_button_ = new QPushButton("Start Encode", run_group);
     start_button_->setObjectName("startEncodeButton");
     connect(start_button_, &QPushButton::clicked, this, &MainWindow::start_encode);
 
     run_layout->addWidget(new QLabel("Status", run_group), 0, 0);
     run_layout->addWidget(status_label_, 0, 1);
+    run_layout->addWidget(new QLabel("Priority", run_group), 0, 2);
+    run_layout->addWidget(priority_combo_, 0, 3);
     run_layout->addWidget(new QLabel("Preview", run_group), 1, 0);
     run_layout->addWidget(preview_label_, 1, 1);
     run_layout->addWidget(new QLabel("Progress", run_group), 2, 0);
     run_layout->addWidget(progress_bar_, 2, 1);
-    run_layout->addWidget(start_button_, 0, 2, 3, 1);
+    run_layout->addWidget(start_button_, 1, 2, 2, 2);
 
     auto *logs_group = new QGroupBox("Logs", central_widget);
     auto *logs_layout = new QVBoxLayout(logs_group);
@@ -406,6 +445,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     connect(audio_channels_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int /*index*/) {
         mark_preview_stale();
     });
+    connect(priority_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int /*index*/) {
+        mark_preview_stale();
+    });
     connect(preset_combo_, &QComboBox::currentTextChanged, this, [this](const QString &) {
         mark_preview_stale();
     });
@@ -426,7 +468,7 @@ QString MainWindow::window_structure_summary() const {
         "- Inputs: source video, subtitle file, optional intro clip, optional outro clip\n"
         "- Output: codec, preset, CRF, output path\n"
         "- Audio: mode, codec, bitrate, sample rate, channels\n"
-        "- Run: status label, preview label, progress bar, start encode button\n"
+        "- Run: status label, priority selector, preview label, progress bar, start encode button\n"
         "- Logs: read-only text pane for core stage logs, reports, and errors"
     );
 }
@@ -472,6 +514,7 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job(QString &error
             audio_mode == utsure::core::media::AudioOutputMode::encode_aac
             ? current_audio_channel_override()
             : std::nullopt;
+    job.execution.process_priority = current_encode_priority();
 
     const QString subtitle_text = subtitle_path_edit_->text().trimmed();
     if (!subtitle_text.isEmpty()) {
@@ -509,6 +552,10 @@ utsure::core::media::AudioOutputMode MainWindow::current_audio_mode() const {
 
 utsure::core::media::OutputAudioCodec MainWindow::current_output_audio_codec() const {
     return output_audio_codec_from_value(audio_codec_combo_->currentData().toInt());
+}
+
+utsure::core::job::EncodeJobProcessPriority MainWindow::current_encode_priority() const {
+    return priority_from_value(priority_combo_->currentData().toInt());
 }
 
 std::optional<int> MainWindow::current_audio_sample_rate_override() const {
@@ -652,6 +699,10 @@ void MainWindow::start_encode() {
     append_log_line("[info] Requested encode job.");
     append_log_line("[info] Source: " + source_path_edit_->text().trimmed());
     append_log_line("[info] Output: " + output_path_edit_->text().trimmed());
+    append_log_line(
+        QString("[info] Priority: %1")
+            .arg(to_qstring(utsure::core::job::to_display_string(current_encode_priority())))
+    );
     set_status_text("Validation passed. Starting encode job.", false);
     runner_controller_->start_job(*job);
 }
@@ -684,6 +735,7 @@ void MainWindow::handle_running_changed(const bool running) {
     output_group_->setEnabled(!running);
     audio_group_->setEnabled(!running);
     start_button_->setEnabled(!running);
+    priority_combo_->setEnabled(!running);
     start_button_->setText(running ? "Encoding..." : "Start Encode");
 
     if (running) {

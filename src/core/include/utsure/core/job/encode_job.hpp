@@ -25,6 +25,14 @@ enum class EncodeJobLogLevel : std::uint8_t {
     error
 };
 
+enum class EncodeJobProcessPriority : std::uint8_t {
+    high = 0,
+    above_normal,
+    normal,
+    below_normal,
+    low
+};
+
 struct EncodeJobProgress final {
     EncodeJobStage stage{EncodeJobStage::assembling_timeline};
     int current_step{0};
@@ -76,10 +84,15 @@ struct EncodeJobOutputSettings final {
     media::AudioEncodeSettings audio{};
 };
 
+struct EncodeJobExecutionSettings final {
+    EncodeJobProcessPriority process_priority{EncodeJobProcessPriority::below_normal};
+};
+
 struct EncodeJob final {
     EncodeJobInput input{};
     std::optional<EncodeJobSubtitleSettings> subtitles{};
     EncodeJobOutputSettings output{};
+    EncodeJobExecutionSettings execution{};
 };
 
 struct EncodeJobSummary final {
@@ -119,5 +132,7 @@ public:
 
 [[nodiscard]] const char *to_string(EncodeJobStage stage) noexcept;
 [[nodiscard]] const char *to_string(EncodeJobLogLevel level) noexcept;
+[[nodiscard]] const char *to_string(EncodeJobProcessPriority priority) noexcept;
+[[nodiscard]] const char *to_display_string(EncodeJobProcessPriority priority) noexcept;
 
 }  // namespace utsure::core::job

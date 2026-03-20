@@ -14,11 +14,19 @@
 namespace utsure::core::media::streaming {
 
 struct PipelineQueueLimits final {
+    std::size_t video_frame_queue_depth{70};
     std::size_t decoded_audio_block_queue_depth{8};
     std::int64_t startup_audio_preroll_microseconds{250000};
 };
 
 inline constexpr PipelineQueueLimits kDefaultPipelineQueueLimits{};
+
+struct StreamingRuntimeBehavior final {
+    std::uint32_t detected_logical_core_count{0};
+    std::uint32_t effective_logical_core_count{1};
+    std::size_t video_frame_queue_depth{0};
+    std::size_t decoded_audio_block_queue_depth{0};
+};
 
 struct PipelineMemoryBudget final {
     PipelineQueueLimits queue_limits{};
@@ -75,6 +83,10 @@ struct StreamingTranscodeRequest final {
     const PipelineQueueLimits &queue_limits = kDefaultPipelineQueueLimits,
     bool subtitles_present = false
 );
+[[nodiscard]] StreamingRuntimeBehavior resolve_streaming_runtime_behavior(
+    const PipelineQueueLimits &queue_limits = kDefaultPipelineQueueLimits
+) noexcept;
+[[nodiscard]] std::string format_encoder_threading_summary(const StreamingRuntimeBehavior &behavior);
 
 class StreamingTranscoder final {
 public:

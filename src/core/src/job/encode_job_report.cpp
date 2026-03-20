@@ -1,5 +1,6 @@
 #include "utsure/core/job/encode_job_report.hpp"
 
+#include "../media/streaming_transcode_pipeline.hpp"
 #include "utsure/core/media/decoded_media.hpp"
 
 #include <sstream>
@@ -75,12 +76,18 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
                    ? std::to_string(*encode_job_summary.job.output.audio.channel_count)
                    : std::string("auto"))
            << '\n';
+    report << "job.execution.priority=" << to_string(encode_job_summary.job.execution.process_priority) << '\n';
     report << "decode.policy.video_pixel_format="
            << media::to_string(encode_job_summary.decode_normalization_policy.video_pixel_format) << '\n';
     report << "decode.policy.audio_sample_format="
            << media::to_string(encode_job_summary.decode_normalization_policy.audio_sample_format) << '\n';
     report << "decode.policy.audio_block_samples="
            << encode_job_summary.decode_normalization_policy.audio_block_samples << '\n';
+    const auto runtime_behavior = media::streaming::resolve_streaming_runtime_behavior();
+    report << "streaming.encoder_threads="
+           << media::streaming::format_encoder_threading_summary(runtime_behavior) << '\n';
+    report << "streaming.video_queue_frames=" << runtime_behavior.video_frame_queue_depth << '\n';
+    report << "streaming.audio_queue_blocks=" << runtime_behavior.decoded_audio_block_queue_depth << '\n';
     report << "input.container=" << encode_job_summary.inspected_input_info.container_format_name << '\n';
     report << "input.video.present="
            << (encode_job_summary.inspected_input_info.primary_video_stream.has_value() ? "yes" : "no") << '\n';

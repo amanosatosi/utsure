@@ -464,6 +464,9 @@ std::string format_encode_job_preview(const EncodeJobPreviewSummary &preview_sum
         preview << "off";
     }
     preview << " | overwrite " << (preview_summary.output_exists ? "yes" : "no");
+    preview << "\nEncoding runtime: encoder threads " << preview_summary.encoder_threading_summary;
+    preview << " | video queue " << preview_summary.video_frame_queue_depth << " frames";
+    preview << " | priority " << to_display_string(preview_summary.process_priority);
 
     return preview.str();
 }
@@ -581,6 +584,11 @@ EncodeJobPreflightResult EncodeJobPreflight::inspect(const EncodeJob &job) noexc
                 timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info.primary_audio_stream
             ),
             .output_audio_summary = media::format_resolved_audio_output_summary(resolved_audio_output),
+            .encoder_threading_summary = media::streaming::format_encoder_threading_summary(
+                media::streaming::resolve_streaming_runtime_behavior()
+            ),
+            .video_frame_queue_depth = media::streaming::kDefaultPipelineQueueLimits.video_frame_queue_depth,
+            .process_priority = job.execution.process_priority,
             .subtitles_enabled = job.subtitles.has_value(),
             .subtitle_timing_mode = job.subtitles.has_value()
                 ? job.subtitles->timing_mode

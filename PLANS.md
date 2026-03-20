@@ -51,6 +51,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M16 audio slice also includes fixing the normalized/output audio timeline to use sample-based time units instead of inheriting arbitrary source stream time bases, and adding centralized audio output mode resolution for Auto / Copy / AAC / Disable across core and GUI surfaces.
 - The current M16 audio slice now routes the active streamer through one resolved output-audio plan so AAC encode, single-segment stream copy, and disabled-audio jobs all use the same core compatibility rules and preview/report summaries.
 - The current M16 UX slice also includes replacing coarse encode-stage step progress with throttled frame-driven streaming progress that reports percent, encoded frames, encoded media time, and live EFPS through the existing observer and Qt worker/controller pipeline.
+- The current M16 throughput slice also includes backend-managed multi-core video encoder threading, one explicit 70-frame bounded video handoff queue with backpressure in the streaming path, and a safe GUI process-priority control that stays outside encoder-core platform policy.
 
 ## Architecture direction
 
@@ -528,6 +529,7 @@ Current slice status:
 - Completed: FFmpeg-only GitHub Actions dependency cache keyed to the pinned 7.1 recipe so later workflow runs can skip rebuilding FFmpeg without caching the app build tree.
 - Completed: simplified single-threaded streaming loop with immediate video encode/mux handoff and bounded audio backpressure queues instead of redundant packet/frame staging queues.
 - Completed: fine-grained streaming encode progress for the desktop app, carried from the frame-driven transcoder back through the core observer and Qt worker/controller layers without changing the thread model.
+- In progress: throughput and scheduling controls for the active encode path, limited to encoder-backend threading controls, one explicit 70-frame bounded video queue, and a safe Windows process-priority selector in the GUI.
 - Deferred: host-side `\img` resource registration remains outside this slice, and `\img` scripts now fail explicitly until that registration path exists.
 
 Likely files/modules:
@@ -552,6 +554,7 @@ Validation:
 - Verify that audio-bearing inputs produce muxed outputs with an expected audio stream and coherent durations.
 - Verify one 24000/1001 sample whose input stream time base is forced to `1/1000`, and confirm the timeline keeps `1/1000` for streamed timestamp precision while still reporting `24000/1001` as the output frame rate.
 - Verify that encode-job progress reaches a final completed update and carries throttled fine-grained encode metrics during the streaming encode stage without flooding the observer path.
+- Verify that the active streamer reports backend-managed encoder threading, a 70-frame video queue, and the selected priority in preview/log/report surfaces without reintroducing whole-clip buffering or unbounded producer runahead.
 - Document the new stage flow, queue limits, where decoded/composited frame memory is released, and where audio frames/packets are released.
 - Verify the subtitle adapter against one normal ASS sample plus one RGBA-only subtitle sample that depends on libassmod gradient rendering, and include `\img` coverage if the host-side image registration path is wired in this slice.
 

@@ -43,6 +43,9 @@ struct EncodeJobPreviewSummary final {
     bool output_audio_present{false};
     std::string source_audio_summary{};
     std::string output_audio_summary{};
+    std::string encoder_threading_summary{};
+    std::size_t video_frame_queue_depth{0};
+    EncodeJobProcessPriority process_priority{EncodeJobProcessPriority::below_normal};
     bool subtitles_enabled{false};
     timeline::SubtitleTimingMode subtitle_timing_mode{timeline::SubtitleTimingMode::main_segment_only};
     bool output_exists{false};

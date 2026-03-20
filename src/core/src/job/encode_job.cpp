@@ -193,6 +193,14 @@ std::string format_encode_log_message(const EncodeJob &job) {
         ", and audio mode '" + std::string(media::to_string(job.output.audio.mode)) + "'.";
 }
 
+std::string format_encode_runtime_log_message(const EncodeJob &job) {
+    const auto runtime_behavior = media::streaming::resolve_streaming_runtime_behavior();
+    return "Encoding runtime: encoder threads " +
+        media::streaming::format_encoder_threading_summary(runtime_behavior) +
+        ", video queue " + std::to_string(runtime_behavior.video_frame_queue_depth) +
+        " frames, priority " + std::string(to_display_string(job.execution.process_priority)) + '.';
+}
+
 }  // namespace
 
 void EncodeJobObserver::on_progress(const EncodeJobProgress & /*progress*/) {}
@@ -230,6 +238,40 @@ const char *to_string(const EncodeJobLogLevel level) noexcept {
         return "error";
     default:
         return "unknown";
+    }
+}
+
+const char *to_string(const EncodeJobProcessPriority priority) noexcept {
+    switch (priority) {
+    case EncodeJobProcessPriority::high:
+        return "high";
+    case EncodeJobProcessPriority::above_normal:
+        return "above_normal";
+    case EncodeJobProcessPriority::normal:
+        return "normal";
+    case EncodeJobProcessPriority::below_normal:
+        return "below_normal";
+    case EncodeJobProcessPriority::low:
+        return "low";
+    default:
+        return "unknown";
+    }
+}
+
+const char *to_display_string(const EncodeJobProcessPriority priority) noexcept {
+    switch (priority) {
+    case EncodeJobProcessPriority::high:
+        return "High";
+    case EncodeJobProcessPriority::above_normal:
+        return "Above Normal";
+    case EncodeJobProcessPriority::normal:
+        return "Normal";
+    case EncodeJobProcessPriority::below_normal:
+        return "Below Normal";
+    case EncodeJobProcessPriority::low:
+        return "Low";
+    default:
+        return "Unknown";
     }
 }
 
@@ -339,6 +381,11 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             telemetry,
             EncodeJobLogLevel::info,
             format_encode_log_message(job)
+        );
+        notify_log(
+            telemetry,
+            EncodeJobLogLevel::info,
+            format_encode_runtime_log_message(job)
         );
         notify_progress(
             telemetry,
