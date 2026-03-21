@@ -163,7 +163,8 @@ media::MediaEncodeRequest build_media_encode_request(const EncodeJob &job) {
             .preset = job.output.video.preset,
             .crf = job.output.video.crf
         },
-        .audio_settings = job.output.audio
+        .audio_settings = job.output.audio,
+        .threading = job.execution.threading
     };
 }
 
@@ -194,9 +195,12 @@ std::string format_encode_log_message(const EncodeJob &job) {
 }
 
 std::string format_encode_runtime_log_message(const EncodeJob &job) {
-    const auto runtime_behavior = media::streaming::resolve_streaming_runtime_behavior();
-    return "Encoding runtime: encoder threads " +
+    const auto runtime_behavior = media::streaming::resolve_streaming_runtime_behavior(job.execution.threading);
+    return "Encoding runtime request: CPU mode " +
+        std::string(media::to_string(job.execution.threading.cpu_usage_mode)) +
+        ", encoder threads " +
         media::streaming::format_encoder_threading_summary(runtime_behavior, job.output.video.codec) +
+        ", video workers " + std::to_string(runtime_behavior.video_processing_worker_count) +
         ", video queue " + std::to_string(runtime_behavior.video_frame_queue_depth) +
         " frames, priority " + std::string(to_display_string(job.execution.process_priority)) + '.';
 }
@@ -402,6 +406,9 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                 .subtitle_renderer = subtitle_renderer.get(),
                 .progress_callback = [&telemetry](const media::streaming::StreamingEncodeProgress &progress) {
                     notify_encode_progress(telemetry, progress);
+                },
+                .log_callback = [&telemetry](const std::string &message) {
+                    notify_log(telemetry, EncodeJobLogLevel::info, message);
                 }
             }
         );

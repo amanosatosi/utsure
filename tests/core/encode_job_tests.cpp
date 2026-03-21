@@ -27,6 +27,7 @@ using utsure::core::job::EncodeJobStage;
 using utsure::core::job::EncodeJobSummary;
 using utsure::core::job::format_encode_job_report;
 using utsure::core::media::AudioOutputMode;
+using utsure::core::media::CpuUsageMode;
 using utsure::core::media::DecodedMediaSource;
 using utsure::core::media::MediaDecodeResult;
 using utsure::core::media::MediaDecoder;
@@ -366,20 +367,71 @@ int assert_runtime_visibility(
         return fail("Unexpected default encode-job process priority.");
     }
 
+    if (summary.job.execution.threading.cpu_usage_mode != CpuUsageMode::auto_select) {
+        return fail("Unexpected default encode-job CPU mode.");
+    }
+
     const auto report = format_encode_job_report(summary);
     if (!contains_text(report, "job.execution.priority=below_normal") ||
+        !contains_text(report, "job.execution.cpu_mode=auto") ||
         !contains_text(report, "streaming.encoder_threads=auto (") ||
+        !contains_text(report, "streaming.video_workers=") ||
         !contains_text(report, "streaming.video_queue_frames=70") ||
         !contains_text(report, "streaming.audio_queue_blocks=8")) {
         return fail("The encode-job report did not include the expected runtime settings.");
     }
 
-    if (!observer_logs_contain_text(observer, "Encoding runtime: encoder threads auto (") ||
+    if (!observer_logs_contain_text(observer, "Encoding runtime request: CPU mode auto, encoder threads auto (") ||
         !observer_logs_contain_text(observer, "video queue 70 frames") ||
-        !observer_logs_contain_text(observer, "priority Below Normal")) {
+        !observer_logs_contain_text(observer, "priority Below Normal") ||
+        !observer_logs_contain_text(observer, "Video encoder:") ||
+        !observer_logs_contain_text(observer, "Video decoder (") ||
+        !observer_logs_contain_text(observer, "Stage timing:")) {
         return fail("The encode-job observer logs did not include the expected runtime settings.");
     }
 
+    return 0;
+}
+
+int run_threading_mode_selection_assertion() {
+    const auto conservative_count = utsure::core::media::resolve_requested_ffmpeg_thread_count(
+        utsure::core::media::TranscodeThreadingSettings{
+            .cpu_usage_mode = CpuUsageMode::conservative
+        },
+        8U
+    );
+    const auto aggressive_count = utsure::core::media::resolve_requested_ffmpeg_thread_count(
+        utsure::core::media::TranscodeThreadingSettings{
+            .cpu_usage_mode = CpuUsageMode::aggressive
+        },
+        8U
+    );
+    const auto auto_count = utsure::core::media::resolve_requested_ffmpeg_thread_count(
+        utsure::core::media::TranscodeThreadingSettings{
+            .cpu_usage_mode = CpuUsageMode::auto_select
+        },
+        8U
+    );
+
+    if (conservative_count != 4) {
+        return fail("Conservative CPU mode did not resolve to half of the synthetic logical core count.");
+    }
+
+    if (aggressive_count != 7) {
+        return fail("Aggressive CPU mode did not resolve to one less than the synthetic logical core count.");
+    }
+
+    if (aggressive_count <= conservative_count) {
+        return fail("Aggressive CPU mode did not select more FFmpeg threads than Conservative mode.");
+    }
+
+    if (auto_count != 0) {
+        return fail("Auto CPU mode should leave FFmpeg thread count selection to the backend.");
+    }
+
+    std::cout << "threading.auto=0\n";
+    std::cout << "threading.conservative=" << conservative_count << '\n';
+    std::cout << "threading.aggressive=" << aggressive_count << '\n';
     return 0;
 }
 
@@ -1169,9 +1221,10 @@ int run_irregular_timestamp_assertion(
 }  // namespace
 
 int main(int argc, char *argv[]) {
-    if (argc < 4) {
+    if (argc < 2) {
         return fail(
             "Usage: utsure_core_encode_job_tests "
+            "[--threading-modes] | "
             "[--h264|--h265] <input> <output> | "
             "[--timeline-h264] <intro> <main> <outro> <output> | "
             "[--streaming-memory-budget] <input> <output> | "
@@ -1183,6 +1236,10 @@ int main(int argc, char *argv[]) {
     }
 
     const std::string_view mode(argv[1]);
+
+    if (mode == "--threading-modes" && argc == 2) {
+        return run_threading_mode_selection_assertion();
+    }
 
     if (mode == "--h264" && argc == 4) {
         return run_main_only_job_assertion(

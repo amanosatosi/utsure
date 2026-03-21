@@ -52,6 +52,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M16 audio slice now routes the active streamer through one resolved output-audio plan so AAC encode, single-segment stream copy, and disabled-audio jobs all use the same core compatibility rules and preview/report summaries.
 - The current M16 UX slice also includes replacing coarse encode-stage step progress with throttled frame-driven streaming progress that reports percent, encoded frames, encoded media time, and live EFPS through the existing observer and Qt worker/controller pipeline.
 - The current M16 throughput slice also includes backend-managed multi-core video encoder threading, one explicit 70-frame bounded video handoff queue with backpressure in the streaming path, and a safe GUI process-priority control that stays outside encoder-core platform policy.
+- The current M16 throughput slice now also includes explicit decoder/encoder thread selection, Auto / Conservative / Aggressive CPU usage modes, bounded parallel video normalization/subtitle preparation ahead of ordered encode, and lightweight per-stage runtime instrumentation.
 
 ## Architecture direction
 
@@ -530,6 +531,8 @@ Current slice status:
 - Completed: simplified the host-side streaming loop so redundant packet and mux staging queues were removed while bounded audio backpressure queues remained in place ahead of the later explicit 70-frame video handoff queue.
 - Completed: fine-grained streaming encode progress for the desktop app, carried from the frame-driven transcoder back through the core observer and Qt worker/controller layers without changing the thread model.
 - Completed: throughput and scheduling controls for the active encode path, using backend-managed encoder auto-threading, one explicit 70-frame bounded video queue with backpressure, a safe Windows process-priority selector in the GUI, and preview/log/report visibility for the resolved runtime behavior.
+- Completed: explicit FFmpeg decoder/encoder thread selection, user-selectable Auto / Conservative / Aggressive CPU usage modes, bounded parallel video normalization ahead of ordered encode, and stage-level runtime timing visibility for CPU-bound software transcodes.
+- Validation note: local build/test execution for this slice remains blocked by the missing C++ toolchain on the current machine, so the implementation still needs CI or a toolchain-equipped workstation to satisfy the milestone validation step fully.
 - Deferred: host-side `\img` resource registration remains outside this slice, and `\img` scripts now fail explicitly until that registration path exists.
 
 Likely files/modules:

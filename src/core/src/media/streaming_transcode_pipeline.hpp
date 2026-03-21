@@ -24,8 +24,28 @@ inline constexpr PipelineQueueLimits kDefaultPipelineQueueLimits{};
 struct StreamingRuntimeBehavior final {
     std::uint32_t detected_logical_core_count{0};
     std::uint32_t effective_logical_core_count{1};
+    CpuUsageMode cpu_usage_mode{CpuUsageMode::auto_select};
+    int selected_video_decoder_thread_count{0};
+    int selected_video_decoder_thread_type{0};
+    int selected_video_encoder_thread_count{0};
+    int selected_video_encoder_thread_type{0};
+    std::size_t video_processing_worker_count{1};
     std::size_t video_frame_queue_depth{0};
     std::size_t decoded_audio_block_queue_depth{0};
+};
+
+struct StreamingStageTiming final {
+    std::uint64_t sample_count{0};
+    std::uint64_t total_microseconds{0};
+};
+
+struct StreamingPerformanceMetrics final {
+    StreamingStageTiming video_decode{};
+    StreamingStageTiming video_process{};
+    StreamingStageTiming subtitle_compose{};
+    StreamingStageTiming video_encode{};
+    std::int64_t total_elapsed_microseconds{0};
+    double average_output_fps{0.0};
 };
 
 struct PipelineMemoryBudget final {
@@ -43,6 +63,8 @@ struct StreamingTranscodeSummary final {
     std::int64_t decoded_video_frame_count{0};
     std::int64_t decoded_audio_block_count{0};
     std::int64_t subtitled_video_frame_count{0};
+    StreamingRuntimeBehavior runtime_behavior{};
+    StreamingPerformanceMetrics performance_metrics{};
     EncodedMediaSummary encoded_media_summary{};
 };
 
@@ -75,6 +97,7 @@ struct StreamingTranscodeRequest final {
     subtitles::SubtitleRenderer *subtitle_renderer{nullptr};
     PipelineQueueLimits queue_limits{kDefaultPipelineQueueLimits};
     std::function<void(const StreamingEncodeProgress &progress)> progress_callback{};
+    std::function<void(const std::string &message)> log_callback{};
 };
 
 [[nodiscard]] std::optional<PipelineMemoryBudget> build_memory_budget(
@@ -84,7 +107,9 @@ struct StreamingTranscodeRequest final {
     bool subtitles_present = false
 );
 [[nodiscard]] StreamingRuntimeBehavior resolve_streaming_runtime_behavior(
-    const PipelineQueueLimits &queue_limits = kDefaultPipelineQueueLimits
+    TranscodeThreadingSettings threading = {},
+    const PipelineQueueLimits &queue_limits = kDefaultPipelineQueueLimits,
+    std::optional<std::uint32_t> logical_core_count_override = std::nullopt
 ) noexcept;
 [[nodiscard]] std::string format_encoder_threading_summary(
     const StreamingRuntimeBehavior &behavior,

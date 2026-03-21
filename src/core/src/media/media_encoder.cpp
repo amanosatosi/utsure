@@ -1,6 +1,7 @@
 #include "utsure/core/media/media_encoder.hpp"
 
 #include "ffmpeg_media_support.hpp"
+#include "transcode_threading.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 
 extern "C" {
@@ -315,6 +316,12 @@ CodecContextHandle create_video_encoder_context(
         ? to_av_rational(plan.average_frame_rate)
         : av_inv_q(codec_context->time_base);
     codec_context->sample_aspect_ratio = to_av_rational(plan.sample_aspect_ratio);
+    const auto logical_core_count = detail::effective_logical_core_count(detail::detect_logical_core_count());
+    const auto threading = detail::choose_encoder_threading(request.threading, *encoder, logical_core_count);
+    codec_context->thread_count = threading.thread_count;
+    if (threading.thread_type != 0) {
+        codec_context->thread_type = threading.thread_type;
+    }
 
     if ((output_context.oformat->flags & AVFMT_GLOBALHEADER) != 0) {
         codec_context->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
@@ -571,6 +578,29 @@ const char *to_string(const OutputVideoCodec codec) noexcept {
     default:
         return "unknown";
     }
+}
+
+const char *to_string(const CpuUsageMode mode) noexcept {
+    switch (mode) {
+    case CpuUsageMode::auto_select:
+        return "auto";
+    case CpuUsageMode::conservative:
+        return "conservative";
+    case CpuUsageMode::aggressive:
+        return "aggressive";
+    default:
+        return "unknown";
+    }
+}
+
+int resolve_requested_ffmpeg_thread_count(
+    const TranscodeThreadingSettings &settings,
+    const std::uint32_t logical_core_count
+) noexcept {
+    return detail::resolve_requested_ffmpeg_thread_count_impl(
+        settings.cpu_usage_mode,
+        detail::effective_logical_core_count(logical_core_count)
+    );
 }
 
 MediaEncodeResult MediaEncoder::encode(

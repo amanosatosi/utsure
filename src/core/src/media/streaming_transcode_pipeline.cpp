@@ -1,6 +1,7 @@
 #include "streaming_transcode_pipeline.hpp"
 
 #include "ffmpeg_media_support.hpp"
+#include "transcode_threading.hpp"
 #include "../subtitles/subtitle_bitmap_compositor.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 
@@ -15,16 +16,20 @@ extern "C" {
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <deque>
 #include <exception>
 #include <filesystem>
+#include <map>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <utility>
@@ -126,7 +131,9 @@ struct SwrContextDeleter final {
 
 using SwrContextHandle = std::unique_ptr<SwrContext, SwrContextDeleter>;
 
-constexpr std::uint64_t kInFlightRgbaSurfaceCount = 1ULL;
+// The bounded host-side video processor uses at most four worker-local RGBA scratch surfaces.
+// Keep the memory budget conservative so aggressive CPU mode cannot silently overrun RAM.
+constexpr std::uint64_t kInFlightRgbaSurfaceCount = 4ULL;
 constexpr std::uint64_t kEncoderWorkingSurfaceCount = 2ULL;
 
 template <typename T>
@@ -224,6 +231,8 @@ struct SegmentDecoderResources final {
     FormatContextHandle format_context{};
     CodecContextHandle video_decoder{};
     AVStream *video_stream{nullptr};
+    int video_decoder_thread_count{0};
+    int video_decoder_thread_type{0};
     CodecContextHandle audio_decoder{};
     AVStream *audio_stream{nullptr};
 };
@@ -240,7 +249,8 @@ struct ResolvedVideoFrameTiming final {
     std::optional<std::int64_t> output_duration_pts{};
 };
 
-struct PendingVideoFrameOutput final {
+struct PendingVideoFrameInput final {
+    FrameHandle decoded_frame{};
     DecodedVideoFrame frame{};
     ResolvedVideoFrameTiming timing{};
 };
@@ -248,6 +258,12 @@ struct PendingVideoFrameOutput final {
 struct QueuedVideoFrameOutput final {
     DecodedVideoFrame frame{};
     ResolvedVideoFrameTiming timing{};
+};
+
+struct ProcessedVideoFrameOutput final {
+    std::uint64_t order_index{0};
+    QueuedVideoFrameOutput output{};
+    std::uint64_t process_microseconds{0};
 };
 
 struct EncoderSelection final {
@@ -261,7 +277,12 @@ struct EstimatedVideoProgressTotals final {
 };
 
 EncoderSelection select_encoder(OutputVideoCodec codec);
-int choose_video_encoder_thread_type(const AVCodec &encoder);
+
+struct OpenedCodecContext final {
+    CodecContextHandle context{};
+    int thread_count{0};
+    int thread_type{0};
+};
 
 struct ResolvedVideoEncoderBackend final {
     const char *encoder_name{""};
@@ -275,26 +296,8 @@ ResolvedVideoEncoderBackend resolve_video_encoder_backend(const OutputVideoCodec
     return ResolvedVideoEncoderBackend{
         .encoder_name = selection.encoder_name,
         .encoder = encoder,
-        .thread_type = encoder != nullptr ? choose_video_encoder_thread_type(*encoder) : 0
+        .thread_type = encoder != nullptr ? detail::choose_codec_thread_type(*encoder) : 0
     };
-}
-
-std::string format_encoder_thread_type_detail(const int thread_type) {
-    const bool frame_threads = (thread_type & FF_THREAD_FRAME) != 0;
-    const bool slice_threads = (thread_type & FF_THREAD_SLICE) != 0;
-    if (frame_threads && slice_threads) {
-        return "FFmpeg frame+slice threading";
-    }
-
-    if (frame_threads) {
-        return "FFmpeg frame threading";
-    }
-
-    if (slice_threads) {
-        return "FFmpeg slice threading";
-    }
-
-    return "backend-managed threading (no explicit FFmpeg frame/slice flags)";
 }
 
 StreamingTranscodeResult make_error(std::string message, std::string actionable_hint) {
@@ -340,6 +343,34 @@ std::int64_t rescale_value(
 
 std::int64_t rescale_to_microseconds(const std::int64_t value, const Rational &time_base) {
     return av_rescale_q(value, to_av_rational(time_base), AV_TIME_BASE_Q);
+}
+
+double average_stage_milliseconds(const StreamingStageTiming &timing) noexcept {
+    if (timing.sample_count == 0U) {
+        return 0.0;
+    }
+
+    return static_cast<double>(timing.total_microseconds) /
+        (1000.0 * static_cast<double>(timing.sample_count));
+}
+
+void add_stage_timing(
+    StreamingStageTiming &timing,
+    const std::chrono::steady_clock::duration duration
+) noexcept {
+    timing.total_microseconds += static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(duration).count()
+    );
+    ++timing.sample_count;
+}
+
+void emit_runtime_log(
+    const std::function<void(const std::string &)> &callback,
+    std::string message
+) {
+    if (callback) {
+        callback(std::move(message));
+    }
 }
 
 bool checked_add_u64(const std::uint64_t left, const std::uint64_t right, std::uint64_t &result) {
@@ -508,11 +539,31 @@ std::optional<PipelineMemoryBudget> build_memory_budget(
     };
 }
 
-StreamingRuntimeBehavior resolve_streaming_runtime_behavior(const PipelineQueueLimits &queue_limits) noexcept {
-    const auto detected_logical_core_count = std::thread::hardware_concurrency();
+StreamingRuntimeBehavior resolve_streaming_runtime_behavior(
+    TranscodeThreadingSettings threading,
+    const PipelineQueueLimits &queue_limits,
+    const std::optional<std::uint32_t> logical_core_count_override
+) noexcept {
+    const auto detected_logical_core_count =
+        logical_core_count_override.value_or(detail::detect_logical_core_count());
+    const auto effective_core_count = detail::effective_logical_core_count(detected_logical_core_count);
+    const int default_thread_count =
+        detail::resolve_requested_ffmpeg_thread_count_impl(threading.cpu_usage_mode, effective_core_count);
+    const int requested_decoder_thread_count = detail::sanitize_thread_override(threading.decoder_thread_count_override) > 0
+        ? detail::sanitize_thread_override(threading.decoder_thread_count_override)
+        : default_thread_count;
+    const int requested_encoder_thread_count = detail::sanitize_thread_override(threading.encoder_thread_count_override) > 0
+        ? detail::sanitize_thread_override(threading.encoder_thread_count_override)
+        : default_thread_count;
     return StreamingRuntimeBehavior{
         .detected_logical_core_count = detected_logical_core_count,
-        .effective_logical_core_count = detected_logical_core_count > 0U ? detected_logical_core_count : 1U,
+        .effective_logical_core_count = effective_core_count,
+        .cpu_usage_mode = threading.cpu_usage_mode,
+        .selected_video_decoder_thread_count = requested_decoder_thread_count,
+        .selected_video_decoder_thread_type = 0,
+        .selected_video_encoder_thread_count = requested_encoder_thread_count,
+        .selected_video_encoder_thread_type = 0,
+        .video_processing_worker_count = detail::choose_video_processing_worker_count(threading, effective_core_count),
         .video_frame_queue_depth = queue_limits.video_frame_queue_depth,
         .decoded_audio_block_queue_depth = queue_limits.decoded_audio_block_queue_depth
     };
@@ -522,24 +573,66 @@ std::string format_encoder_threading_summary(
     const StreamingRuntimeBehavior &behavior,
     const OutputVideoCodec codec
 ) {
-    std::string summary = behavior.detected_logical_core_count > 0U
-        ? "auto (" + std::to_string(behavior.detected_logical_core_count) + " logical cores"
-        : "auto (1 logical core fallback";
+    std::string summary = std::string(to_string(behavior.cpu_usage_mode)) + " (";
+    summary += std::to_string(behavior.effective_logical_core_count);
+    summary += " logical cores; ";
 
     const auto backend = resolve_video_encoder_backend(codec);
     if (backend.encoder == nullptr) {
-        summary += "; ";
-        summary += backend.encoder_name;
-        summary += " unavailable";
+        summary += "encoder unavailable";
         summary += ')';
         return summary;
     }
 
+    if (behavior.selected_video_encoder_thread_count > 0) {
+        summary += std::to_string(behavior.selected_video_encoder_thread_count);
+        summary += " threads";
+    } else {
+        summary += "FFmpeg auto threads";
+    }
+
+    const int thread_type = behavior.selected_video_encoder_thread_type != 0
+        ? behavior.selected_video_encoder_thread_type
+        : backend.thread_type;
     summary += "; ";
     summary += backend.encoder_name;
     summary += ' ';
-    summary += format_encoder_thread_type_detail(backend.thread_type);
+    summary += detail::format_ffmpeg_thread_type_detail(thread_type);
     summary += ')';
+    return summary;
+}
+
+std::string format_codec_threading_log(
+    const std::string_view label,
+    const std::string_view codec_name,
+    const int thread_count,
+    const int thread_type
+) {
+    std::string message(label);
+    message += ": ";
+    message += codec_name;
+    message += ", thread_count=";
+    message += thread_count > 0 ? std::to_string(thread_count) : std::string("auto");
+    message += ", active_thread_type=";
+    message += detail::format_ffmpeg_thread_type_detail(thread_type);
+    return message;
+}
+
+std::string format_performance_metrics_log(const StreamingPerformanceMetrics &metrics) {
+    std::string summary = "Stage timing: decode avg ";
+    summary += std::to_string(average_stage_milliseconds(metrics.video_decode));
+    summary += " ms/frame, process avg ";
+    summary += std::to_string(average_stage_milliseconds(metrics.video_process));
+    summary += " ms/frame, subtitle avg ";
+    summary += std::to_string(average_stage_milliseconds(metrics.subtitle_compose));
+    summary += " ms/frame, encode avg ";
+    summary += std::to_string(average_stage_milliseconds(metrics.video_encode));
+    summary += " ms/frame";
+    if (metrics.average_output_fps > 0.0) {
+        summary += "; ";
+        summary += std::to_string(metrics.average_output_fps);
+        summary += " average output FPS";
+    }
     return summary;
 }
 
@@ -921,7 +1014,11 @@ FormatContextHandle open_format_context(const std::string &input_path_string) {
     return format_context;
 }
 
-CodecContextHandle open_decoder_context(AVStream &stream) {
+OpenedCodecContext open_decoder_context(
+    AVStream &stream,
+    const TranscodeThreadingSettings &threading_settings,
+    const std::uint32_t logical_core_count
+) {
     if (stream.codecpar == nullptr) {
         throw std::runtime_error("The selected stream does not expose codec parameters.");
     }
@@ -947,6 +1044,11 @@ CodecContextHandle open_decoder_context(AVStream &stream) {
     }
 
     codec_context->pkt_timebase = stream.time_base;
+    const auto threading = detail::choose_decoder_threading(threading_settings, *decoder, logical_core_count);
+    codec_context->thread_count = threading.thread_count;
+    if (threading.thread_type != 0) {
+        codec_context->thread_type = threading.thread_type;
+    }
 
     const auto open_result = avcodec_open2(codec_context.get(), decoder, nullptr);
     if (open_result < 0) {
@@ -956,7 +1058,14 @@ CodecContextHandle open_decoder_context(AVStream &stream) {
         );
     }
 
-    return codec_context;
+    const int actual_thread_count = codec_context->thread_count;
+    const int actual_thread_type = detail::active_codec_thread_type(*codec_context);
+
+    return OpenedCodecContext{
+        .context = std::move(codec_context),
+        .thread_count = actual_thread_count,
+        .thread_type = actual_thread_type
+    };
 }
 
 CodecParametersHandle clone_codec_parameters(const AVCodecParameters &source_parameters) {
@@ -978,7 +1087,9 @@ CodecParametersHandle clone_codec_parameters(const AVCodecParameters &source_par
 
 SegmentDecoderResources open_segment_resources(
     const timeline::TimelineSegmentPlan &segment_plan,
-    const bool decode_audio
+    const bool decode_audio,
+    const TranscodeThreadingSettings &threading_settings,
+    const std::uint32_t logical_core_count
 ) {
     const auto input_path_string = segment_plan.source_path.lexically_normal().string();
     auto format_context = open_format_context(input_path_string);
@@ -992,7 +1103,7 @@ SegmentDecoderResources open_segment_resources(
     }
 
     auto *video_stream = format_context->streams[video_stream_info.stream_index];
-    CodecContextHandle video_decoder = open_decoder_context(*video_stream);
+    auto opened_video_decoder = open_decoder_context(*video_stream, threading_settings, logical_core_count);
 
     CodecContextHandle audio_decoder{};
     AVStream *audio_stream = nullptr;
@@ -1007,14 +1118,16 @@ SegmentDecoderResources open_segment_resources(
 
         audio_stream = format_context->streams[audio_stream_info.stream_index];
         if (decode_audio) {
-            audio_decoder = open_decoder_context(*audio_stream);
+            audio_decoder = open_decoder_context(*audio_stream, threading_settings, logical_core_count).context;
         }
     }
 
     return SegmentDecoderResources{
         .format_context = std::move(format_context),
-        .video_decoder = std::move(video_decoder),
+        .video_decoder = std::move(opened_video_decoder.context),
         .video_stream = video_stream,
+        .video_decoder_thread_count = opened_video_decoder.thread_count,
+        .video_decoder_thread_type = opened_video_decoder.thread_type,
         .audio_decoder = std::move(audio_decoder),
         .audio_stream = audio_stream
     };
@@ -1062,16 +1175,12 @@ void send_packet_or_throw(AVCodecContext &codec_context, AVPacket *packet) {
     }
 }
 
-DecodedVideoFrame normalize_video_frame(
+DecodedVideoFrame build_normalized_video_frame_metadata(
     const AVFrame &source_frame,
     const AVStream &stream,
     const int stream_index,
     const std::int64_t frame_index,
     const DecodeNormalizationPolicy &normalization_policy,
-    SwsContextHandle &scale_context,
-    int &scale_width,
-    int &scale_height,
-    AVPixelFormat &scale_source_pixel_format,
     std::int64_t &next_fallback_source_pts,
     const std::int64_t fallback_duration_pts
 ) {
@@ -1082,6 +1191,38 @@ DecodedVideoFrame normalize_video_frame(
         ? std::optional<std::int64_t>(source_frame.duration)
         : std::nullopt;
 
+    return DecodedVideoFrame{
+        .stream_index = stream_index,
+        .frame_index = frame_index,
+        .timestamp = MediaTimestamp{
+            .source_time_base = stream_time_base,
+            .source_pts = timestamp_seed.source_pts,
+            .source_duration = source_duration,
+            .origin = timestamp_seed.origin,
+            .start_microseconds = rescale_to_microseconds(
+                timestamp_seed.source_pts,
+                stream_time_base
+            ),
+            .duration_microseconds = source_duration.has_value()
+                ? std::optional<std::int64_t>(rescale_to_microseconds(*source_duration, stream_time_base))
+                : std::nullopt
+        },
+        .width = source_frame.width,
+        .height = source_frame.height,
+        .sample_aspect_ratio = choose_sample_aspect_ratio(source_frame, stream),
+        .pixel_format = normalization_policy.video_pixel_format,
+        .planes = {}
+    };
+}
+
+void populate_normalized_video_frame_pixels(
+    const AVFrame &source_frame,
+    SwsContextHandle &scale_context,
+    int &scale_width,
+    int &scale_height,
+    AVPixelFormat &scale_source_pixel_format,
+    DecodedVideoFrame &normalized_frame
+) {
     const auto source_pixel_format = static_cast<AVPixelFormat>(source_frame.format);
     if (source_pixel_format == AV_PIX_FMT_NONE) {
         throw std::runtime_error("The video decoder returned a frame without a usable pixel format.");
@@ -1114,12 +1255,12 @@ DecodedVideoFrame normalize_video_frame(
         scale_source_pixel_format = source_pixel_format;
     }
 
-    auto normalized_frame = allocate_frame();
-    normalized_frame->format = AV_PIX_FMT_RGBA;
-    normalized_frame->width = source_frame.width;
-    normalized_frame->height = source_frame.height;
+    auto rgba_frame = allocate_frame();
+    rgba_frame->format = AV_PIX_FMT_RGBA;
+    rgba_frame->width = source_frame.width;
+    rgba_frame->height = source_frame.height;
 
-    const auto buffer_result = av_frame_get_buffer(normalized_frame.get(), 1);
+    const auto buffer_result = av_frame_get_buffer(rgba_frame.get(), 1);
     if (buffer_result < 0) {
         throw std::runtime_error(
             "Failed to allocate the normalized streaming video frame buffer. FFmpeg reported: " +
@@ -1133,53 +1274,240 @@ DecodedVideoFrame normalize_video_frame(
         source_frame.linesize,
         0,
         source_frame.height,
-        normalized_frame->data,
-        normalized_frame->linesize
+        rgba_frame->data,
+        rgba_frame->linesize
     );
     if (scale_result <= 0) {
         throw std::runtime_error("FFmpeg did not produce normalized video output for a decoded streaming frame.");
     }
 
     VideoPlane plane{
-        .line_stride_bytes = normalized_frame->linesize[0],
+        .line_stride_bytes = rgba_frame->linesize[0],
         .visible_width = source_frame.width,
         .visible_height = source_frame.height,
         .bytes = std::vector<std::uint8_t>(
-            static_cast<std::size_t>(normalized_frame->linesize[0]) * static_cast<std::size_t>(source_frame.height)
+            static_cast<std::size_t>(rgba_frame->linesize[0]) * static_cast<std::size_t>(source_frame.height)
         )
     };
 
     for (int row = 0; row < source_frame.height; ++row) {
         std::memcpy(
-            plane.bytes.data() + static_cast<std::size_t>(row) * static_cast<std::size_t>(normalized_frame->linesize[0]),
-            normalized_frame->data[0] + static_cast<std::size_t>(row) * static_cast<std::size_t>(normalized_frame->linesize[0]),
-            static_cast<std::size_t>(normalized_frame->linesize[0])
+            plane.bytes.data() + static_cast<std::size_t>(row) * static_cast<std::size_t>(rgba_frame->linesize[0]),
+            rgba_frame->data[0] + static_cast<std::size_t>(row) * static_cast<std::size_t>(rgba_frame->linesize[0]),
+            static_cast<std::size_t>(rgba_frame->linesize[0])
         );
     }
 
-    return DecodedVideoFrame{
-        .stream_index = stream_index,
-        .frame_index = frame_index,
-        .timestamp = MediaTimestamp{
-            .source_time_base = stream_time_base,
-            .source_pts = timestamp_seed.source_pts,
-            .source_duration = source_duration,
-            .origin = timestamp_seed.origin,
-            .start_microseconds = rescale_to_microseconds(
-                timestamp_seed.source_pts,
-                stream_time_base
-            ),
-            .duration_microseconds = source_duration.has_value()
-                ? std::optional<std::int64_t>(rescale_to_microseconds(*source_duration, stream_time_base))
-                : std::nullopt
-        },
-        .width = source_frame.width,
-        .height = source_frame.height,
-        .sample_aspect_ratio = choose_sample_aspect_ratio(source_frame, stream),
-        .pixel_format = normalization_policy.video_pixel_format,
-        .planes = {std::move(plane)}
-    };
+    normalized_frame.planes = {std::move(plane)};
 }
+
+FrameHandle clone_frame(const AVFrame &source_frame) {
+    auto cloned_frame = allocate_frame();
+    const auto clone_result = av_frame_ref(cloned_frame.get(), &source_frame);
+    if (clone_result < 0) {
+        throw std::runtime_error(
+            "Failed to clone a decoded video frame for parallel streaming processing. FFmpeg reported: " +
+            ffmpeg_support::ffmpeg_error_to_string(clone_result)
+        );
+    }
+
+    return cloned_frame;
+}
+
+struct VideoProcessTask final {
+    std::uint64_t order_index{0};
+    FrameHandle decoded_frame{};
+    QueuedVideoFrameOutput output{};
+};
+
+class ParallelVideoFrameProcessor final {
+public:
+    ParallelVideoFrameProcessor(const std::size_t worker_count, const std::size_t max_in_flight)
+        : max_in_flight_(max_in_flight) {
+        if (worker_count == 0U) {
+            throw std::runtime_error("The streaming video processor requires at least one worker.");
+        }
+
+        if (max_in_flight_ == 0U) {
+            throw std::runtime_error("The streaming video processor requires bounded in-flight capacity.");
+        }
+
+        workers_.reserve(worker_count);
+        for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
+            workers_.emplace_back([this]() {
+                worker_main();
+            });
+        }
+    }
+
+    ParallelVideoFrameProcessor(const ParallelVideoFrameProcessor &) = delete;
+    ParallelVideoFrameProcessor &operator=(const ParallelVideoFrameProcessor &) = delete;
+
+    ~ParallelVideoFrameProcessor() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            closing_ = true;
+        }
+        work_available_.notify_all();
+        ready_available_.notify_all();
+        for (auto &worker : workers_) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+    }
+
+    [[nodiscard]] std::size_t max_in_flight() const noexcept {
+        return max_in_flight_;
+    }
+
+    [[nodiscard]] std::size_t outstanding_count() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return outstanding_count_;
+    }
+
+    void submit(VideoProcessTask task) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        rethrow_if_failed_locked();
+        if (outstanding_count_ >= max_in_flight_) {
+            throw std::runtime_error("The parallel video processor exceeded its bounded in-flight capacity.");
+        }
+
+        pending_tasks_.push_back(std::move(task));
+        ++outstanding_count_;
+        work_available_.notify_one();
+    }
+
+    void finish_submitting() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            closing_ = true;
+        }
+        work_available_.notify_all();
+    }
+
+    ProcessedVideoFrameOutput wait_for_next() {
+        std::unique_lock<std::mutex> lock(mutex_);
+        ready_available_.wait(lock, [this]() {
+            return failure_ != nullptr ||
+                ready_outputs_.contains(next_ready_order_index_) ||
+                (closing_ && outstanding_count_ == 0U);
+        });
+
+        rethrow_if_failed_locked();
+        if (!ready_outputs_.contains(next_ready_order_index_)) {
+            throw std::runtime_error("The streaming video processor closed before the next ordered frame was ready.");
+        }
+
+        auto node = ready_outputs_.extract(next_ready_order_index_);
+        ++next_ready_order_index_;
+        --outstanding_count_;
+        return std::move(node.mapped());
+    }
+
+    std::optional<ProcessedVideoFrameOutput> try_take_next() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        rethrow_if_failed_locked();
+        if (!ready_outputs_.contains(next_ready_order_index_)) {
+            return std::nullopt;
+        }
+
+        auto node = ready_outputs_.extract(next_ready_order_index_);
+        ++next_ready_order_index_;
+        --outstanding_count_;
+        return std::move(node.mapped());
+    }
+
+private:
+    void worker_main() {
+        SwsContextHandle scale_context{};
+        int scale_width = 0;
+        int scale_height = 0;
+        AVPixelFormat scale_source_pixel_format = AV_PIX_FMT_NONE;
+
+        while (true) {
+            VideoProcessTask task{};
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                work_available_.wait(lock, [this]() {
+                    return failure_ != nullptr || !pending_tasks_.empty() || closing_;
+                });
+
+                if (failure_ != nullptr) {
+                    return;
+                }
+
+                if (pending_tasks_.empty()) {
+                    if (closing_) {
+                        return;
+                    }
+                    continue;
+                }
+
+                task = std::move(pending_tasks_.front());
+                pending_tasks_.pop_front();
+            }
+
+            try {
+                const auto process_start = std::chrono::steady_clock::now();
+                populate_normalized_video_frame_pixels(
+                    *task.decoded_frame,
+                    scale_context,
+                    scale_width,
+                    scale_height,
+                    scale_source_pixel_format,
+                    task.output.frame
+                );
+                const auto process_duration =
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - process_start
+                    ).count();
+
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    ready_outputs_.emplace(
+                        task.order_index,
+                        ProcessedVideoFrameOutput{
+                            .order_index = task.order_index,
+                            .output = std::move(task.output),
+                            .process_microseconds = static_cast<std::uint64_t>(std::max<long long>(process_duration, 0))
+                        }
+                    );
+                }
+                ready_available_.notify_all();
+            } catch (...) {
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    if (failure_ == nullptr) {
+                        failure_ = std::current_exception();
+                    }
+                    closing_ = true;
+                }
+                work_available_.notify_all();
+                ready_available_.notify_all();
+                return;
+            }
+        }
+    }
+
+    void rethrow_if_failed_locked() const {
+        if (failure_ != nullptr) {
+            std::rethrow_exception(failure_);
+        }
+    }
+
+    std::size_t max_in_flight_{0};
+    mutable std::mutex mutex_{};
+    std::condition_variable work_available_{};
+    std::condition_variable ready_available_{};
+    std::deque<VideoProcessTask> pending_tasks_{};
+    std::map<std::uint64_t, ProcessedVideoFrameOutput> ready_outputs_{};
+    std::vector<std::thread> workers_{};
+    std::exception_ptr failure_{};
+    std::size_t outstanding_count_{0};
+    std::uint64_t next_ready_order_index_{0};
+    bool closing_{false};
+};
 
 std::vector<std::vector<float>> resample_audio_frame(
     SwrContext &resample_context,
@@ -1346,19 +1674,6 @@ OutputFormatContextHandle create_output_context(const std::string &output_path_s
     return OutputFormatContextHandle(raw_format_context);
 }
 
-int choose_video_encoder_thread_type(const AVCodec &encoder) {
-    int thread_type = 0;
-    if ((encoder.capabilities & AV_CODEC_CAP_FRAME_THREADS) != 0) {
-        thread_type |= FF_THREAD_FRAME;
-    }
-
-    if ((encoder.capabilities & AV_CODEC_CAP_SLICE_THREADS) != 0) {
-        thread_type |= FF_THREAD_SLICE;
-    }
-
-    return thread_type;
-}
-
 void open_output_file(AVFormatContext &format_context, const std::filesystem::path &output_path) {
     if ((format_context.oformat->flags & AVFMT_NOFILE) != 0) {
         return;
@@ -1386,11 +1701,12 @@ void open_output_file(AVFormatContext &format_context, const std::filesystem::pa
     }
 }
 
-CodecContextHandle create_video_encoder_context(
+OpenedCodecContext create_video_encoder_context(
     AVFormatContext &output_context,
     AVStream &video_stream,
     const MediaEncodeRequest &request,
-    const VideoOutputPlan &plan
+    const VideoOutputPlan &plan,
+    const std::uint32_t logical_core_count
 ) {
     const auto encoder_backend = resolve_video_encoder_backend(request.video_settings.codec);
     if (encoder_backend.encoder == nullptr) {
@@ -1413,9 +1729,11 @@ CodecContextHandle create_video_encoder_context(
     codec_context->time_base = to_av_rational(plan.time_base);
     codec_context->framerate = to_av_rational(plan.average_frame_rate);
     codec_context->sample_aspect_ratio = to_av_rational(plan.sample_aspect_ratio);
-    codec_context->thread_count = 0;
-    if (encoder_backend.thread_type != 0) {
-        codec_context->thread_type = encoder_backend.thread_type;
+    const auto threading =
+        detail::choose_encoder_threading(request.threading, *encoder_backend.encoder, logical_core_count);
+    codec_context->thread_count = threading.thread_count;
+    if (threading.thread_type != 0) {
+        codec_context->thread_type = threading.thread_type;
     }
 
     if ((output_context.oformat->flags & AVFMT_GLOBALHEADER) != 0) {
@@ -1466,7 +1784,14 @@ CodecContextHandle create_video_encoder_context(
         );
     }
 
-    return codec_context;
+    const int actual_thread_count = codec_context->thread_count;
+    const int actual_thread_type = detail::active_codec_thread_type(*codec_context);
+
+    return OpenedCodecContext{
+        .context = std::move(codec_context),
+        .thread_count = actual_thread_count,
+        .thread_type = actual_thread_type
+    };
 }
 
 template <typename T>
@@ -1696,7 +2021,8 @@ public:
         const VideoOutputPlan &video_plan,
         const ResolvedAudioOutputPlan &resolved_audio_output,
         const std::optional<AudioOutputPlan> &audio_plan,
-        std::optional<AudioCopyTemplate> audio_copy_template
+        std::optional<AudioCopyTemplate> audio_copy_template,
+        const std::uint32_t logical_core_count
     )
         : request_(request),
           video_plan_(video_plan),
@@ -1720,7 +2046,16 @@ public:
         }
 
         video_stream_ = raw_video_stream;
-        video_codec_context_ = create_video_encoder_context(*output_context_, *video_stream_, request, video_plan);
+        auto opened_video_encoder = create_video_encoder_context(
+            *output_context_,
+            *video_stream_,
+            request,
+            video_plan,
+            logical_core_count
+        );
+        video_encoder_thread_count_ = opened_video_encoder.thread_count;
+        video_encoder_thread_type_ = opened_video_encoder.thread_type;
+        video_codec_context_ = std::move(opened_video_encoder.context);
 
         if (audio_plan_.has_value()) {
             AVStream *raw_audio_stream = avformat_new_stream(output_context_.get(), nullptr);
@@ -1758,6 +2093,14 @@ public:
 
     [[nodiscard]] bool audio_enabled() const noexcept {
         return audio_stream_ != nullptr;
+    }
+
+    [[nodiscard]] int video_encoder_thread_count() const noexcept {
+        return video_encoder_thread_count_;
+    }
+
+    [[nodiscard]] int video_encoder_thread_type() const noexcept {
+        return video_encoder_thread_type_;
     }
 
     void push_frame(const DecodedVideoFrame &decoded_frame) {
@@ -2264,6 +2607,8 @@ private:
     std::int64_t pending_audio_sample_count_{0};
     std::int64_t encoded_video_frame_count_{0};
     std::int64_t encoded_audio_block_count_{0};
+    int video_encoder_thread_count_{0};
+    int video_encoder_thread_type_{0};
     bool finalized_{false};
 };
 
@@ -2400,10 +2745,10 @@ ResolvedVideoFrameTiming resolve_video_frame_timing_for_segment(
     std::optional<std::int64_t> &previous_source_pts,
     Rational &previous_source_time_base
 ) {
-    if (!subtitles::detail::is_rgba_frame_layout_supported(frame)) {
+    if (frame.pixel_format != NormalizedVideoPixelFormat::rgba8) {
         throw std::runtime_error(
             "The " + std::string(timeline::to_string(kind)) +
-            " segment contains an unsupported decoded video frame layout."
+            " segment contains an unsupported decoded video pixel format."
         );
     }
 
@@ -2481,9 +2826,13 @@ SegmentProcessResult process_segment(
     const VideoOutputPlan &video_output_plan,
     const DecodeNormalizationPolicy &normalization_policy,
     const PipelineQueueLimits &queue_limits,
+    const TranscodeThreadingSettings &threading_settings,
     const std::optional<AudioOutputPlan> &audio_output_plan,
     StreamingOutputSession &output_session,
     StreamingEncodeProgressEmitter &progress_emitter,
+    StreamingRuntimeBehavior &runtime_behavior,
+    StreamingPerformanceMetrics &performance_metrics,
+    const std::function<void(const std::string &)> &log_callback,
     std::int64_t &next_output_frame_index,
     std::int64_t &next_output_video_pts,
     std::int64_t &next_output_audio_pts
@@ -2507,15 +2856,39 @@ SegmentProcessResult process_segment(
     const bool encode_audio = resolved_audio_plan != nullptr && resolved_audio_plan->encodes_audio();
     const bool copy_audio = resolved_audio_plan != nullptr && resolved_audio_plan->copies_audio();
 
-    SegmentDecoderResources resources = open_segment_resources(segment_plan, encode_audio);
+    SegmentDecoderResources resources = open_segment_resources(
+        segment_plan,
+        encode_audio,
+        threading_settings,
+        runtime_behavior.effective_logical_core_count
+    );
     PacketHandle demux_packet = allocate_packet();
     FrameHandle decoded_video_frame = allocate_frame();
     FrameHandle decoded_audio_frame = allocate_frame();
 
-    SwsContextHandle video_scale_context{};
-    int scale_width = 0;
-    int scale_height = 0;
-    AVPixelFormat scale_source_pixel_format = AV_PIX_FMT_NONE;
+    if (segment_plan.kind == timeline::TimelineSegmentKind::main ||
+        runtime_behavior.selected_video_decoder_thread_count == 0) {
+        runtime_behavior.selected_video_decoder_thread_count = resources.video_decoder_thread_count;
+        runtime_behavior.selected_video_decoder_thread_type = resources.video_decoder_thread_type;
+    }
+
+    emit_runtime_log(
+        log_callback,
+        format_codec_threading_log(
+            "Video decoder (" + std::string(timeline::to_string(segment_plan.kind)) + " segment)",
+            resources.video_decoder && resources.video_decoder->codec != nullptr
+                ? resources.video_decoder->codec->name
+                : "unknown",
+            resources.video_decoder_thread_count,
+            resources.video_decoder_thread_type
+        )
+    );
+
+    ParallelVideoFrameProcessor video_frame_processor(
+        runtime_behavior.video_processing_worker_count,
+        queue_limits.video_frame_queue_depth
+    );
+
     std::int64_t next_fallback_source_pts =
         segment_plan.inspected_source_info.primary_video_stream->timestamps.start_pts.value_or(0);
     const auto fallback_video_duration_pts =
@@ -2534,7 +2907,8 @@ SegmentProcessResult process_segment(
     std::optional<std::int64_t> first_video_source_pts_in_output_time_base{};
     std::optional<std::int64_t> previous_video_source_pts{};
     Rational previous_video_source_time_base{};
-    std::optional<PendingVideoFrameOutput> pending_video_frame{};
+    std::optional<PendingVideoFrameInput> pending_video_frame{};
+    std::uint64_t next_video_process_order_index = 0;
 
     if (encode_audio && resources.audio_decoder) {
         if (normalization_policy.audio_sample_format != NormalizedAudioSampleFormat::f32_planar) {
@@ -2579,7 +2953,6 @@ SegmentProcessResult process_segment(
     // Audio packets can briefly outrun video cadence in normal interleaving, so keep them pending
     // until the decoded audio horizon has room to advance on the shared output timeline.
     std::deque<PacketHandle> pending_audio_packet_queue{};
-    BoundedQueue<QueuedVideoFrameOutput> queued_video_frame_queue(queue_limits.video_frame_queue_depth);
     BoundedQueue<DecodedAudioSamples> decoded_audio_queue(queue_limits.decoded_audio_block_queue_depth);
     std::int64_t queued_decoded_audio_samples = 0;
     std::int64_t known_video_horizon_microseconds = 0;
@@ -2833,13 +3206,17 @@ SegmentProcessResult process_segment(
                     : video_frame.timestamp.start_microseconds;
         }
 
-        if (maybe_composite_subtitles(
-                video_frame,
-                subtitle_session,
-                subtitle_settings,
-                segment_plan.subtitles_enabled,
-                subtitle_timestamp_microseconds)) {
-            ++result.subtitled_video_frame_count;
+        if (segment_plan.subtitles_enabled && subtitle_settings.has_value()) {
+            const auto subtitle_start = std::chrono::steady_clock::now();
+            if (maybe_composite_subtitles(
+                    video_frame,
+                    subtitle_session,
+                    subtitle_settings,
+                    segment_plan.subtitles_enabled,
+                    subtitle_timestamp_microseconds)) {
+                ++result.subtitled_video_frame_count;
+            }
+            add_stage_timing(performance_metrics.subtitle_compose, std::chrono::steady_clock::now() - subtitle_start);
         }
 
         const auto timing_origin = video_frame.timestamp.origin;
@@ -2855,7 +3232,9 @@ SegmentProcessResult process_segment(
             rescale_to_microseconds(output_duration_pts, timeline_plan.output_video_time_base);
         video_frame.sample_aspect_ratio = video_output_plan.sample_aspect_ratio;
 
+        const auto encode_start = std::chrono::steady_clock::now();
         output_session.push_frame(video_frame);
+        add_stage_timing(performance_metrics.video_encode, std::chrono::steady_clock::now() - encode_start);
         const auto frame_end_pts = timing.output_pts + output_duration_pts;
         last_written_video_end_pts = frame_end_pts;
         segment_output_end_pts = std::max(segment_output_end_pts, frame_end_pts);
@@ -2872,18 +3251,29 @@ SegmentProcessResult process_segment(
         }
     };
 
-    const auto drain_video_frame_queue = [&](const bool flush_all) {
-        while (!queued_video_frame_queue.empty()) {
-            auto queued_video_frame = queued_video_frame_queue.pop();
-            send_video_frame_to_encoder(std::move(queued_video_frame));
-            if (!flush_all) {
+    const auto drain_next_processed_video_frame = [&]() {
+        auto processed_frame = video_frame_processor.wait_for_next();
+        performance_metrics.video_process.total_microseconds += processed_frame.process_microseconds;
+        ++performance_metrics.video_process.sample_count;
+        send_video_frame_to_encoder(std::move(processed_frame.output));
+    };
+
+    const auto drain_ready_processed_video_frames = [&]() {
+        while (true) {
+            auto processed_frame = video_frame_processor.try_take_next();
+            if (!processed_frame.has_value()) {
                 return;
             }
+
+            performance_metrics.video_process.total_microseconds += processed_frame->process_microseconds;
+            ++performance_metrics.video_process.sample_count;
+            send_video_frame_to_encoder(std::move(processed_frame->output));
         }
     };
 
-    const auto enqueue_video_frame = [&](
-        DecodedVideoFrame video_frame,
+    const auto submit_video_frame_for_processing = [&](
+        FrameHandle decoded_frame_copy,
+        DecodedVideoFrame video_frame_metadata,
         ResolvedVideoFrameTiming timing,
         const std::int64_t output_duration_pts
     ) {
@@ -2895,20 +3285,24 @@ SegmentProcessResult process_segment(
         }
 
         timing.output_duration_pts = output_duration_pts;
-        while (queued_video_frame_queue.full()) {
-            drain_video_frame_queue(false);
+        while (video_frame_processor.outstanding_count() >= video_frame_processor.max_in_flight()) {
+            drain_next_processed_video_frame();
         }
 
-        queued_video_frame_queue.push(QueuedVideoFrameOutput{
-            .frame = std::move(video_frame),
-            .timing = std::move(timing)
+        video_frame_processor.submit(VideoProcessTask{
+            .order_index = next_video_process_order_index++,
+            .decoded_frame = std::move(decoded_frame_copy),
+            .output = QueuedVideoFrameOutput{
+                .frame = std::move(video_frame_metadata),
+                .timing = std::move(timing)
+            }
         });
     };
 
-    const auto process_video_frame = [&](DecodedVideoFrame video_frame) {
+    const auto process_video_frame = [&](FrameHandle decoded_frame_copy, DecodedVideoFrame video_frame_metadata) {
         const auto resolved_timing = resolve_video_frame_timing_for_segment(
             segment_plan.kind,
-            video_frame,
+            video_frame_metadata,
             video_output_plan,
             timeline_plan.output_video_time_base,
             segment_output_start_pts,
@@ -2926,15 +3320,17 @@ SegmentProcessResult process_segment(
                 );
             }
 
-            enqueue_video_frame(
+            submit_video_frame_for_processing(
+                std::move(pending_video_frame->decoded_frame),
                 std::move(pending_video_frame->frame),
                 pending_video_frame->timing,
                 pending_duration_pts
             );
         }
 
-        pending_video_frame = PendingVideoFrameOutput{
-            .frame = std::move(video_frame),
+        pending_video_frame = PendingVideoFrameInput{
+            .decoded_frame = std::move(decoded_frame_copy),
+            .frame = std::move(video_frame_metadata),
             .timing = resolved_timing
         };
     };
@@ -2998,6 +3394,7 @@ SegmentProcessResult process_segment(
 
     const auto receive_video_frames = [&]() {
         while (true) {
+            const auto decode_start = std::chrono::steady_clock::now();
             const auto receive_result = avcodec_receive_frame(resources.video_decoder.get(), decoded_video_frame.get());
             if (receive_result == AVERROR(EAGAIN) || receive_result == AVERROR_EOF) {
                 return;
@@ -3010,22 +3407,22 @@ SegmentProcessResult process_segment(
                 );
             }
 
-            DecodedVideoFrame normalized_frame = normalize_video_frame(
+            add_stage_timing(performance_metrics.video_decode, std::chrono::steady_clock::now() - decode_start);
+
+            auto decoded_frame_copy = clone_frame(*decoded_video_frame);
+            auto normalized_frame_metadata = build_normalized_video_frame_metadata(
                 *decoded_video_frame,
                 *resources.video_stream,
                 segment_plan.inspected_source_info.primary_video_stream->stream_index,
                 decoded_video_frame_index,
                 normalization_policy,
-                video_scale_context,
-                scale_width,
-                scale_height,
-                scale_source_pixel_format,
                 next_fallback_source_pts,
                 fallback_video_duration_pts
             );
-            process_video_frame(std::move(normalized_frame));
+            process_video_frame(std::move(decoded_frame_copy), std::move(normalized_frame_metadata));
             ++decoded_video_frame_index;
             av_frame_unref(decoded_video_frame.get());
+            drain_ready_processed_video_frames();
         }
     };
 
@@ -3112,6 +3509,8 @@ SegmentProcessResult process_segment(
             drain_audio_queue(false);
             flush_pending_audio_packets();
         }
+
+        drain_ready_processed_video_frames();
     }
 
     send_packet_or_throw(*resources.video_decoder, nullptr);
@@ -3127,7 +3526,8 @@ SegmentProcessResult process_segment(
             );
         }
 
-        enqueue_video_frame(
+        submit_video_frame_for_processing(
+            std::move(pending_video_frame->decoded_frame),
             std::move(pending_video_frame->frame),
             pending_video_frame->timing,
             final_duration_pts
@@ -3135,7 +3535,10 @@ SegmentProcessResult process_segment(
         pending_video_frame.reset();
     }
 
-    drain_video_frame_queue(true);
+    video_frame_processor.finish_submitting();
+    while (video_frame_processor.outstanding_count() > 0U) {
+        drain_next_processed_video_frame();
+    }
 
     if (encode_audio && resources.audio_decoder) {
         flush_pending_audio_packets();
@@ -3253,6 +3656,23 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
     }
 
     try {
+        const auto transcode_start = std::chrono::steady_clock::now();
+        auto runtime_behavior = resolve_streaming_runtime_behavior(
+            request.media_encode_request.threading,
+            request.queue_limits
+        );
+        StreamingPerformanceMetrics performance_metrics{};
+
+        emit_runtime_log(
+            request.log_callback,
+            "Streaming runtime: detected " + std::to_string(runtime_behavior.detected_logical_core_count) +
+                " logical cores, effective " + std::to_string(runtime_behavior.effective_logical_core_count) +
+                " logical cores, CPU mode " + std::string(to_string(runtime_behavior.cpu_usage_mode)) +
+                ", video processing workers " + std::to_string(runtime_behavior.video_processing_worker_count) +
+                ", video queue " + std::to_string(runtime_behavior.video_frame_queue_depth) +
+                ", audio queue " + std::to_string(runtime_behavior.decoded_audio_block_queue_depth) + '.'
+        );
+
         const VideoOutputPlan video_output_plan = build_video_output_plan(timeline_plan);
         const auto *main_source_audio_stream =
             timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info.primary_audio_stream.has_value()
@@ -3290,7 +3710,19 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
             video_output_plan,
             resolved_audio_output,
             audio_output_plan,
-            std::move(audio_copy_template)
+            std::move(audio_copy_template),
+            runtime_behavior.effective_logical_core_count
+        );
+        runtime_behavior.selected_video_encoder_thread_count = output_session.video_encoder_thread_count();
+        runtime_behavior.selected_video_encoder_thread_type = output_session.video_encoder_thread_type();
+        emit_runtime_log(
+            request.log_callback,
+            format_codec_threading_log(
+                "Video encoder",
+                resolve_video_encoder_backend(request.media_encode_request.video_settings.codec).encoder_name,
+                runtime_behavior.selected_video_encoder_thread_count,
+                runtime_behavior.selected_video_encoder_thread_type
+            )
         );
 
         std::unique_ptr<subtitles::SubtitleRenderSession> subtitle_session{};
@@ -3342,9 +3774,13 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
                 video_output_plan,
                 request.normalization_policy,
                 request.queue_limits,
+                request.media_encode_request.threading,
                 audio_output_plan,
                 output_session,
                 progress_emitter,
+                runtime_behavior,
+                performance_metrics,
+                request.log_callback,
                 next_output_frame_index,
                 next_output_video_pts,
                 next_output_audio_pts
@@ -3365,6 +3801,18 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
             static_cast<std::uint64_t>(encoded_media_summary.encoded_video_frame_count),
             timeline_summary.output_duration_microseconds
         );
+        performance_metrics.total_elapsed_microseconds = static_cast<std::int64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - transcode_start
+            ).count()
+        );
+        if (performance_metrics.total_elapsed_microseconds > 0 &&
+            encoded_media_summary.encoded_video_frame_count > 0) {
+            performance_metrics.average_output_fps =
+                (static_cast<double>(encoded_media_summary.encoded_video_frame_count) * 1000000.0) /
+                static_cast<double>(performance_metrics.total_elapsed_microseconds);
+        }
+        emit_runtime_log(request.log_callback, format_performance_metrics_log(performance_metrics));
 
         return StreamingTranscodeResult{
             .summary = StreamingTranscodeSummary{
@@ -3372,6 +3820,8 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
                 .decoded_video_frame_count = decoded_video_frame_count,
                 .decoded_audio_block_count = decoded_audio_block_count,
                 .subtitled_video_frame_count = subtitled_video_frame_count,
+                .runtime_behavior = runtime_behavior,
+                .performance_metrics = performance_metrics,
                 .encoded_media_summary = std::move(encoded_media_summary)
             }
         };

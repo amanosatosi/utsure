@@ -29,6 +29,7 @@ private:
     [[nodiscard]] utsure::core::media::OutputVideoCodec current_output_codec() const;
     [[nodiscard]] utsure::core::media::AudioOutputMode current_audio_mode() const;
     [[nodiscard]] utsure::core::media::OutputAudioCodec current_output_audio_codec() const;
+    [[nodiscard]] utsure::core::media::CpuUsageMode current_cpu_usage_mode() const;
     [[nodiscard]] utsure::core::job::EncodeJobProcessPriority current_encode_priority() const;
     [[nodiscard]] std::optional<int> current_audio_sample_rate_override() const;
     [[nodiscard]] std::optional<int> current_audio_channel_override() const;
@@ -72,6 +73,7 @@ private:
     QSpinBox *audio_bitrate_spin_box_{nullptr};
     QComboBox *audio_sample_rate_combo_{nullptr};
     QComboBox *audio_channels_combo_{nullptr};
+    QComboBox *cpu_mode_combo_{nullptr};
     QComboBox *priority_combo_{nullptr};
     QPushButton *start_button_{nullptr};
     QPlainTextEdit *log_view_{nullptr};

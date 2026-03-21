@@ -86,6 +86,7 @@ struct EncodeJobOutputSettings final {
 
 struct EncodeJobExecutionSettings final {
     EncodeJobProcessPriority process_priority{EncodeJobProcessPriority::below_normal};
+    media::TranscodeThreadingSettings threading{};
 };
 
 struct EncodeJob final {

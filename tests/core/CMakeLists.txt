@@ -234,6 +234,11 @@ utsure_enable_warnings(utsure_core_encode_job_tests)
 add_dependencies(utsure_core_encode_job_tests utsure_generate_sample_media)
 
 add_test(
+    NAME utsure.core.job.encode.threading_modes
+    COMMAND utsure_core_encode_job_tests --threading-modes
+)
+
+add_test(
     NAME utsure.core.job.encode.h264
     COMMAND utsure_core_encode_job_tests --h264
         "${UTSURE_SAMPLE_MEDIA_FILE}"
