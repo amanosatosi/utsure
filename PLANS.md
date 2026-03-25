@@ -20,7 +20,11 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M13 Windows portable packaging slice completed.
 - [x] M13 Usability and safety slice completed.
 - [x] M15 Hardening and handoff completed.
-- [ ] M16 Streaming transcoding pipeline in progress.
+- [x] M16 Streaming transcoding pipeline completed.
+  * M17 Desktop GUI quality and usability planned.
+  * M18 Automatic output naming planned.
+  * M19 Automatic subtitle selection planned.
+  * M20 FontCollector-based subtitle font recovery and fallback planned.
 
 ## Active assumptions
 
@@ -570,6 +574,147 @@ Done criteria:
 - Unsupported audio-output cases fail clearly instead of silently producing video-only output.
 - The old full-clip buffering path is removed or isolated away from the active encode path.
 
-## Immediate next milestone
 
-Finish M16 by landing the bounded-memory streaming pipeline refactor and its validation/docs updates before returning to the roadmap.
+### M17 Improve desktop GUI quality and usability
+
+Status: Planned
+
+Scope:
+  * Improve the Qt 6 Widgets desktop shell so the main encode workflow feels cleaner, more understandable, and more efficient to use.
+  * Keep encode policy, subtitle rules, and pipeline orchestration in `encoder-core` rather than moving them into the GUI layer.
+  * Focus this milestone on visual polish, clearer control grouping, safer defaults, and more useful workflow feedback instead of adding unrelated encode features.
+
+Likely files/modules:
+  * `src/app/`
+  * `src/app/widgets/`
+  * `src/app/viewmodels/`
+  * `tests/app/`
+
+Risks:
+  * Letting presentation-layer cleanup turn into hidden encode-policy decisions in the GUI.
+  * Adding visual complexity that makes the existing workflow less predictable instead of more useful.
+  * Reworking layouts in ways that regress the Windows-first portable app flow.
+
+Validation:
+  * Launch the desktop app and verify that the supported encode flow remains understandable from asset selection through start, progress, and completion.
+  * Verify that the revised window layout still works at practical desktop sizes without hiding required controls.
+  * Verify that the GUI continues to delegate job construction and execution to the existing core boundaries.
+
+Done criteria:
+  * The desktop shell looks materially cleaner and more coherent than the first usable GUI.
+  * The current workflow is easier to understand and use without expanding the core feature surface unnecessarily.
+  * GUI polish remains separated from encode-core policy and pipeline logic.
+
+### M18 Add automatic output naming
+
+Status: Planned
+
+Scope:
+  * Add automatic output naming so the app can generate a predictable default filename from the current job context.
+  * Use a structured naming pattern based on:
+    * user-changeable text
+    * source folder name
+    * next available numeric suffix based on existing output filenames
+    * selected video codec tag
+    * selected audio codec tag
+    * output container extension
+  * Default the numeric suffix to `1` when no existing matching filenames are present.
+  * Preserve manual output-path editing so automatic naming remains a default behavior rather than a forced one.
+
+Naming shape:
+  * `[custom text] [folder name] - [next available number] [video codec] [audio codec].[ext]`
+  * Example: `[Testing] Za Folder - 03 [x265] [AAC].mp4`
+
+Likely files/modules:
+  * `src/core/include/utsure/core/job/`
+  * `src/core/src/job/`
+  * `src/core/src/io/`
+  * `src/app/`
+  * `tests/core/`
+  * `tests/app/`
+
+Risks:
+  * Producing filenames that are inconsistent when users partially edit the custom text.
+  * Misdetecting the next available number when older outputs use slightly different naming variants.
+  * Mixing display-oriented naming rules into unrelated encode-policy code.
+
+Validation:
+  * Verify that the default output name includes the custom text, folder name, numeric suffix, codec tags, and container extension in the expected order.
+  * Verify that numbering starts at `1` when no matching outputs exist.
+  * Verify that numbering increments to the next available value when matching filenames already exist.
+  * Verify that codec and extension tags reflect the actual selected encode/output settings.
+  * Verify that manual output naming still cleanly overrides the generated default.
+
+Done criteria:
+  * The app generates a predictable default output filename using the defined naming pattern.
+  * Existing matching filenames are checked to choose the next available number.
+  * Numbering defaults to `1` when no prior matching outputs are found.
+  * Manual output naming remains supported without fighting the automatic default.
+
+### M19 Add automatic subtitle selection with explicit priority rules
+
+Status: Planned
+
+Scope:
+  * Add automatic subtitle discovery and selection for the current source workflow.
+  * Define explicit priority rules when multiple candidate subtitle files exist beside the source media.
+  * Prefer subtitle files whose names include `.fx` before `.ass` when both otherwise match the same source, while keeping the broader selection rules understandable and testable.
+
+Likely files/modules:
+  * `src/core/include/utsure/core/subtitles/`
+  * `src/core/src/subtitles/`
+  * `src/core/src/job/`
+  * `src/app/`
+  * `tests/core/`
+
+Risks:
+  * Choosing subtitle candidates with matching rules that are too loose and accidentally bind the wrong file.
+  * Hiding file-pick behavior so users cannot understand why one subtitle was chosen over another.
+  * Baking filename-specific heuristics too deeply into unrelated subtitle-rendering code.
+
+Validation:
+  * Verify subtitle auto-selection for one source with no matching subtitle, one matching `.ass` subtitle, and multiple matching subtitle candidates.
+  * Verify that a candidate containing `.fx` before `.ass` is preferred over an otherwise matching plain `.ass` candidate.
+  * Verify that manual subtitle selection can still override the automatic result.
+
+Done criteria:
+  * The app can auto-select a subtitle file when a clear matching candidate exists.
+  * Priority rules are explicit enough to test and explain.
+  * `.fx`-qualified ASS subtitles win over lower-priority ASS candidates when both match the same source.
+
+### M20 Add FontCollector-based subtitle font recovery and fallback
+
+Status: Planned
+
+Scope:
+  * Add a font-recovery path using `FontCollector` to improve subtitle font correctness when the normal Windows/system-font path fails in real-world encode runs.
+  * Use `FontCollector` against ASS subtitle inputs to recover the fonts actually required by the subtitle script instead of depending only on local font resolution.
+  * Treat this as a subtitle-font reliability layer, not as a replacement for the existing subtitle renderer abstraction.
+  * Support feeding recovered fonts into the subtitle-rendering/burn-in path, and where the output/container flow allows it, support mux-oriented font attachment behavior as a separate integration step.
+
+Likely files/modules:
+  * `src/core/include/utsure/core/subtitles/`
+  * `src/core/src/subtitles/`
+  * `src/core/src/process/`
+  * `src/core/src/job/`
+  * `src/app/`
+  * `tests/core/`
+  * `tests/app/`
+
+Risks:
+  * Adding an external-tool dependency in a way that is brittle on Windows packaging or portable-app setups.
+  * Mixing font-discovery fallback policy into unrelated subtitle rendering or encode orchestration code.
+  * Relying on tool-specific behavior that differs between plain ASS font recovery and MKV mux-oriented flows.
+
+Validation:
+  * Verify that ASS subtitle jobs can trigger a `FontCollector`-based recovery step when enabled.
+  * Verify that subtitle rendering can use recovered fonts when the normal system-font path would otherwise produce incorrect styling.
+  * Verify that jobs still behave predictably when the recovery step finds no additional fonts or when the tool is unavailable.
+  * Verify that the integration remains bounded and explicit, with clear logs/reporting about whether recovered fonts were used.
+
+Done criteria:
+  * The app can use `FontCollector` as an explicit fallback path for ASS subtitle font recovery.
+  * Recovered fonts can be made available to the subtitle pipeline so bad-font cases are reduced in practical Windows encode runs.
+  * The integration preserves the existing `encoder-core` vs desktop-shell separation and does not bury tool-specific policy across unrelated modules.
+
+## Immediate next milestone
