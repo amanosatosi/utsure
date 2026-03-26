@@ -810,7 +810,8 @@ bool MediaDecodeResult::succeeded() const noexcept {
 
 MediaDecodeResult MediaDecoder::decode(
     const std::filesystem::path &input_path,
-    const DecodeNormalizationPolicy &normalization_policy
+    const DecodeNormalizationPolicy &normalization_policy,
+    const DecodeStreamSelection &stream_selection
 ) noexcept {
     try {
         const auto normalized_input_path = input_path.lexically_normal();
@@ -897,7 +898,7 @@ MediaDecodeResult MediaDecoder::decode(
             .audio_blocks = {}
         };
 
-        if (decoded_media_source.source_info.primary_video_stream.has_value()) {
+        if (stream_selection.decode_video && decoded_media_source.source_info.primary_video_stream.has_value()) {
             decoded_media_source.video_frames = decode_video_frames(
                 input_path_string,
                 *decoded_media_source.source_info.primary_video_stream,
@@ -905,7 +906,7 @@ MediaDecodeResult MediaDecoder::decode(
             );
         }
 
-        if (decoded_media_source.source_info.primary_audio_stream.has_value()) {
+        if (stream_selection.decode_audio && decoded_media_source.source_info.primary_audio_stream.has_value()) {
             decoded_media_source.audio_blocks = decode_audio_blocks(
                 input_path_string,
                 *decoded_media_source.source_info.primary_audio_stream,

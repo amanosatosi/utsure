@@ -1,7 +1,7 @@
 #include "subtitle_burn_in.hpp"
-#include "subtitle_bitmap_compositor.hpp"
 
-#include <exception>
+#include "utsure/core/subtitles/subtitle_frame_composer.hpp"
+
 #include <utility>
 
 namespace utsure::core::subtitles::burn_in {
@@ -64,36 +64,20 @@ SubtitleBurnInResult apply(
     std::int64_t subtitled_video_frame_count = 0;
 
     for (auto &video_frame : composited_media_source.video_frames) {
-        if (!detail::is_rgba_frame_layout_supported(video_frame)) {
+        const auto compose_result = compose_subtitles_into_frame(
+            video_frame,
+            *session_result.session,
+            video_frame.timestamp.start_microseconds
+        );
+        if (!compose_result.succeeded()) {
             return make_error(
-                "Subtitle burn-in encountered an unsupported decoded frame layout.",
-                "Keep all video frames normalized as single-plane rgba8 before subtitle composition."
+                compose_result.error->message,
+                compose_result.error->actionable_hint
             );
         }
 
-        SubtitleRenderResult render_result = session_result.session->render(SubtitleRenderRequest{
-            .timestamp_microseconds = video_frame.timestamp.start_microseconds
-        });
-        if (!render_result.succeeded()) {
-            return make_error(
-                render_result.error->message,
-                render_result.error->actionable_hint
-            );
-        }
-
-        if (render_result.rendered_frame->bitmaps.empty()) {
+        if (!compose_result.subtitles_applied) {
             continue;
-        }
-
-        for (const auto &bitmap : render_result.rendered_frame->bitmaps) {
-            try {
-                detail::composite_bitmap_into_frame(video_frame, bitmap);
-            } catch (const std::exception &exception) {
-                return make_error(
-                    "Subtitle burn-in failed while compositing subtitle bitmaps into decoded video frames.",
-                    exception.what()
-                );
-            }
         }
 
         ++subtitled_video_frame_count;

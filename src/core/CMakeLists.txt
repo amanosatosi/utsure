@@ -15,6 +15,7 @@ add_library(utsure_encoder_core STATIC
     src/media/streaming_transcode_pipeline.cpp
     src/subtitles/subtitle_bitmap_compositor.cpp
     src/subtitles/subtitle_burn_in.cpp
+    src/subtitles/subtitle_frame_composer.cpp
     src/subtitles/subtitle_renderer.cpp
     src/timeline/timeline.cpp
 )

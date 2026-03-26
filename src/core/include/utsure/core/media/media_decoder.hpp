@@ -21,11 +21,17 @@ struct MediaDecodeResult final {
     [[nodiscard]] bool succeeded() const noexcept;
 };
 
+struct DecodeStreamSelection final {
+    bool decode_video{true};
+    bool decode_audio{true};
+};
+
 class MediaDecoder final {
 public:
     [[nodiscard]] static MediaDecodeResult decode(
         const std::filesystem::path &input_path,
-        const DecodeNormalizationPolicy &normalization_policy = {}
+        const DecodeNormalizationPolicy &normalization_policy = {},
+        const DecodeStreamSelection &stream_selection = {}
     ) noexcept;
 };
 

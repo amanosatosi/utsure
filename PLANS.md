@@ -602,6 +602,9 @@ Current slice status:
   * Completed: replaced the queue table's native blue selection paint with an explicit muted selection palette so selected rows stay readable without bright blue artifacting.
   * Completed: reduced desktop-shell height pressure by lowering the default/minimum window height, shrinking the preview surface minimum, and relaxing the initial splitter allocations.
   * Completed: fixed the second-source queue crash by blocking queue-table rebuild signals, avoiding row selection against stale pre-refresh row counts, and removing the redundant post-add full refresh that re-entered the editor/selection path.
+  * Completed: removed the extra trim-note text from the Preview tab and replaced the placeholder label stack with a dedicated preview surface widget.
+  * Completed: added an opt-in preview renderer worker/controller that decodes only the main-source video path on demand, caches the decoded source while Preview is active, and renders the current playhead frame without running while Preview is off.
+  * Completed: shared subtitle preview composition with the existing libassmod-backed burn-in path by adding a one-frame subtitle composition helper in core and reusing the same subtitle renderer/session plus RGBA bitmap compositor for Preview overlays.
 
 Likely files/modules:
   * `src/app/`

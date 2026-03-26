@@ -1,6 +1,8 @@
 #include "main_window.hpp"
 
 #include "encode_job_runner_controller.hpp"
+#include "preview_frame_renderer_controller.hpp"
+#include "preview_surface_widget.hpp"
 #include "trim_timeline_widget.hpp"
 #include "utsure/core/build_info.hpp"
 #include "utsure/core/job/encode_job_preflight.hpp"
@@ -87,6 +89,14 @@ QString video_file_filter() {
 
 QString subtitle_file_filter() {
     return "Subtitle Files (*.ass *.ssa);;All Files (*)";
+}
+
+QString subtitle_format_hint_for_path(const QString &subtitle_path) {
+    QString format_hint = QFileInfo(subtitle_path).suffix().trimmed().toLower();
+    if (format_hint.isEmpty()) {
+        format_hint = "ass";
+    }
+    return format_hint;
 }
 
 QString image_file_filter() {
@@ -655,6 +665,7 @@ QLabel#PreviewTimeBadge {
 )");
 
     runner_controller_ = new EncodeJobRunnerController(this);
+    preview_renderer_controller_ = new PreviewFrameRendererController(this);
     busy_spinner_timer_ = new QTimer(this);
     busy_spinner_timer_->setInterval(90);
 
@@ -1077,19 +1088,10 @@ QLabel#PreviewTimeBadge {
     auto *preview_surface_layout = new QVBoxLayout(preview_surface);
     preview_surface_layout->setContentsMargins(10, 10, 10, 10);
     preview_surface_layout->setSpacing(4);
-    preview_title_label_ = new QLabel("PREVIEW OFFLINE", preview_surface);
-    preview_title_label_->setObjectName("PreviewTitleLabel");
-    preview_title_label_->setAlignment(Qt::AlignCenter);
-    preview_context_label_ = new QLabel("Turn on Preview to inspect the selected job state.", preview_surface);
-    preview_context_label_->setObjectName("PreviewContextLabel");
-    preview_context_label_->setAlignment(Qt::AlignCenter);
-    preview_context_label_->setWordWrap(true);
+    preview_surface_widget_ = new PreviewSurfaceWidget(preview_surface);
     preview_time_badge_ = new QLabel("00:00:00.000", preview_surface);
     preview_time_badge_->setObjectName("PreviewTimeBadge");
-    preview_surface_layout->addStretch(1);
-    preview_surface_layout->addWidget(preview_title_label_);
-    preview_surface_layout->addWidget(preview_context_label_);
-    preview_surface_layout->addStretch(1);
+    preview_surface_layout->addWidget(preview_surface_widget_, 1);
     auto *preview_badge_row = new QHBoxLayout();
     preview_badge_row->setContentsMargins(0, 0, 0, 0);
     preview_badge_row->addStretch(1);
@@ -1143,13 +1145,6 @@ QLabel#PreviewTimeBadge {
     trim_timeline_widget_ = new TrimTimelineWidget(timeline_group);
     trim_timeline_widget_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     timeline_layout->addWidget(trim_timeline_widget_);
-    auto *timeline_note = new QLabel(
-        "Trim applies only to the main source clip. Thumbnail, intro, and endcard are outside this trim range, and the trim UI is currently staged ahead of core trim support.",
-        timeline_group
-    );
-    timeline_note->setObjectName("MutedNote");
-    timeline_note->setWordWrap(true);
-    timeline_layout->addWidget(timeline_note);
 
     auto *preview_splitter = new QSplitter(Qt::Vertical, preview_tab);
     preview_splitter->setChildrenCollapsible(false);
@@ -1210,6 +1205,24 @@ QLabel#PreviewTimeBadge {
 
         append_session_log(line);
     });
+    connect(
+        preview_renderer_controller_,
+        &PreviewFrameRendererController::preview_loading,
+        this,
+        &MainWindow::handle_preview_loading
+    );
+    connect(
+        preview_renderer_controller_,
+        &PreviewFrameRendererController::preview_ready,
+        this,
+        &MainWindow::handle_preview_ready
+    );
+    connect(
+        preview_renderer_controller_,
+        &PreviewFrameRendererController::preview_failed,
+        this,
+        &MainWindow::handle_preview_failed
+    );
     connect(busy_spinner_timer_, &QTimer::timeout, this, &MainWindow::advance_busy_spinner);
 
     connect(add_button_, &QToolButton::clicked, this, &MainWindow::add_source_jobs);
@@ -1323,14 +1336,9 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job_from_entry(
     job.execution.process_priority = current_worker_priority();
 
     if (entry.subtitle_enabled && !entry.subtitle_path.trimmed().isEmpty()) {
-        QString format_hint = QFileInfo(entry.subtitle_path).suffix().trimmed().toLower();
-        if (format_hint.isEmpty()) {
-            format_hint = "ass";
-        }
-
         job.subtitles = utsure::core::job::EncodeJobSubtitleSettings{
             .subtitle_path = qstring_to_path(entry.subtitle_path),
-            .format_hint = format_hint.toUtf8().toStdString()
+            .format_hint = subtitle_format_hint_for_path(entry.subtitle_path).toUtf8().toStdString()
         };
     }
 
@@ -1662,6 +1670,113 @@ void MainWindow::handle_same_as_input_toggled(const bool enabled) {
 
 void MainWindow::handle_preview_toggled(const bool /*enabled*/) {
     refresh_selected_job_preview();
+}
+
+void MainWindow::request_selected_job_preview_frame() {
+    if (!preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_) || preview_renderer_controller_ == nullptr) {
+        return;
+    }
+
+    const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    const QString normalized_source_path = job.source_path.trimmed();
+    const QString normalized_subtitle_path = job.subtitle_path.trimmed();
+    const bool subtitles_enabled = job.subtitle_enabled && !normalized_subtitle_path.isEmpty();
+    const QString subtitle_format_hint = subtitles_enabled
+        ? subtitle_format_hint_for_path(normalized_subtitle_path)
+        : QString("auto");
+    const qint64 requested_time_us = std::clamp<qint64>(
+        job.current_time_us,
+        0,
+        std::max<qint64>(job.duration_us, 0)
+    );
+
+    if (preview_requested_job_index_ == selected_job_index_ &&
+        preview_requested_time_us == requested_time_us &&
+        preview_requested_source_path_ == normalized_source_path &&
+        preview_requested_subtitle_enabled_ == subtitles_enabled &&
+        preview_requested_subtitle_path_ == normalized_subtitle_path &&
+        preview_requested_subtitle_format_hint_ == subtitle_format_hint) {
+        return;
+    }
+
+    preview_requested_job_index_ = selected_job_index_;
+    preview_requested_time_us = requested_time_us;
+    preview_requested_source_path_ = normalized_source_path;
+    preview_requested_subtitle_enabled_ = subtitles_enabled;
+    preview_requested_subtitle_path_ = normalized_subtitle_path;
+    preview_requested_subtitle_format_hint_ = subtitle_format_hint;
+
+    preview_renderer_controller_->request_preview(PreviewFrameRenderRequest{
+        .request_token = ++preview_request_token_,
+        .source_path = normalized_source_path,
+        .requested_time_us = requested_time_us,
+        .subtitle_enabled = subtitles_enabled,
+        .subtitle_path = normalized_subtitle_path,
+        .subtitle_format_hint = subtitle_format_hint
+    });
+}
+
+void MainWindow::clear_preview_surface() {
+    const bool preview_state_already_cleared =
+        preview_requested_job_index_ == -1 &&
+        preview_requested_time_us == -1 &&
+        preview_requested_source_path_.isEmpty() &&
+        !preview_requested_subtitle_enabled_ &&
+        preview_requested_subtitle_path_.isEmpty();
+    if (preview_state_already_cleared) {
+        return;
+    }
+
+    ++preview_request_token_;
+    preview_requested_job_index_ = -1;
+    preview_requested_time_us = -1;
+    preview_requested_source_path_.clear();
+    preview_requested_subtitle_enabled_ = false;
+    preview_requested_subtitle_path_.clear();
+    preview_requested_subtitle_format_hint_ = "auto";
+
+    if (preview_renderer_controller_ != nullptr) {
+        preview_renderer_controller_->clear_cache();
+    }
+}
+
+void MainWindow::handle_preview_loading(const quint64 request_token, const qint64 requested_time_us) {
+    if (request_token != preview_request_token_ || !preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_)) {
+        return;
+    }
+
+    preview_surface_widget_->set_placeholder("LOADING PREVIEW");
+    preview_time_badge_->setText(format_time_us(requested_time_us));
+}
+
+void MainWindow::handle_preview_ready(
+    const quint64 request_token,
+    const qint64 requested_time_us,
+    const qint64 frame_time_us,
+    const QImage &image
+) {
+    Q_UNUSED(frame_time_us);
+
+    if (request_token != preview_request_token_ || !preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_)) {
+        return;
+    }
+
+    preview_surface_widget_->set_frame_image(image);
+    preview_time_badge_->setText(format_time_us(requested_time_us));
+}
+
+void MainWindow::handle_preview_failed(
+    const quint64 request_token,
+    const qint64 requested_time_us,
+    const QString &title,
+    const QString &detail
+) {
+    if (request_token != preview_request_token_ || !preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_)) {
+        return;
+    }
+
+    preview_surface_widget_->set_placeholder(title, detail);
+    preview_time_badge_->setText(format_time_us(requested_time_us));
 }
 
 void MainWindow::step_selected_job_frame(const int direction) {
@@ -2071,9 +2186,13 @@ void MainWindow::refresh_selected_job_details() {
 }
 
 void MainWindow::refresh_selected_job_preview() {
-    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
-        preview_title_label_->setText("PREVIEW OFFLINE");
-        preview_context_label_->setText("Select a queue row to inspect preview state.");
+    if (preview_surface_widget_ == nullptr) {
+        return;
+    }
+
+    if (!is_valid_job_index(selected_job_index_)) {
+        clear_preview_surface();
+        preview_surface_widget_->set_placeholder("PREVIEW OFFLINE", "Select a queue row.");
         preview_time_badge_->setText("00:00:00.000");
         return;
     }
@@ -2081,8 +2200,8 @@ void MainWindow::refresh_selected_job_preview() {
     const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
 
     if (!preview_enabled_check_->isChecked()) {
-        preview_title_label_->setText("PREVIEW OFFLINE");
-        preview_context_label_->setText("Turn on Preview to enable the video preview surface.");
+        clear_preview_surface();
+        preview_surface_widget_->set_placeholder("PREVIEW OFFLINE");
         preview_time_badge_->setText("00:00:00.000");
         return;
     }
@@ -2090,16 +2209,12 @@ void MainWindow::refresh_selected_job_preview() {
     preview_time_badge_->setText(format_time_us(job.current_time_us));
 
     if (!job.source_inspection_error.isEmpty()) {
-        preview_title_label_->setText("PREVIEW UNAVAILABLE");
-        preview_context_label_->setText(job.source_inspection_error);
+        clear_preview_surface();
+        preview_surface_widget_->set_placeholder("PREVIEW UNAVAILABLE", job.source_inspection_error);
         return;
     }
 
-    preview_title_label_->setText("PREVIEW UNAVAILABLE");
-    preview_context_label_->setText(
-        QString("%1\n\nThis pane is reserved for video preview only. Live video preview is not wired in this milestone yet.\nUse Task Log for per-task status and log details.")
-            .arg(queue_source_display_name(job))
-    );
+    request_selected_job_preview_frame();
 }
 
 void MainWindow::refresh_trim_controls() {

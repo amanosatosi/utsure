@@ -14,6 +14,12 @@ qt_add_executable(utsure_encoder_app WIN32
     main.cpp
     main_window.cpp
     main_window.hpp
+    preview_frame_renderer_controller.cpp
+    preview_frame_renderer_controller.hpp
+    preview_frame_renderer_worker.cpp
+    preview_frame_renderer_worker.hpp
+    preview_surface_widget.cpp
+    preview_surface_widget.hpp
     resources/app_resources.qrc
     trim_timeline_widget.cpp
     trim_timeline_widget.hpp

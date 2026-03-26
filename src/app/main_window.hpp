@@ -3,6 +3,7 @@
 #include "utsure/core/job/encode_job.hpp"
 
 #include <QElapsedTimer>
+#include <QImage>
 #include <QMainWindow>
 #include <QString>
 #include <QStringList>
@@ -17,6 +18,8 @@ class QLabel;
 class QCheckBox;
 class QComboBox;
 class QLineEdit;
+class PreviewFrameRendererController;
+class PreviewSurfaceWidget;
 class QPlainTextEdit;
 class QPushButton;
 class QSpinBox;
@@ -132,6 +135,11 @@ private:
     void ensure_job_inspection(int job_index);
     void reset_job_for_rerun(UiEncodeJob &job);
     void apply_same_as_input_folder(UiEncodeJob &job);
+    void request_selected_job_preview_frame();
+    void clear_preview_surface();
+    void handle_preview_loading(quint64 request_token, qint64 requested_time_us);
+    void handle_preview_ready(quint64 request_token, qint64 requested_time_us, qint64 frame_time_us, const QImage &image);
+    void handle_preview_failed(quint64 request_token, qint64 requested_time_us, const QString &title, const QString &detail);
 
     void refresh_all_views();
     void refresh_queue_table();
@@ -175,6 +183,13 @@ private:
     QElapsedTimer active_job_elapsed_timer_{};
     bool active_job_elapsed_valid_{false};
     QStringList session_log_lines_{};
+    quint64 preview_request_token_{0};
+    int preview_requested_job_index_{-1};
+    qint64 preview_requested_time_us_{-1};
+    QString preview_requested_source_path_{};
+    QString preview_requested_subtitle_path_{};
+    QString preview_requested_subtitle_format_hint_{"auto"};
+    bool preview_requested_subtitle_enabled_{false};
 
     QCheckBox *top_window_check_{nullptr};
     QTableWidget *queue_table_{nullptr};
@@ -220,8 +235,7 @@ private:
     QPlainTextEdit *task_log_view_{nullptr};
     QLabel *task_log_summary_label_{nullptr};
     QCheckBox *preview_enabled_check_{nullptr};
-    QLabel *preview_title_label_{nullptr};
-    QLabel *preview_context_label_{nullptr};
+    PreviewSurfaceWidget *preview_surface_widget_{nullptr};
     QLabel *preview_time_badge_{nullptr};
     TrimTimelineWidget *trim_timeline_widget_{nullptr};
     QLabel *current_time_value_{nullptr};
@@ -242,4 +256,5 @@ private:
     QToolButton *stop_button_{nullptr};
     QTimer *busy_spinner_timer_{nullptr};
     EncodeJobRunnerController *runner_controller_{nullptr};
+    PreviewFrameRendererController *preview_renderer_controller_{nullptr};
 };
