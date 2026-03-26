@@ -17,8 +17,6 @@ QString to_qstring(std::string_view text) {
 }  // namespace
 
 int main(int argc, char *argv[]) {
-    Q_INIT_RESOURCE(app_resources);
-
     QApplication app(argc, argv);
     QApplication::setApplicationName(to_qstring(utsure::core::BuildInfo::project_name()));
     QApplication::setApplicationVersion(to_qstring(utsure::core::BuildInfo::project_version()));
