@@ -1691,7 +1691,7 @@ void MainWindow::request_selected_job_preview_frame() {
     );
 
     if (preview_requested_job_index_ == selected_job_index_ &&
-        preview_requested_time_us == requested_time_us &&
+        preview_requested_time_us_ == requested_time_us &&
         preview_requested_source_path_ == normalized_source_path &&
         preview_requested_subtitle_enabled_ == subtitles_enabled &&
         preview_requested_subtitle_path_ == normalized_subtitle_path &&
@@ -1700,7 +1700,7 @@ void MainWindow::request_selected_job_preview_frame() {
     }
 
     preview_requested_job_index_ = selected_job_index_;
-    preview_requested_time_us = requested_time_us;
+    preview_requested_time_us_ = requested_time_us;
     preview_requested_source_path_ = normalized_source_path;
     preview_requested_subtitle_enabled_ = subtitles_enabled;
     preview_requested_subtitle_path_ = normalized_subtitle_path;
@@ -1719,7 +1719,7 @@ void MainWindow::request_selected_job_preview_frame() {
 void MainWindow::clear_preview_surface() {
     const bool preview_state_already_cleared =
         preview_requested_job_index_ == -1 &&
-        preview_requested_time_us == -1 &&
+        preview_requested_time_us_ == -1 &&
         preview_requested_source_path_.isEmpty() &&
         !preview_requested_subtitle_enabled_ &&
         preview_requested_subtitle_path_.isEmpty();
@@ -1729,7 +1729,7 @@ void MainWindow::clear_preview_surface() {
 
     ++preview_request_token_;
     preview_requested_job_index_ = -1;
-    preview_requested_time_us = -1;
+    preview_requested_time_us_ = -1;
     preview_requested_source_path_.clear();
     preview_requested_subtitle_enabled_ = false;
     preview_requested_subtitle_path_.clear();
