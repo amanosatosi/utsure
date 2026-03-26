@@ -597,7 +597,7 @@ Current slice status:
   * Completed: narrowed the icon loader so runtime fallback now reads the qrc SVG bytes directly before rasterizing, instead of depending only on filename-based SVG handling.
   * Completed: normalized queue-table display text so file, type, status, EFPS, speed, and output cells render explicit values instead of leaking empty strings from partially populated jobs.
   * Completed: kept the Preview tab reserved for video preview only, with the surface forced back offline when no queue row is selected.
-  * Completed: kept the qrc-backed icon path on the existing target-embedded Qt resource pipeline after confirming the app build does not emit a standalone `qInitResources_app_resources()` entry point for manual initialization.
+  * Completed: fixed the remaining text-button regression by giving `app_resources.qrc` a deterministic AUTORCC resource name and explicitly initializing `app_resources` at startup so `:/icons/*.svg` resolves before toolbar/button setup.
   * Completed: hardened the Windows portable bundle to carry and validate Qt's SVG icon engine plugin explicitly so deployed toolbar icons do not regress to text fallback.
   * Completed: replaced the queue table's native blue selection paint with an explicit muted selection palette so selected rows stay readable without bright blue artifacting.
   * Completed: reduced desktop-shell height pressure by lowering the default/minimum window height, shrinking the preview surface minimum, and relaxing the initial splitter allocations.

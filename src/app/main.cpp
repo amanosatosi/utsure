@@ -6,6 +6,7 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QDebug>
+#include <QResource>
 #include <QTimer>
 
 namespace {
@@ -20,6 +21,7 @@ int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(to_qstring(utsure::core::BuildInfo::project_name()));
     QApplication::setApplicationVersion(to_qstring(utsure::core::BuildInfo::project_version()));
+    Q_INIT_RESOURCE(app_resources);
 
     QCommandLineParser parser;
     parser.setApplicationDescription("utsure desktop encode job runner");
