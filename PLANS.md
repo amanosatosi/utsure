@@ -596,7 +596,7 @@ Current slice status:
   * Completed: restored action-icon loading to Qt's resource-path icon pipeline with SVG renderer fallback after the post-`882e2d24c6e665f2f742a8045f2e3874df251a2e` raw-byte loader regression.
   * Completed: normalized queue-table display text so file, type, status, EFPS, speed, and output cells render explicit values instead of leaking empty strings from partially populated jobs.
   * Completed: kept the Preview tab reserved for video preview only, with the surface forced back offline when no queue row is selected.
-  * Completed: hardened qrc-backed icon registration in `main.cpp`, so toolbar and timeline icons no longer depend on implicit resource registration alone at runtime.
+  * Completed: kept the qrc-backed icon path on the existing target-embedded Qt resource pipeline after confirming the app build does not emit a standalone `qInitResources_app_resources()` entry point for manual initialization.
   * Completed: replaced the queue table's native blue selection paint with an explicit muted selection palette so selected rows stay readable without bright blue artifacting.
   * Completed: reduced desktop-shell height pressure by lowering the default/minimum window height, shrinking the preview surface minimum, and relaxing the initial splitter allocations.
 
