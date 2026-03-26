@@ -1,5 +1,6 @@
 #include "subtitle_burn_in.hpp"
 
+#include "subtitle_bitmap_compositor.hpp"
 #include "utsure/core/subtitles/subtitle_frame_composer.hpp"
 
 #include <utility>
