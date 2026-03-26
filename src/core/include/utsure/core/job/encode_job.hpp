@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace utsure::core::job {
 
@@ -112,6 +113,7 @@ struct EncodeJobError final {
     std::string output_path{};
     std::string message{};
     std::string actionable_hint{};
+    bool canceled{false};
 };
 
 struct EncodeJobResult final {
@@ -130,6 +132,9 @@ class EncodeJobRunner final {
 public:
     [[nodiscard]] static EncodeJobResult run(const EncodeJob &job, const EncodeJobRunOptions &options = {}) noexcept;
 };
+
+inline constexpr std::string_view kEncodeJobCanceledException{"utsure.encode_job.canceled"};
+inline constexpr std::string_view kEncodeJobCanceledMessage{"Encode canceled by user."};
 
 [[nodiscard]] const char *to_string(EncodeJobStage stage) noexcept;
 [[nodiscard]] const char *to_string(EncodeJobLogLevel level) noexcept;

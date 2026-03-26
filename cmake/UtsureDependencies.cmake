@@ -97,7 +97,7 @@ endfunction()
 
 macro(utsure_configure_dependencies)
     if(UTSURE_BUILD_APP)
-        find_package(Qt6 ${UTSURE_QT_MIN_VERSION} REQUIRED COMPONENTS Widgets)
+        find_package(Qt6 ${UTSURE_QT_MIN_VERSION} REQUIRED COMPONENTS Widgets Svg)
     endif()
 
     if(NOT UTSURE_ENABLE_DEPENDENCY_AUDIT)
@@ -278,7 +278,7 @@ macro(utsure_configure_dependencies)
 
         message(STATUS "UTSURE dependency audit summary:")
         if(UTSURE_BUILD_APP)
-            message(STATUS "  Qt6 Widgets: found via CMake package config")
+            message(STATUS "  Qt6 Widgets/Svg: found via CMake package config")
         endif()
         message(STATUS "  FFmpeg pin: ${_ffmpeg_status}")
         message(STATUS "  FFmpeg libavcodec: ${UTSURE_LIBAVCODEC_VERSION}")

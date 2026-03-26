@@ -1,28 +1,42 @@
 #include "main_window.hpp"
 
 #include "encode_job_runner_controller.hpp"
+#include "trim_timeline_widget.hpp"
 #include "utsure/core/build_info.hpp"
 #include "utsure/core/job/encode_job_preflight.hpp"
+#include "utsure/core/media/media_inspector.hpp"
 
+#include <QAbstractItemView>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
-#include <QFileDialog>
 #include <QFile>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHeaderView>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPainter>
 #include <QPlainTextEdit>
-#include <QProgressBar>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
-#include <QStringList>
+#include <QSplitter>
+#include <QTabWidget>
+#include <QTableWidget>
+#include <QTableWidgetItem>
+#include <QTime>
+#include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -32,62 +46,1020 @@
 
 namespace {
 
-struct PathRowWidgets final {
+struct PathFieldWidgets final {
     QWidget *container{nullptr};
     QLineEdit *line_edit{nullptr};
     QPushButton *browse_button{nullptr};
-    QPushButton *clear_button{nullptr};
 };
 
 QString to_qstring(std::string_view text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
 }
 
-utsure::core::media::OutputVideoCodec codec_from_index(const int index) {
-    return index == static_cast<int>(utsure::core::media::OutputVideoCodec::h265)
-        ? utsure::core::media::OutputVideoCodec::h265
-        : utsure::core::media::OutputVideoCodec::h264;
+QString video_file_filter() {
+    return "Video Files (*.avi *.mkv *.mov *.mp4 *.webm);;All Files (*)";
 }
 
-utsure::core::media::AudioOutputMode audio_mode_from_value(const int value) {
-    switch (static_cast<utsure::core::media::AudioOutputMode>(value)) {
-    case utsure::core::media::AudioOutputMode::auto_select:
-        return utsure::core::media::AudioOutputMode::auto_select;
-    case utsure::core::media::AudioOutputMode::copy_source:
-        return utsure::core::media::AudioOutputMode::copy_source;
-    case utsure::core::media::AudioOutputMode::encode_aac:
-        return utsure::core::media::AudioOutputMode::encode_aac;
-    case utsure::core::media::AudioOutputMode::disable:
-        return utsure::core::media::AudioOutputMode::disable;
+QString subtitle_file_filter() {
+    return "Subtitle Files (*.ass *.ssa);;All Files (*)";
+}
+
+QString image_file_filter() {
+    return "Image Files (*.png *.jpg *.jpeg *.webp *.bmp);;All Files (*)";
+}
+
+QString format_preflight_issue(const utsure::core::job::EncodeJobPreflightIssue &issue) {
+    QString line = QString("[%1] %2")
+        .arg(to_qstring(utsure::core::job::to_string(issue.severity)))
+        .arg(to_qstring(issue.message));
+
+    if (!issue.actionable_hint.empty()) {
+        line += QString("\nHint: %1").arg(to_qstring(issue.actionable_hint));
+    }
+
+    return line;
+}
+
+QString format_time_us(const qint64 microseconds, const bool include_milliseconds = true) {
+    const auto total_milliseconds = std::max<qint64>(0, microseconds / 1000);
+    const auto milliseconds = total_milliseconds % 1000;
+    const auto total_seconds = total_milliseconds / 1000;
+    const auto seconds = total_seconds % 60;
+    const auto minutes = (total_seconds / 60) % 60;
+    const auto hours = total_seconds / 3600;
+
+    if (include_milliseconds) {
+        return QString("%1:%2:%3.%4")
+            .arg(hours, 2, 10, QChar('0'))
+            .arg(minutes, 2, 10, QChar('0'))
+            .arg(seconds, 2, 10, QChar('0'))
+            .arg(milliseconds, 3, 10, QChar('0'));
+    }
+
+    return QString("%1:%2:%3")
+        .arg(hours, 2, 10, QChar('0'))
+        .arg(minutes, 2, 10, QChar('0'))
+        .arg(seconds, 2, 10, QChar('0'));
+}
+
+QString format_duration_ms(const qint64 milliseconds) {
+    if (milliseconds < 0) {
+        return "--";
+    }
+
+    return format_time_us(milliseconds * 1000, false);
+}
+
+QString format_file_size(const qint64 bytes) {
+    if (bytes < 0) {
+        return "--";
+    }
+
+    constexpr qint64 kKilobyte = 1024;
+    constexpr qint64 kMegabyte = 1024 * 1024;
+    constexpr qint64 kGigabyte = 1024 * 1024 * 1024;
+
+    if (bytes >= kGigabyte) {
+        return QString("%1 GB")
+            .arg(QString::number(static_cast<double>(bytes) / static_cast<double>(kGigabyte), 'f', 2));
+    }
+
+    if (bytes >= kMegabyte) {
+        return QString("%1 MB")
+            .arg(QString::number(static_cast<double>(bytes) / static_cast<double>(kMegabyte), 'f', 2));
+    }
+
+    if (bytes >= kKilobyte) {
+        return QString("%1 KB")
+            .arg(QString::number(static_cast<double>(bytes) / static_cast<double>(kKilobyte), 'f', 1));
+    }
+
+    return QString("%1 B").arg(bytes);
+}
+
+double rational_to_double(const utsure::core::media::Rational &value) {
+    if (!value.is_valid()) {
+        return 0.0;
+    }
+
+    return static_cast<double>(value.numerator) / static_cast<double>(value.denominator);
+}
+
+QString format_audio_track_display(const std::optional<utsure::core::media::AudioStreamInfo> &audio_stream) {
+    if (!audio_stream.has_value()) {
+        return "No source audio detected";
+    }
+
+    return QString("Primary | %1 | %2 channels | %3 Hz")
+        .arg(to_qstring(audio_stream->codec_name))
+        .arg(audio_stream->channel_count)
+        .arg(audio_stream->sample_rate);
+}
+
+QString basename_from_path(const QString &path_text) {
+    return QFileInfo(path_text).fileName();
+}
+
+QColor accent_for_state(const MainWindow::UiJobState state) {
+    switch (state) {
+    case MainWindow::UiJobState::finished:
+        return QColor(0, 180, 90, 45);
+    case MainWindow::UiJobState::failed:
+    case MainWindow::UiJobState::canceled:
+        return QColor(217, 58, 58, 45);
+    case MainWindow::UiJobState::encoding:
+        return QColor(25, 183, 255, 55);
+    case MainWindow::UiJobState::pending:
     default:
-        return utsure::core::media::AudioOutputMode::auto_select;
+        return QColor(Qt::transparent);
     }
 }
 
-utsure::core::media::OutputAudioCodec output_audio_codec_from_value(const int value) {
-    switch (static_cast<utsure::core::media::OutputAudioCodec>(value)) {
-    case utsure::core::media::OutputAudioCodec::aac:
-        return utsure::core::media::OutputAudioCodec::aac;
+QBrush foreground_for_state(const MainWindow::UiJobState state) {
+    switch (state) {
+    case MainWindow::UiJobState::finished:
+        return QBrush(QColor("#0f7a47"));
+    case MainWindow::UiJobState::failed:
+    case MainWindow::UiJobState::canceled:
+        return QBrush(QColor("#a12b2b"));
+    case MainWindow::UiJobState::encoding:
+        return QBrush(QColor("#0f74a6"));
+    case MainWindow::UiJobState::pending:
     default:
-        return utsure::core::media::OutputAudioCodec::aac;
+        return QBrush(QColor("#1f1f1f"));
     }
 }
 
-utsure::core::media::CpuUsageMode cpu_usage_mode_from_value(const int value) {
-    switch (static_cast<utsure::core::media::CpuUsageMode>(value)) {
-    case utsure::core::media::CpuUsageMode::auto_select:
-        return utsure::core::media::CpuUsageMode::auto_select;
-    case utsure::core::media::CpuUsageMode::conservative:
-        return utsure::core::media::CpuUsageMode::conservative;
-    case utsure::core::media::CpuUsageMode::aggressive:
-        return utsure::core::media::CpuUsageMode::aggressive;
-    default:
-        return utsure::core::media::CpuUsageMode::auto_select;
-    }
+PathFieldWidgets create_path_field(QWidget *parent, const QString &placeholder_text, const QString &browse_tooltip) {
+    auto *container = new QWidget(parent);
+    auto *layout = new QHBoxLayout(container);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
+
+    auto *line_edit = new QLineEdit(container);
+    line_edit->setPlaceholderText(placeholder_text);
+
+    auto *browse_button = new QPushButton(container);
+    browse_button->setProperty("browseButton", true);
+    browse_button->setToolTip(browse_tooltip);
+    browse_button->setIcon(QIcon(":/icons/browse.svg"));
+    browse_button->setCursor(Qt::PointingHandCursor);
+    browse_button->setFixedSize(32, 32);
+
+    layout->addWidget(line_edit, 1);
+    layout->addWidget(browse_button);
+
+    return PathFieldWidgets{
+        .container = container,
+        .line_edit = line_edit,
+        .browse_button = browse_button
+    };
 }
 
-utsure::core::job::EncodeJobProcessPriority priority_from_value(const int value) {
-    switch (static_cast<utsure::core::job::EncodeJobProcessPriority>(value)) {
+QToolButton *create_toolbar_button(const QString &icon_path, const QString &tooltip, QWidget *parent) {
+    auto *button = new QToolButton(parent);
+    button->setProperty("toolbarButton", true);
+    button->setToolTip(tooltip);
+    button->setCursor(Qt::PointingHandCursor);
+    button->setIcon(QIcon(icon_path));
+    button->setIconSize(QSize(18, 18));
+    button->setFixedSize(34, 34);
+    return button;
+}
+
+QWidget *wrap_in_scroll_area(QWidget *content, QWidget *parent) {
+    auto *scroll_area = new QScrollArea(parent);
+    scroll_area->setWidgetResizable(true);
+    scroll_area->setFrameShape(QFrame::NoFrame);
+    scroll_area->setWidget(content);
+    return scroll_area;
+}
+
+QIcon make_busy_icon(const int phase) {
+    QPixmap pixmap(18, 18);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.translate(9, 9);
+    painter.rotate(static_cast<qreal>(phase) * 30.0);
+
+    QPen pen(QColor("#ff3ea5"), 2.0, Qt::SolidLine, Qt::RoundCap);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawArc(QRectF(-6.0, -6.0, 12.0, 12.0), 35 * 16, 240 * 16);
+
+    return QIcon(pixmap);
+}
+
+QString status_prefix_for_session(const QString &job_name, const QString &line) {
+    return QString("[%1] %2").arg(job_name, line);
+}
+
+}  // namespace
+
+MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
+    setWindowTitle(QString("%1 %2")
+                       .arg(to_qstring(utsure::core::BuildInfo::project_name()))
+                       .arg(to_qstring(utsure::core::BuildInfo::project_version())));
+    resize(1360, 900);
+
+    setStyleSheet(R"(
+QWidget {
+    background: #f2f2f2;
+    color: #1f1f1f;
+    font-family: "Segoe UI";
+    font-size: 12.5px;
+}
+QFrame#AccentStrip {
+    background: #ff3ea5;
+    border: none;
+}
+QFrame#HeaderFrame,
+QFrame#ToolbarFrame,
+QFrame#PanelFrame,
+QFrame#PreviewSurface {
+    background: #ffffff;
+    border: 1px solid #cfcfcf;
+    border-radius: 6px;
+}
+QLabel#BrandMark {
+    min-width: 34px;
+    min-height: 34px;
+    max-width: 34px;
+    max-height: 34px;
+    border-radius: 7px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ff7bc7, stop:1 #ff3ea5);
+    color: white;
+    font-size: 17px;
+    font-weight: 900;
+    padding-top: 4px;
+}
+QLabel#BrandName {
+    color: #ff3ea5;
+    font-size: 18px;
+    font-weight: 900;
+}
+QLabel#BrandSubtitle,
+QLabel#MutedNote,
+QLabel#DetailLabel,
+QLabel#PreviewContextLabel,
+QLabel#TaskLogSummaryLabel {
+    color: #6b6b6b;
+}
+QToolButton[toolbarButton="true"] {
+    background: #ffffff;
+    border: 1px solid #cfcfcf;
+    border-radius: 4px;
+    padding: 0;
+}
+QToolButton[toolbarButton="true"]:hover,
+QPushButton[browseButton="true"]:hover,
+QPushButton#TimelineButton:hover {
+    background: #f7f7f7;
+}
+QPushButton[browseButton="true"] {
+    background: #19b7ff;
+    border: 1px solid #0aa3db;
+    border-radius: 3px;
+    color: #ffffff;
+    padding: 0;
+}
+QPushButton#TimelineButton {
+    background: #ffffff;
+    border: 1px solid #cfcfcf;
+    border-radius: 4px;
+    min-height: 28px;
+    padding: 0 10px;
+}
+QPushButton#TimelinePrimaryButton {
+    background: #ff3ea5;
+    border: 1px solid #d92f86;
+    border-radius: 4px;
+    color: #ffffff;
+    min-height: 28px;
+    padding: 0 10px;
+}
+QLineEdit,
+QComboBox,
+QSpinBox,
+QPlainTextEdit,
+QTableWidget,
+QTabWidget::pane {
+    background: #ffffff;
+    border: 1px solid #bdbdbd;
+    border-radius: 4px;
+}
+QLineEdit,
+QComboBox,
+QSpinBox {
+    min-height: 30px;
+    padding: 4px 8px;
+}
+QGroupBox {
+    background: #ffffff;
+    border: 1px solid #cfcfcf;
+    border-radius: 6px;
+    margin-top: 8px;
+    padding-top: 14px;
+    font-weight: 700;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+}
+QTabBar::tab {
+    background: #f8f8f8;
+    border: 1px solid #cfcfcf;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    padding: 7px 12px;
+    margin-right: 4px;
+    color: #6b6b6b;
+}
+QTabBar::tab:selected {
+    background: #ffffff;
+    color: #111111;
+    border-top: 2px solid #ff3ea5;
+    padding-top: 6px;
+}
+QHeaderView::section {
+    background: #fafafa;
+    border: none;
+    border-bottom: 1px solid #cfcfcf;
+    padding: 8px;
+    font-weight: 700;
+}
+QLabel#PreviewTitleLabel {
+    color: #eeeeee;
+    font-size: 18px;
+    font-weight: 900;
+    letter-spacing: 0.7px;
+}
+QLabel#PreviewContextLabel {
+    color: #bbbbbb;
+}
+QLabel#PreviewTimeBadge {
+    background: rgba(0, 0, 0, 140);
+    color: #ffffff;
+    border-radius: 10px;
+    padding: 4px 8px;
+    font-family: Consolas, "Courier New", monospace;
+}
+)");
+
+    runner_controller_ = new EncodeJobRunnerController(this);
+    busy_spinner_timer_ = new QTimer(this);
+    busy_spinner_timer_->setInterval(90);
+
+    auto *central_widget = new QWidget(this);
+    auto *root_layout = new QVBoxLayout(central_widget);
+    root_layout->setContentsMargins(0, 0, 0, 0);
+    root_layout->setSpacing(0);
+
+    auto *accent_strip = new QFrame(central_widget);
+    accent_strip->setObjectName("AccentStrip");
+    accent_strip->setFixedHeight(6);
+    root_layout->addWidget(accent_strip);
+
+    auto *content_widget = new QWidget(central_widget);
+    auto *content_layout = new QVBoxLayout(content_widget);
+    content_layout->setContentsMargins(10, 8, 10, 10);
+    content_layout->setSpacing(10);
+
+    auto *header_frame = new QFrame(content_widget);
+    header_frame->setObjectName("HeaderFrame");
+    auto *header_layout = new QHBoxLayout(header_frame);
+    header_layout->setContentsMargins(12, 8, 12, 8);
+
+    auto *brand_layout = new QHBoxLayout();
+    brand_layout->setContentsMargins(0, 0, 0, 0);
+    brand_layout->setSpacing(10);
+
+    auto *brand_mark = new QLabel("U", header_frame);
+    brand_mark->setObjectName("BrandMark");
+    brand_mark->setAlignment(Qt::AlignCenter);
+
+    auto *brand_text_layout = new QVBoxLayout();
+    brand_text_layout->setContentsMargins(0, 0, 0, 0);
+    brand_text_layout->setSpacing(1);
+
+    auto *brand_name = new QLabel("utsure", header_frame);
+    brand_name->setObjectName("BrandName");
+    auto *brand_subtitle = new QLabel("Queue-based batch encoder", header_frame);
+    brand_subtitle->setObjectName("BrandSubtitle");
+    brand_text_layout->addWidget(brand_name);
+    brand_text_layout->addWidget(brand_subtitle);
+    brand_layout->addWidget(brand_mark);
+    brand_layout->addLayout(brand_text_layout);
+    brand_layout->addStretch(1);
+
+    top_window_check_ = new QCheckBox("Top Window", header_frame);
+    top_window_check_->setCursor(Qt::PointingHandCursor);
+    header_layout->addLayout(brand_layout, 1);
+    header_layout->addWidget(top_window_check_);
+    content_layout->addWidget(header_frame);
+
+    auto *toolbar_frame = new QFrame(content_widget);
+    toolbar_frame->setObjectName("ToolbarFrame");
+    auto *toolbar_layout = new QHBoxLayout(toolbar_frame);
+    toolbar_layout->setContentsMargins(10, 8, 10, 8);
+    toolbar_layout->setSpacing(8);
+
+    add_button_ = create_toolbar_button(":/icons/add.svg", "Add source jobs", toolbar_frame);
+    remove_button_ = create_toolbar_button(":/icons/remove.svg", "Remove selected job", toolbar_frame);
+    settings_button_ = create_toolbar_button(":/icons/settings.svg", "Settings", toolbar_frame);
+    info_button_ = create_toolbar_button(":/icons/info.svg", "Info", toolbar_frame);
+    toolbar_layout->addWidget(add_button_);
+    toolbar_layout->addWidget(remove_button_);
+    toolbar_layout->addWidget(settings_button_);
+    toolbar_layout->addWidget(info_button_);
+    toolbar_layout->addStretch(1);
+
+    priority_combo_ = new QComboBox(toolbar_frame);
+    priority_combo_->addItem("Low", static_cast<int>(utsure::core::job::EncodeJobProcessPriority::low));
+    priority_combo_->addItem(
+        "Below Normal",
+        static_cast<int>(utsure::core::job::EncodeJobProcessPriority::below_normal)
+    );
+    priority_combo_->addItem("Normal", static_cast<int>(utsure::core::job::EncodeJobProcessPriority::normal));
+    priority_combo_->addItem(
+        "Above Normal",
+        static_cast<int>(utsure::core::job::EncodeJobProcessPriority::above_normal)
+    );
+    priority_combo_->addItem("High", static_cast<int>(utsure::core::job::EncodeJobProcessPriority::high));
+    priority_combo_->setCurrentIndex(priority_combo_->findData(
+        static_cast<int>(utsure::core::job::EncodeJobProcessPriority::below_normal)
+    ));
+    priority_combo_->setMinimumWidth(160);
+
+    start_button_ = create_toolbar_button(":/icons/play.svg", "Start checked jobs", toolbar_frame);
+    stop_button_ = create_toolbar_button(":/icons/stop.svg", "Stop current job", toolbar_frame);
+    toolbar_layout->addWidget(priority_combo_);
+    toolbar_layout->addWidget(start_button_);
+    toolbar_layout->addWidget(stop_button_);
+    content_layout->addWidget(toolbar_frame);
+
+    auto *queue_row = new QWidget(content_widget);
+    auto *queue_row_layout = new QHBoxLayout(queue_row);
+    queue_row_layout->setContentsMargins(0, 0, 0, 0);
+    queue_row_layout->setSpacing(10);
+
+    auto *queue_frame = new QFrame(queue_row);
+    queue_frame->setObjectName("PanelFrame");
+    auto *queue_frame_layout = new QVBoxLayout(queue_frame);
+    queue_frame_layout->setContentsMargins(8, 8, 8, 8);
+
+    queue_table_ = new QTableWidget(queue_frame);
+    queue_table_->setColumnCount(6);
+    queue_table_->setHorizontalHeaderLabels(QStringList{
+        "File",
+        "Type",
+        "Status",
+        "EFPS",
+        "Speed",
+        "Output"
+    });
+    queue_table_->verticalHeader()->setVisible(false);
+    queue_table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    queue_table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    queue_table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    queue_table_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    queue_table_->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    queue_table_->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+    queue_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    queue_table_->setSelectionMode(QAbstractItemView::SingleSelection);
+    queue_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    queue_table_->setShowGrid(false);
+    queue_frame_layout->addWidget(queue_table_);
+
+    auto *details_frame = new QFrame(queue_row);
+    details_frame->setObjectName("PanelFrame");
+    auto *details_layout = new QFormLayout(details_frame);
+    details_layout->setContentsMargins(10, 10, 10, 10);
+
+    const auto make_detail_label = [details_frame]() {
+        auto *label = new QLabel("--", details_frame);
+        label->setWordWrap(true);
+        return label;
+    };
+
+    detail_status_value_ = make_detail_label();
+    detail_elapsed_value_ = make_detail_label();
+    detail_remaining_value_ = make_detail_label();
+    detail_efps_value_ = make_detail_label();
+    detail_speed_value_ = make_detail_label();
+    detail_input_size_value_ = make_detail_label();
+    detail_output_size_value_ = make_detail_label();
+    detail_timeline_value_ = make_detail_label();
+
+    const auto make_detail_name = [details_frame](const QString &text) {
+        auto *label = new QLabel(text, details_frame);
+        label->setObjectName("DetailLabel");
+        return label;
+    };
+
+    details_layout->addRow(make_detail_name("Status"), detail_status_value_);
+    details_layout->addRow(make_detail_name("Elapsed"), detail_elapsed_value_);
+    details_layout->addRow(make_detail_name("Remaining"), detail_remaining_value_);
+    details_layout->addRow(make_detail_name("EFPS"), detail_efps_value_);
+    details_layout->addRow(make_detail_name("Speed"), detail_speed_value_);
+    details_layout->addRow(make_detail_name("Input Size"), detail_input_size_value_);
+    details_layout->addRow(make_detail_name("Output Size"), detail_output_size_value_);
+    details_layout->addRow(make_detail_name("Timeline"), detail_timeline_value_);
+
+    queue_row_layout->addWidget(queue_frame, 5);
+    queue_row_layout->addWidget(details_frame, 2);
+    content_layout->addWidget(queue_row, 1);
+
+    auto *output_frame = new QFrame(content_widget);
+    output_frame->setObjectName("PanelFrame");
+    auto *output_layout = new QVBoxLayout(output_frame);
+    output_layout->setContentsMargins(10, 8, 10, 8);
+    output_layout->setSpacing(6);
+
+    auto *output_row = new QHBoxLayout();
+    output_row->setContentsMargins(0, 0, 0, 0);
+    output_row->setSpacing(10);
+
+    auto *output_label = new QLabel("Output", output_frame);
+    output_label->setMinimumWidth(52);
+    output_path_edit_ = new QLineEdit(output_frame);
+    output_path_edit_->setPlaceholderText("Manual output path");
+    output_browse_button_ = new QPushButton(output_frame);
+    output_browse_button_->setProperty("browseButton", true);
+    output_browse_button_->setIcon(QIcon(":/icons/browse.svg"));
+    output_browse_button_->setFixedSize(32, 32);
+    same_as_input_check_ = new QCheckBox("Same as input", output_frame);
+    same_as_input_check_->setCursor(Qt::PointingHandCursor);
+
+    output_row->addWidget(output_label);
+    output_row->addWidget(output_path_edit_, 1);
+    output_row->addWidget(output_browse_button_);
+    output_row->addWidget(same_as_input_check_);
+    output_layout->addLayout(output_row);
+
+    auto *output_note = new QLabel(
+        "Same as input keeps the output in the source folder. Filename stays manual in this milestone.",
+        output_frame
+    );
+    output_note->setObjectName("MutedNote");
+    output_note->setWordWrap(true);
+    output_layout->addWidget(output_note);
+    content_layout->addWidget(output_frame);
+
+    auto *content_splitter = new QSplitter(Qt::Horizontal, content_widget);
+    editor_tabs_ = new QTabWidget(content_splitter);
+
+    auto *main_tab_content = new QWidget(editor_tabs_);
+    auto *main_tab_layout = new QVBoxLayout(main_tab_content);
+    main_tab_layout->setContentsMargins(10, 10, 10, 10);
+    main_tab_layout->setSpacing(10);
+
+    auto *subtitle_group = new QGroupBox("Subtitle", main_tab_content);
+    auto *subtitle_layout = new QGridLayout(subtitle_group);
+    subtitle_enable_check_ = new QCheckBox("Enable subtitle burn-in", subtitle_group);
+    const auto subtitle_row = create_path_field(subtitle_group, "Optional subtitle file", "Choose subtitle file");
+    subtitle_path_edit_ = subtitle_row.line_edit;
+    subtitle_browse_button_ = subtitle_row.browse_button;
+    subtitle_layout->addWidget(subtitle_enable_check_, 0, 0, 1, 2);
+    subtitle_layout->addWidget(new QLabel("Subtitle file", subtitle_group), 1, 0);
+    subtitle_layout->addWidget(subtitle_row.container, 1, 1);
+    main_tab_layout->addWidget(subtitle_group);
+
+    auto *intro_group = new QGroupBox("Intro", main_tab_content);
+    auto *intro_layout = new QGridLayout(intro_group);
+    intro_enable_check_ = new QCheckBox("Enable intro clip", intro_group);
+    const auto intro_row = create_path_field(intro_group, "Optional intro media", "Choose intro media");
+    intro_path_edit_ = intro_row.line_edit;
+    intro_browse_button_ = intro_row.browse_button;
+    intro_music_check_ = new QCheckBox("Use separate intro music", intro_group);
+    const auto intro_music_row = create_path_field(intro_group, "Optional intro music", "Choose intro music");
+    intro_music_path_edit_ = intro_music_row.line_edit;
+    intro_music_browse_button_ = intro_music_row.browse_button;
+    auto *intro_note = new QLabel("Only meaningful when the intro asset itself has no audio.", intro_group);
+    intro_note->setObjectName("MutedNote");
+    intro_note->setWordWrap(true);
+    intro_layout->addWidget(intro_enable_check_, 0, 0, 1, 2);
+    intro_layout->addWidget(new QLabel("Intro media", intro_group), 1, 0);
+    intro_layout->addWidget(intro_row.container, 1, 1);
+    intro_layout->addWidget(intro_music_check_, 2, 0, 1, 2);
+    intro_layout->addWidget(new QLabel("Intro music", intro_group), 3, 0);
+    intro_layout->addWidget(intro_music_row.container, 3, 1);
+    intro_layout->addWidget(intro_note, 4, 0, 1, 2);
+    main_tab_layout->addWidget(intro_group);
+
+    auto *endcard_group = new QGroupBox("EndCard", main_tab_content);
+    auto *endcard_layout = new QGridLayout(endcard_group);
+    endcard_enable_check_ = new QCheckBox("Enable endcard clip", endcard_group);
+    const auto endcard_row = create_path_field(endcard_group, "Optional endcard media", "Choose endcard media");
+    endcard_path_edit_ = endcard_row.line_edit;
+    endcard_browse_button_ = endcard_row.browse_button;
+    endcard_music_check_ = new QCheckBox("Use separate endcard music", endcard_group);
+    const auto endcard_music_row = create_path_field(endcard_group, "Optional endcard music", "Choose endcard music");
+    endcard_music_path_edit_ = endcard_music_row.line_edit;
+    endcard_music_browse_button_ = endcard_music_row.browse_button;
+    auto *endcard_note = new QLabel("Only meaningful when the endcard asset itself has no audio.", endcard_group);
+    endcard_note->setObjectName("MutedNote");
+    endcard_note->setWordWrap(true);
+    endcard_layout->addWidget(endcard_enable_check_, 0, 0, 1, 2);
+    endcard_layout->addWidget(new QLabel("Endcard media", endcard_group), 1, 0);
+    endcard_layout->addWidget(endcard_row.container, 1, 1);
+    endcard_layout->addWidget(endcard_music_check_, 2, 0, 1, 2);
+    endcard_layout->addWidget(new QLabel("Endcard music", endcard_group), 3, 0);
+    endcard_layout->addWidget(endcard_music_row.container, 3, 1);
+    endcard_layout->addWidget(endcard_note, 4, 0, 1, 2);
+    main_tab_layout->addWidget(endcard_group);
+
+    auto *main_tab_note = new QLabel(
+        "Timeline trim applies only to the main source. Thumbnail pre-roll, intro, and endcard sit outside that trim range.",
+        main_tab_content
+    );
+    main_tab_note->setObjectName("MutedNote");
+    main_tab_note->setWordWrap(true);
+    main_tab_layout->addWidget(main_tab_note);
+    main_tab_layout->addStretch(1);
+    editor_tabs_->addTab(wrap_in_scroll_area(main_tab_content, editor_tabs_), "Main");
+
+    auto *encode_tab_content = new QWidget(editor_tabs_);
+    auto *encode_tab_layout = new QHBoxLayout(encode_tab_content);
+    encode_tab_layout->setContentsMargins(10, 10, 10, 10);
+    encode_tab_layout->setSpacing(10);
+
+    auto *video_group = new QGroupBox("Video", encode_tab_content);
+    auto *video_layout = new QFormLayout(video_group);
+    video_codec_combo_ = new QComboBox(video_group);
+    video_codec_combo_->addItem("H.265", static_cast<int>(utsure::core::media::OutputVideoCodec::h265));
+    video_codec_combo_->addItem("H.264", static_cast<int>(utsure::core::media::OutputVideoCodec::h264));
+    preset_combo_ = new QComboBox(video_group);
+    preset_combo_->addItems(QStringList{
+        "ultrafast",
+        "superfast",
+        "veryfast",
+        "faster",
+        "fast",
+        "medium",
+        "slow",
+        "slower",
+        "veryslow"
+    });
+    crf_spin_box_ = new QSpinBox(video_group);
+    crf_spin_box_->setRange(0, 51);
+    video_layout->addRow("Codec", video_codec_combo_);
+    video_layout->addRow("CRF", crf_spin_box_);
+    video_layout->addRow("Preset", preset_combo_);
+
+    auto *audio_group = new QGroupBox("Audio", encode_tab_content);
+    auto *audio_layout = new QFormLayout(audio_group);
+    audio_format_combo_ = new QComboBox(audio_group);
+    audio_format_combo_->addItem("AAC", static_cast<int>(utsure::core::media::AudioOutputMode::encode_aac));
+    audio_format_combo_->addItem(
+        "Copy source",
+        static_cast<int>(utsure::core::media::AudioOutputMode::copy_source)
+    );
+    audio_quality_combo_ = new QComboBox(audio_group);
+    audio_quality_combo_->addItem("128 kbps", 128);
+    audio_quality_combo_->addItem("160 kbps", 160);
+    audio_quality_combo_->addItem("192 kbps", 192);
+    audio_quality_combo_->addItem("256 kbps", 256);
+    audio_quality_combo_->addItem("320 kbps", 320);
+    audio_track_combo_ = new QComboBox(audio_group);
+    audio_layout->addRow("Format", audio_format_combo_);
+    audio_layout->addRow("Quality", audio_quality_combo_);
+    audio_layout->addRow("Track", audio_track_combo_);
+    auto *audio_note = new QLabel(
+        "Track selection is UI-only for now. The current backend still encodes the primary detected source track.",
+        audio_group
+    );
+    audio_note->setObjectName("MutedNote");
+    audio_note->setWordWrap(true);
+    audio_layout->addRow(audio_note);
+
+    encode_tab_layout->addWidget(video_group, 1);
+    encode_tab_layout->addWidget(audio_group, 1);
+    editor_tabs_->addTab(wrap_in_scroll_area(encode_tab_content, editor_tabs_), "Encode");
+
+    auto *special_tab_content = new QWidget(editor_tabs_);
+    auto *special_tab_layout = new QVBoxLayout(special_tab_content);
+    special_tab_layout->setContentsMargins(10, 10, 10, 10);
+    special_tab_layout->setSpacing(10);
+
+    auto *thumbnail_group = new QGroupBox("Thumbnail Pre-roll", special_tab_content);
+    auto *thumbnail_layout = new QGridLayout(thumbnail_group);
+    const auto thumbnail_row = create_path_field(
+        thumbnail_group,
+        "Temporary placeholder for ./thumbnail.* or generated black frame",
+        "Choose thumbnail image"
+    );
+    thumbnail_image_path_edit_ = thumbnail_row.line_edit;
+    thumbnail_image_browse_button_ = thumbnail_row.browse_button;
+    thumbnail_title_edit_ = new QLineEdit(thumbnail_group);
+    thumbnail_title_edit_->setPlaceholderText("Temporary placeholder for thumbnail.ass Actor=TNEPTITLE");
+    thumbnail_load_ass_button_ = new QPushButton("Load thumbnail.ass (placeholder)", thumbnail_group);
+    thumbnail_edit_title_button_ = new QPushButton("Edit title source (placeholder)", thumbnail_group);
+    thumbnail_layout->addWidget(new QLabel("Picture", thumbnail_group), 0, 0);
+    thumbnail_layout->addWidget(thumbnail_row.container, 0, 1);
+    thumbnail_layout->addWidget(new QLabel("Title", thumbnail_group), 1, 0);
+    thumbnail_layout->addWidget(thumbnail_title_edit_, 1, 1);
+    thumbnail_layout->addWidget(thumbnail_load_ass_button_, 2, 0);
+    thumbnail_layout->addWidget(thumbnail_edit_title_button_, 2, 1);
+    auto *thumbnail_note = new QLabel(
+        "Temporary placeholder: the thumbnail image/title UI is visible now, but thumbnail.ass loading, editing, and burn-in integration will be wired in a later milestone.",
+        thumbnail_group
+    );
+    thumbnail_note->setObjectName("MutedNote");
+    thumbnail_note->setWordWrap(true);
+    thumbnail_layout->addWidget(thumbnail_note, 3, 0, 1, 2);
+    special_tab_layout->addWidget(thumbnail_group);
+    special_tab_layout->addStretch(1);
+    editor_tabs_->addTab(wrap_in_scroll_area(special_tab_content, editor_tabs_), "Special");
+
+    auto *logs_tab = new QWidget(editor_tabs_);
+    auto *logs_tab_layout = new QVBoxLayout(logs_tab);
+    logs_tab_layout->setContentsMargins(10, 10, 10, 10);
+    session_log_view_ = new QPlainTextEdit(logs_tab);
+    session_log_view_->setReadOnly(true);
+    session_log_view_->setLineWrapMode(QPlainTextEdit::NoWrap);
+    session_log_view_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    logs_tab_layout->addWidget(session_log_view_);
+    editor_tabs_->addTab(logs_tab, "Logs");
+
+    auto *right_tabs = new QTabWidget(content_splitter);
+    auto *preview_tab = new QWidget(right_tabs);
+    auto *preview_tab_layout = new QVBoxLayout(preview_tab);
+    preview_tab_layout->setContentsMargins(10, 10, 10, 10);
+    preview_tab_layout->setSpacing(10);
+
+    auto *preview_top_row = new QHBoxLayout();
+    preview_top_row->setContentsMargins(0, 0, 0, 0);
+    preview_top_row->addStretch(1);
+    preview_enabled_check_ = new QCheckBox("Preview", preview_tab);
+    preview_enabled_check_->setCursor(Qt::PointingHandCursor);
+    preview_top_row->addWidget(preview_enabled_check_);
+    preview_tab_layout->addLayout(preview_top_row);
+
+    auto *preview_surface = new QFrame(preview_tab);
+    preview_surface->setObjectName("PreviewSurface");
+    preview_surface->setMinimumHeight(280);
+    preview_surface->setStyleSheet("QFrame#PreviewSurface { background: #111111; }");
+    auto *preview_surface_layout = new QVBoxLayout(preview_surface);
+    preview_surface_layout->setContentsMargins(12, 12, 12, 12);
+    preview_surface_layout->setSpacing(6);
+    preview_title_label_ = new QLabel("PREVIEW OFFLINE", preview_surface);
+    preview_title_label_->setObjectName("PreviewTitleLabel");
+    preview_title_label_->setAlignment(Qt::AlignCenter);
+    preview_context_label_ = new QLabel("Turn on Preview to inspect the selected job state.", preview_surface);
+    preview_context_label_->setObjectName("PreviewContextLabel");
+    preview_context_label_->setAlignment(Qt::AlignCenter);
+    preview_context_label_->setWordWrap(true);
+    preview_time_badge_ = new QLabel("00:00:00.000", preview_surface);
+    preview_time_badge_->setObjectName("PreviewTimeBadge");
+    preview_surface_layout->addStretch(1);
+    preview_surface_layout->addWidget(preview_title_label_);
+    preview_surface_layout->addWidget(preview_context_label_);
+    preview_surface_layout->addStretch(1);
+    auto *preview_badge_row = new QHBoxLayout();
+    preview_badge_row->setContentsMargins(0, 0, 0, 0);
+    preview_badge_row->addStretch(1);
+    preview_badge_row->addWidget(preview_time_badge_);
+    preview_surface_layout->addLayout(preview_badge_row);
+    preview_tab_layout->addWidget(preview_surface);
+
+    auto *timeline_group = new QGroupBox("Timeline", preview_tab);
+    auto *timeline_layout = new QVBoxLayout(timeline_group);
+    timeline_layout->setSpacing(8);
+    auto *timeline_badges = new QHBoxLayout();
+    timeline_badges->setContentsMargins(0, 0, 0, 0);
+    current_time_value_ = new QLabel("t=00:00:00.000", timeline_group);
+    trim_in_value_ = new QLabel("IN=00:00:00.000", timeline_group);
+    trim_out_value_ = new QLabel("OUT=00:00:00.000", timeline_group);
+    for (const auto label : {current_time_value_, trim_in_value_, trim_out_value_}) {
+        label->setStyleSheet(
+            "QLabel { background: #ffffff; border: 1px solid #cfcfcf; border-radius: 10px; padding: 4px 8px; font-family: Consolas, 'Courier New', monospace; }"
+        );
+        timeline_badges->addWidget(label);
+    }
+    timeline_badges->addStretch(1);
+    timeline_layout->addLayout(timeline_badges);
+
+    auto *timeline_buttons = new QHBoxLayout();
+    timeline_buttons->setContentsMargins(0, 0, 0, 0);
+    timeline_buttons->setSpacing(6);
+    frame_back_button_ = new QPushButton(timeline_group);
+    frame_back_button_->setObjectName("TimelineButton");
+    frame_back_button_->setIcon(QIcon(":/icons/frame-back.svg"));
+    frame_forward_button_ = new QPushButton(timeline_group);
+    frame_forward_button_->setObjectName("TimelineButton");
+    frame_forward_button_->setIcon(QIcon(":/icons/frame-forward.svg"));
+    set_in_button_ = new QPushButton("Set IN", timeline_group);
+    set_in_button_->setObjectName("TimelineButton");
+    set_out_button_ = new QPushButton("Set OUT", timeline_group);
+    set_out_button_->setObjectName("TimelineButton");
+    jump_in_button_ = new QPushButton("To IN", timeline_group);
+    jump_in_button_->setObjectName("TimelinePrimaryButton");
+    jump_out_button_ = new QPushButton("To OUT", timeline_group);
+    jump_out_button_->setObjectName("TimelinePrimaryButton");
+    timeline_buttons->addWidget(frame_back_button_);
+    timeline_buttons->addWidget(frame_forward_button_);
+    timeline_buttons->addWidget(set_in_button_);
+    timeline_buttons->addWidget(set_out_button_);
+    timeline_buttons->addWidget(jump_in_button_);
+    timeline_buttons->addWidget(jump_out_button_);
+    timeline_buttons->addStretch(1);
+    timeline_layout->addLayout(timeline_buttons);
+
+    trim_timeline_widget_ = new TrimTimelineWidget(timeline_group);
+    timeline_layout->addWidget(trim_timeline_widget_);
+    auto *timeline_note = new QLabel(
+        "Trim applies only to the main source clip. Thumbnail, intro, and endcard are outside this trim range, and the trim UI is currently staged ahead of core trim support.",
+        timeline_group
+    );
+    timeline_note->setObjectName("MutedNote");
+    timeline_note->setWordWrap(true);
+    timeline_layout->addWidget(timeline_note);
+    preview_tab_layout->addWidget(timeline_group);
+    right_tabs->addTab(preview_tab, "Preview");
+
+    auto *task_log_tab = new QWidget(right_tabs);
+    auto *task_log_layout = new QVBoxLayout(task_log_tab);
+    task_log_layout->setContentsMargins(10, 10, 10, 10);
+    task_log_summary_label_ = new QLabel("Select a job to inspect its task log.", task_log_tab);
+    task_log_summary_label_->setObjectName("TaskLogSummaryLabel");
+    task_log_summary_label_->setWordWrap(true);
+    task_log_view_ = new QPlainTextEdit(task_log_tab);
+    task_log_view_->setReadOnly(true);
+    task_log_view_->setLineWrapMode(QPlainTextEdit::NoWrap);
+    task_log_view_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    task_log_layout->addWidget(task_log_summary_label_);
+    task_log_layout->addWidget(task_log_view_, 1);
+    right_tabs->addTab(task_log_tab, "Task Log");
+
+    content_splitter->addWidget(editor_tabs_);
+    content_splitter->addWidget(right_tabs);
+    content_splitter->setStretchFactor(0, 5);
+    content_splitter->setStretchFactor(1, 4);
+    content_layout->addWidget(content_splitter, 1);
+
+    root_layout->addWidget(content_widget, 1);
+    setCentralWidget(central_widget);
+
+    connect(runner_controller_, &EncodeJobRunnerController::running_changed, this, &MainWindow::handle_running_changed);
+    connect(runner_controller_, &EncodeJobRunnerController::progress_changed, this, &MainWindow::handle_progress_changed);
+    connect(
+        runner_controller_,
+        &EncodeJobRunnerController::job_finished,
+        this,
+        &MainWindow::handle_job_finished
+    );
+    connect(runner_controller_, &EncodeJobRunnerController::log_message, this, [this](const QString &line) {
+        if (active_job_index_ >= 0 && active_job_index_ < static_cast<int>(jobs_.size())) {
+            append_job_log(active_job_index_, line);
+            return;
+        }
+
+        append_session_log(line);
+    });
+    connect(busy_spinner_timer_, &QTimer::timeout, this, &MainWindow::advance_busy_spinner);
+
+    connect(add_button_, &QToolButton::clicked, this, &MainWindow::add_source_jobs);
+    connect(remove_button_, &QToolButton::clicked, this, &MainWindow::remove_selected_job);
+    connect(settings_button_, &QToolButton::clicked, this, &MainWindow::show_settings_placeholder);
+    connect(info_button_, &QToolButton::clicked, this, &MainWindow::show_info_dialog);
+    connect(start_button_, &QToolButton::clicked, this, &MainWindow::start_encode_queue);
+    connect(stop_button_, &QToolButton::clicked, this, &MainWindow::stop_encode_queue);
+    connect(top_window_check_, &QCheckBox::toggled, this, &MainWindow::handle_top_window_toggled);
+    connect(same_as_input_check_, &QCheckBox::toggled, this, &MainWindow::handle_same_as_input_toggled);
+    connect(preview_enabled_check_, &QCheckBox::toggled, this, &MainWindow::handle_preview_toggled);
+
+    connect(output_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_output_path);
+    connect(subtitle_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_subtitle_file);
+    connect(intro_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_intro_clip);
+    connect(intro_music_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_intro_music_file);
+    connect(endcard_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_endcard_clip);
+    connect(endcard_music_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_endcard_music_file);
+    connect(thumbnail_image_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_thumbnail_image);
+    connect(thumbnail_load_ass_button_, &QPushButton::clicked, this, &MainWindow::show_thumbnail_placeholder_note);
+    connect(thumbnail_edit_title_button_, &QPushButton::clicked, this, &MainWindow::show_thumbnail_placeholder_note);
+
+    connect(queue_table_, &QTableWidget::itemChanged, this, &MainWindow::handle_queue_item_changed);
+    connect(queue_table_, &QTableWidget::itemSelectionChanged, this, &MainWindow::handle_queue_selection_changed);
+
+    const auto bind_editor_change = [this]() {
+        sync_selected_job_from_editor();
+    };
+    connect(output_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(subtitle_enable_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
+    connect(subtitle_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(intro_enable_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
+    connect(intro_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(intro_music_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
+    connect(intro_music_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(endcard_enable_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
+    connect(endcard_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(endcard_music_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
+    connect(endcard_music_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(thumbnail_image_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(thumbnail_title_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(video_codec_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [bind_editor_change](int) { bind_editor_change(); });
+    connect(preset_combo_, &QComboBox::currentTextChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(crf_spin_box_, qOverload<int>(&QSpinBox::valueChanged), this, [bind_editor_change](int) { bind_editor_change(); });
+    connect(audio_format_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this, bind_editor_change](int) {
+        bind_editor_change();
+        refresh_editor_state();
+    });
+    connect(audio_quality_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [bind_editor_change](int) { bind_editor_change(); });
+    connect(audio_track_combo_, &QComboBox::currentTextChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+
+    connect(frame_back_button_, &QPushButton::clicked, this, [this]() { step_selected_job_frame(-1); });
+    connect(frame_forward_button_, &QPushButton::clicked, this, [this]() { step_selected_job_frame(1); });
+    connect(set_in_button_, &QPushButton::clicked, this, &MainWindow::set_selected_job_trim_in);
+    connect(set_out_button_, &QPushButton::clicked, this, &MainWindow::set_selected_job_trim_out);
+    connect(jump_in_button_, &QPushButton::clicked, this, &MainWindow::jump_selected_job_to_in);
+    connect(jump_out_button_, &QPushButton::clicked, this, &MainWindow::jump_selected_job_to_out);
+    connect(trim_timeline_widget_, &TrimTimelineWidget::seek_requested, this, &MainWindow::handle_timeline_seek);
+
+    append_session_log("[info] Window ready.");
+    refresh_all_views();
+}
+
+QString MainWindow::window_structure_summary() const {
+    return QString(
+        "Main window structure:\n"
+        "- Header: branding area plus Top Window toggle\n"
+        "- Toolbar: add/remove/settings/info, worker priority, start, stop\n"
+        "- Queue row: batch queue table plus selected-job details summary\n"
+        "- Output strip: selected-job output path plus Same as input toggle\n"
+        "- Left tabs: Main, Encode, Special, and global Logs\n"
+        "- Right tabs: Preview with trim timeline plus selected-task log"
+    );
+}
+
+std::optional<utsure::core::job::EncodeJob> MainWindow::build_job_from_entry(
+    const int job_index,
+    QString &error_message
+) const {
+    if (job_index < 0 || job_index >= static_cast<int>(jobs_.size())) {
+        error_message = "Select a job before building an encode request.";
+        return std::nullopt;
+    }
+
+    const auto &entry = jobs_[static_cast<std::size_t>(job_index)];
+    if (entry.source_path.trimmed().isEmpty()) {
+        error_message = "The selected queue row does not have a source video.";
+        return std::nullopt;
+    }
+
+    if (entry.output_path.trimmed().isEmpty()) {
+        error_message = "Set an output path before queuing this job.";
+        return std::nullopt;
+    }
+
+    if (entry.video_preset.trimmed().isEmpty()) {
+        error_message = "The selected video preset is empty.";
+        return std::nullopt;
+    }
+
+    utsure::core::job::EncodeJob job{};
+    job.input.main_source_path = qstring_to_path(entry.source_path);
+    job.output.output_path = qstring_to_path(entry.output_path);
+    job.output.video.codec = entry.video_codec;
+    job.output.video.preset = entry.video_preset.trimmed().toUtf8().toStdString();
+    job.output.video.crf = entry.video_crf;
+    job.output.audio.mode = entry.audio_mode;
+    job.output.audio.codec = utsure::core::media::OutputAudioCodec::aac;
+    job.output.audio.bitrate_kbps = entry.audio_bitrate_kbps;
+    job.execution.threading.cpu_usage_mode = utsure::core::media::CpuUsageMode::auto_select;
+    job.execution.process_priority = current_worker_priority();
+
+    if (entry.subtitle_enabled && !entry.subtitle_path.trimmed().isEmpty()) {
+        QString format_hint = QFileInfo(entry.subtitle_path).suffix().trimmed().toLower();
+        if (format_hint.isEmpty()) {
+            format_hint = "ass";
+        }
+
+        job.subtitles = utsure::core::job::EncodeJobSubtitleSettings{
+            .subtitle_path = qstring_to_path(entry.subtitle_path),
+            .format_hint = format_hint.toUtf8().toStdString()
+        };
+    }
+
+    if (entry.intro_enabled && !entry.intro_path.trimmed().isEmpty()) {
+        job.input.intro_source_path = qstring_to_path(entry.intro_path);
+    }
+
+    if (entry.endcard_enabled && !entry.endcard_path.trimmed().isEmpty()) {
+        job.input.outro_source_path = qstring_to_path(entry.endcard_path);
+    }
+
+    // Thumbnail pre-roll, trim, and intro/endcard music remain UI-only placeholders in this milestone
+    // because encoder-core does not expose the corresponding contracts yet.
+    return job;
+}
+
+utsure::core::job::EncodeJobProcessPriority MainWindow::current_worker_priority() const {
+    switch (static_cast<utsure::core::job::EncodeJobProcessPriority>(priority_combo_->currentData().toInt())) {
     case utsure::core::job::EncodeJobProcessPriority::high:
         return utsure::core::job::EncodeJobProcessPriority::high;
     case utsure::core::job::EncodeJobProcessPriority::above_normal:
@@ -97,565 +1069,134 @@ utsure::core::job::EncodeJobProcessPriority priority_from_value(const int value)
     case utsure::core::job::EncodeJobProcessPriority::below_normal:
         return utsure::core::job::EncodeJobProcessPriority::below_normal;
     case utsure::core::job::EncodeJobProcessPriority::low:
-        return utsure::core::job::EncodeJobProcessPriority::low;
     default:
-        return utsure::core::job::EncodeJobProcessPriority::below_normal;
+        return utsure::core::job::EncodeJobProcessPriority::low;
     }
 }
 
-QString recommended_preset(const utsure::core::media::OutputVideoCodec /*codec*/) {
-    return "medium";
-}
-
-int recommended_crf(const utsure::core::media::OutputVideoCodec codec) {
-    return codec == utsure::core::media::OutputVideoCodec::h265 ? 28 : 23;
-}
-
-QString codec_help_text(const utsure::core::media::OutputVideoCodec codec) {
-    return codec == utsure::core::media::OutputVideoCodec::h265
-        ? "Basic preset defaults for H.265: medium / CRF 28."
-        : "Basic preset defaults for H.264: medium / CRF 23.";
-}
-
-QString video_file_filter() {
-    return "Video Files (*.avi *.mkv *.mov *.mp4 *.webm);;All Files (*)";
-}
-
-QString format_preflight_issue(
-    const utsure::core::job::EncodeJobPreflightIssue &issue
-) {
-    QString line = QString("[%1] %2")
-        .arg(to_qstring(utsure::core::job::to_string(issue.severity)))
-        .arg(to_qstring(issue.message));
-
-    if (!issue.actionable_hint.empty()) {
-        line += QString("\n        Hint: %1").arg(to_qstring(issue.actionable_hint));
+QString MainWindow::selected_job_name() const {
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        return "No job selected";
     }
 
-    return line;
+    return jobs_[static_cast<std::size_t>(selected_job_index_)].source_name;
 }
 
-PathRowWidgets create_path_row(
-    QWidget *parent,
-    const QString &placeholder_text,
-    const bool optional
-) {
-    auto *container = new QWidget(parent);
-    auto *layout = new QHBoxLayout(container);
-    layout->setContentsMargins(0, 0, 0, 0);
-
-    auto *line_edit = new QLineEdit(container);
-    auto *browse_button = new QPushButton("Browse...", container);
-
-    line_edit->setPlaceholderText(placeholder_text);
-
-    layout->addWidget(line_edit, 1);
-    layout->addWidget(browse_button);
-
-    QPushButton *clear_button = nullptr;
-    if (optional) {
-        clear_button = new QPushButton("Clear", container);
-        layout->addWidget(clear_button);
+QString MainWindow::format_job_state_text(const UiEncodeJob &job) const {
+    switch (job.state) {
+    case UiJobState::encoding:
+        return "Encoding";
+    case UiJobState::finished:
+        return "Finished";
+    case UiJobState::failed:
+        return "Failed";
+    case UiJobState::canceled:
+        return "Canceled";
+    case UiJobState::pending:
+    default:
+        return job_has_minimum_required_fields(job) ? "Ready" : QString();
     }
-
-    return PathRowWidgets{
-        .container = container,
-        .line_edit = line_edit,
-        .browse_button = browse_button,
-        .clear_button = clear_button
-    };
 }
 
-double clamp_progress_fraction(const double value) {
-    return std::clamp(value, 0.0, 1.0);
+bool MainWindow::job_is_terminal(const UiEncodeJob &job) const {
+    return job.state == UiJobState::finished ||
+        job.state == UiJobState::failed ||
+        job.state == UiJobState::canceled;
 }
 
-bool has_fine_encode_progress(const utsure::core::job::EncodeJobProgress &progress) {
-    return progress.stage == utsure::core::job::EncodeJobStage::encoding_output &&
-        (progress.stage_fraction.has_value() ||
-         progress.encoded_video_frames.has_value() ||
-         progress.encoded_video_duration_us.has_value() ||
-         progress.encoded_fps.has_value());
+bool MainWindow::job_has_minimum_required_fields(const UiEncodeJob &job) const {
+    return !job.source_path.trimmed().isEmpty() &&
+        !job.output_path.trimmed().isEmpty() &&
+        !job.video_preset.trimmed().isEmpty();
 }
 
-QString format_duration_text(const std::int64_t microseconds) {
-    const auto total_seconds = std::max<std::int64_t>(0, microseconds / 1000000);
-    const auto hours = total_seconds / 3600;
-    const auto minutes = (total_seconds % 3600) / 60;
-    const auto seconds = total_seconds % 60;
-    if (hours > 0) {
-        return QString("%1:%2:%3")
-            .arg(hours)
-            .arg(minutes, 2, 10, QChar('0'))
-            .arg(seconds, 2, 10, QChar('0'));
-    }
-
-    return QString("%1:%2")
-        .arg(minutes, 2, 10, QChar('0'))
-        .arg(seconds, 2, 10, QChar('0'));
+QString MainWindow::current_audio_quality_label() const {
+    return audio_quality_combo_->currentText().trimmed();
 }
 
-QString format_encode_progress_bar_text(const utsure::core::job::EncodeJobProgress &progress) {
-    const double fraction = clamp_progress_fraction(
-        progress.stage_fraction.value_or(progress.overall_fraction.value_or(0.0))
-    );
-    const int percent = static_cast<int>(std::lround(fraction * 100.0));
-
-    QStringList parts{QString("Encoding %1%").arg(percent)};
-    if (progress.encoded_video_frames.has_value() &&
-        progress.total_video_frames.has_value() &&
-        *progress.total_video_frames > 0U) {
-        parts.push_back(
-            QString("%1/%2 frames")
-                .arg(QString::number(*progress.encoded_video_frames))
-                .arg(QString::number(*progress.total_video_frames))
-        );
-    }
-
-    if (progress.encoded_video_duration_us.has_value() &&
-        progress.total_video_duration_us.has_value() &&
-        *progress.total_video_duration_us > 0) {
-        parts.push_back(
-            QString("%1 / %2")
-                .arg(format_duration_text(*progress.encoded_video_duration_us))
-                .arg(format_duration_text(*progress.total_video_duration_us))
-        );
-    }
-
-    if (progress.encoded_fps.has_value() && *progress.encoded_fps > 0.0) {
-        parts.push_back(QString("%1 EFPS").arg(QString::number(*progress.encoded_fps, 'f', 1)));
-    }
-
-    return parts.join(" | ");
-}
-
-}  // namespace
-
-MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
-    setWindowTitle(QString("%1 %2")
-                       .arg(to_qstring(utsure::core::BuildInfo::project_name()))
-                       .arg(to_qstring(utsure::core::BuildInfo::project_version())));
-    resize(960, 720);
-
-    auto *central_widget = new QWidget(this);
-    auto *main_layout = new QVBoxLayout(central_widget);
-
-    auto *summary_label = new QLabel(
-        "Build one encode job against encoder-core. The window only collects paths and settings, then delegates the run to the core pipeline.",
-        central_widget
-    );
-    summary_label->setWordWrap(true);
-
-    inputs_group_ = new QGroupBox("Inputs", central_widget);
-    auto *inputs_layout = new QFormLayout(inputs_group_);
-
-    const auto source_row = create_path_row(inputs_group_, "Required main source video", false);
-    source_path_edit_ = source_row.line_edit;
-    source_path_edit_->setObjectName("sourcePathEdit");
-    connect(source_row.browse_button, &QPushButton::clicked, this, &MainWindow::choose_source_video);
-    inputs_layout->addRow("Source video", source_row.container);
-
-    const auto subtitle_row = create_path_row(inputs_group_, "Optional subtitle file", true);
-    subtitle_path_edit_ = subtitle_row.line_edit;
-    subtitle_path_edit_->setObjectName("subtitlePathEdit");
-    connect(subtitle_row.browse_button, &QPushButton::clicked, this, &MainWindow::choose_subtitle_file);
-    connect(subtitle_row.clear_button, &QPushButton::clicked, subtitle_path_edit_, &QLineEdit::clear);
-    inputs_layout->addRow("Subtitle file", subtitle_row.container);
-
-    const auto intro_row = create_path_row(inputs_group_, "Optional intro clip", true);
-    intro_path_edit_ = intro_row.line_edit;
-    intro_path_edit_->setObjectName("introPathEdit");
-    connect(intro_row.browse_button, &QPushButton::clicked, this, &MainWindow::choose_intro_clip);
-    connect(intro_row.clear_button, &QPushButton::clicked, intro_path_edit_, &QLineEdit::clear);
-    inputs_layout->addRow("Intro clip", intro_row.container);
-
-    const auto outro_row = create_path_row(inputs_group_, "Optional outro clip", true);
-    outro_path_edit_ = outro_row.line_edit;
-    outro_path_edit_->setObjectName("outroPathEdit");
-    connect(outro_row.browse_button, &QPushButton::clicked, this, &MainWindow::choose_outro_clip);
-    connect(outro_row.clear_button, &QPushButton::clicked, outro_path_edit_, &QLineEdit::clear);
-    inputs_layout->addRow("Outro clip", outro_row.container);
-
-    output_group_ = new QGroupBox("Output", central_widget);
-    auto *output_layout = new QFormLayout(output_group_);
-
-    codec_combo_ = new QComboBox(output_group_);
-    codec_combo_->setObjectName("codecCombo");
-    codec_combo_->addItem("H.264", static_cast<int>(utsure::core::media::OutputVideoCodec::h264));
-    codec_combo_->addItem("H.265", static_cast<int>(utsure::core::media::OutputVideoCodec::h265));
-    output_layout->addRow("Codec", codec_combo_);
-
-    preset_combo_ = new QComboBox(output_group_);
-    preset_combo_->setObjectName("presetCombo");
-    preset_combo_->setEditable(false);
-    preset_combo_->addItems(QStringList{
-        "fast",
-        "medium",
-        "slow"
-    });
-    preset_combo_->setToolTip("Basic presets: fast, medium, or slow.");
-    output_layout->addRow("Preset", preset_combo_);
-
-    crf_spin_box_ = new QSpinBox(output_group_);
-    crf_spin_box_->setObjectName("crfSpinBox");
-    crf_spin_box_->setRange(0, 51);
-    output_layout->addRow("CRF", crf_spin_box_);
-
-    const auto output_row = create_path_row(output_group_, "Required output path", false);
-    output_path_edit_ = output_row.line_edit;
-    output_path_edit_->setObjectName("outputPathEdit");
-    connect(output_row.browse_button, &QPushButton::clicked, this, &MainWindow::choose_output_path);
-    output_layout->addRow("Output path", output_row.container);
-
-    audio_group_ = new QGroupBox("Audio", central_widget);
-    auto *audio_layout = new QFormLayout(audio_group_);
-
-    audio_mode_combo_ = new QComboBox(audio_group_);
-    audio_mode_combo_->setObjectName("audioModeCombo");
-    audio_mode_combo_->addItem("Auto", static_cast<int>(utsure::core::media::AudioOutputMode::auto_select));
-    audio_mode_combo_->addItem("Copy source audio", static_cast<int>(utsure::core::media::AudioOutputMode::copy_source));
-    audio_mode_combo_->addItem("Encode to AAC", static_cast<int>(utsure::core::media::AudioOutputMode::encode_aac));
-    audio_mode_combo_->addItem("Disable audio", static_cast<int>(utsure::core::media::AudioOutputMode::disable));
-    audio_mode_combo_->setToolTip("Auto copies audio only when the container and source codec are clearly safe; otherwise it encodes AAC.");
-    audio_layout->addRow("Mode", audio_mode_combo_);
-
-    audio_codec_combo_ = new QComboBox(audio_group_);
-    audio_codec_combo_->setObjectName("audioCodecCombo");
-    audio_codec_combo_->addItem("AAC", static_cast<int>(utsure::core::media::OutputAudioCodec::aac));
-    audio_codec_combo_->setToolTip("Used when the job resolves to audio encoding.");
-    audio_layout->addRow("Output codec", audio_codec_combo_);
-
-    audio_bitrate_spin_box_ = new QSpinBox(audio_group_);
-    audio_bitrate_spin_box_->setObjectName("audioBitrateSpinBox");
-    audio_bitrate_spin_box_->setRange(32, 512);
-    audio_bitrate_spin_box_->setSingleStep(16);
-    audio_bitrate_spin_box_->setValue(192);
-    audio_bitrate_spin_box_->setSuffix(" kbps");
-    audio_layout->addRow("Bitrate", audio_bitrate_spin_box_);
-
-    audio_sample_rate_combo_ = new QComboBox(audio_group_);
-    audio_sample_rate_combo_->setObjectName("audioSampleRateCombo");
-    audio_sample_rate_combo_->addItem("Auto", 0);
-    audio_sample_rate_combo_->addItem("44100 Hz", 44100);
-    audio_sample_rate_combo_->addItem("48000 Hz", 48000);
-    audio_layout->addRow("Sample rate", audio_sample_rate_combo_);
-
-    audio_channels_combo_ = new QComboBox(audio_group_);
-    audio_channels_combo_->setObjectName("audioChannelsCombo");
-    audio_channels_combo_->addItem("Auto", 0);
-    audio_channels_combo_->addItem("Mono", 1);
-    audio_channels_combo_->addItem("Stereo", 2);
-    audio_channels_combo_->addItem("5.1", 6);
-    audio_layout->addRow("Channels", audio_channels_combo_);
-
-    auto *run_group = new QGroupBox("Run", central_widget);
-    auto *run_layout = new QGridLayout(run_group);
-
-    status_label_ = new QLabel(run_group);
-    status_label_->setObjectName("statusLabel");
-    status_label_->setWordWrap(true);
-
-    preview_label_ = new QLabel(run_group);
-    preview_label_->setObjectName("previewLabel");
-    preview_label_->setWordWrap(true);
-
-    progress_bar_ = new QProgressBar(run_group);
-    progress_bar_->setObjectName("progressBar");
-    progress_bar_->setRange(0, 1);
-    progress_bar_->setValue(0);
-    progress_bar_->setFormat("Ready");
-
-    cpu_mode_combo_ = new QComboBox(run_group);
-    cpu_mode_combo_->setObjectName("cpuModeCombo");
-    cpu_mode_combo_->addItem("Auto", static_cast<int>(utsure::core::media::CpuUsageMode::auto_select));
-    cpu_mode_combo_->addItem("Conservative", static_cast<int>(utsure::core::media::CpuUsageMode::conservative));
-    cpu_mode_combo_->addItem("Aggressive", static_cast<int>(utsure::core::media::CpuUsageMode::aggressive));
-    cpu_mode_combo_->setToolTip(
-        "Auto leaves FFmpeg thread counts on backend defaults, Conservative reduces thread fan-out, and "
-        "Aggressive pushes software decode/encode harder while keeping frame workers bounded."
-    );
-
-    priority_combo_ = new QComboBox(run_group);
-    priority_combo_->setObjectName("priorityCombo");
-    priority_combo_->addItem("High", static_cast<int>(utsure::core::job::EncodeJobProcessPriority::high));
-    priority_combo_->addItem(
-        "Above Normal",
-        static_cast<int>(utsure::core::job::EncodeJobProcessPriority::above_normal)
-    );
-    priority_combo_->addItem("Normal", static_cast<int>(utsure::core::job::EncodeJobProcessPriority::normal));
-    priority_combo_->addItem(
-        "Below Normal",
-        static_cast<int>(utsure::core::job::EncodeJobProcessPriority::below_normal)
-    );
-    priority_combo_->addItem("Low", static_cast<int>(utsure::core::job::EncodeJobProcessPriority::low));
-    priority_combo_->setCurrentIndex(priority_combo_->findData(
-        static_cast<int>(utsure::core::job::EncodeJobProcessPriority::below_normal)
-    ));
-    priority_combo_->setToolTip(
-        "Applies a safe process priority during encode and restores the previous priority afterward."
-    );
-
-    start_button_ = new QPushButton("Start Encode", run_group);
-    start_button_->setObjectName("startEncodeButton");
-    connect(start_button_, &QPushButton::clicked, this, &MainWindow::start_encode);
-
-    run_layout->addWidget(new QLabel("Status", run_group), 0, 0);
-    run_layout->addWidget(status_label_, 0, 1);
-    run_layout->addWidget(new QLabel("Priority", run_group), 0, 2);
-    run_layout->addWidget(priority_combo_, 0, 3);
-    run_layout->addWidget(new QLabel("Preview", run_group), 1, 0);
-    run_layout->addWidget(preview_label_, 1, 1);
-    run_layout->addWidget(new QLabel("CPU mode", run_group), 1, 2);
-    run_layout->addWidget(cpu_mode_combo_, 1, 3);
-    run_layout->addWidget(new QLabel("Progress", run_group), 2, 0);
-    run_layout->addWidget(progress_bar_, 2, 1);
-    run_layout->addWidget(start_button_, 2, 2, 1, 2);
-
-    auto *logs_group = new QGroupBox("Logs", central_widget);
-    auto *logs_layout = new QVBoxLayout(logs_group);
-
-    log_view_ = new QPlainTextEdit(logs_group);
-    log_view_->setObjectName("logView");
-    log_view_->setReadOnly(true);
-    log_view_->setLineWrapMode(QPlainTextEdit::NoWrap);
-    log_view_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    logs_layout->addWidget(log_view_);
-
-    main_layout->addWidget(summary_label);
-    main_layout->addWidget(inputs_group_);
-    main_layout->addWidget(output_group_);
-    main_layout->addWidget(audio_group_);
-    main_layout->addWidget(run_group);
-    main_layout->addWidget(logs_group, 1);
-
-    setCentralWidget(central_widget);
-
-    runner_controller_ = new EncodeJobRunnerController(this);
-    connect(runner_controller_, &EncodeJobRunnerController::running_changed, this, &MainWindow::handle_running_changed);
-    connect(runner_controller_, &EncodeJobRunnerController::progress_changed, this, &MainWindow::handle_progress_changed);
-    connect(runner_controller_, &EncodeJobRunnerController::log_message, this, &MainWindow::append_log_line);
-    connect(runner_controller_, &EncodeJobRunnerController::job_finished, this, &MainWindow::handle_job_finished);
-    connect(codec_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int /*index*/) {
-        apply_codec_defaults();
-        mark_preview_stale();
-    });
-    connect(source_path_edit_, &QLineEdit::textChanged, this, [this](const QString &) {
-        mark_preview_stale();
-    });
-    connect(subtitle_path_edit_, &QLineEdit::textChanged, this, [this](const QString &) {
-        mark_preview_stale();
-    });
-    connect(intro_path_edit_, &QLineEdit::textChanged, this, [this](const QString &) {
-        mark_preview_stale();
-    });
-    connect(outro_path_edit_, &QLineEdit::textChanged, this, [this](const QString &) {
-        mark_preview_stale();
-    });
-    connect(output_path_edit_, &QLineEdit::textChanged, this, [this](const QString &) {
-        mark_preview_stale();
-    });
-    connect(audio_mode_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int /*index*/) {
-        update_audio_control_states();
-        mark_preview_stale();
-    });
-    connect(audio_codec_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int /*index*/) {
-        mark_preview_stale();
-    });
-    connect(audio_bitrate_spin_box_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int /*value*/) {
-        mark_preview_stale();
-    });
-    connect(audio_sample_rate_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int /*index*/) {
-        mark_preview_stale();
-    });
-    connect(audio_channels_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int /*index*/) {
-        mark_preview_stale();
-    });
-    connect(cpu_mode_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int /*index*/) {
-        mark_preview_stale();
-    });
-    connect(priority_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int /*index*/) {
-        mark_preview_stale();
-    });
-    connect(preset_combo_, &QComboBox::currentTextChanged, this, [this](const QString &) {
-        mark_preview_stale();
-    });
-    connect(crf_spin_box_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int /*value*/) {
-        mark_preview_stale();
-    });
-
-    apply_codec_defaults();
-    update_audio_control_states();
-    set_status_text("Ready to build an encode job.", false);
-    set_preview_text("Preview updates after input validation.", false);
-    append_log_line("[info] Window ready.");
-}
-
-QString MainWindow::window_structure_summary() const {
-    return QString(
-        "Main window structure:\n"
-        "- Inputs: source video, subtitle file, optional intro clip, optional outro clip\n"
-        "- Output: codec, preset, CRF, output path\n"
-        "- Audio: mode, codec, bitrate, sample rate, channels\n"
-        "- Run: status label, priority selector, CPU mode selector, preview label, progress bar, start encode button\n"
-        "- Logs: read-only text pane for core stage logs, reports, and errors"
-    );
-}
-
-std::optional<utsure::core::job::EncodeJob> MainWindow::build_job(QString &error_message) const {
-    const QString source_text = source_path_edit_->text().trimmed();
-    if (source_text.isEmpty()) {
-        error_message = "Choose a source video before starting the encode.";
-        return std::nullopt;
-    }
-
-    const QString output_text = output_path_edit_->text().trimmed();
-    if (output_text.isEmpty()) {
-        error_message = "Choose an output path before starting the encode.";
-        return std::nullopt;
-    }
-
-    const QString preset_text = preset_combo_->currentText().trimmed();
-    if (preset_text.isEmpty()) {
-        error_message = "The encoder preset must not be empty.";
-        return std::nullopt;
-    }
-
-    const auto codec = current_output_codec();
-    const auto audio_mode = current_audio_mode();
-
-    utsure::core::job::EncodeJob job{};
-    job.input.main_source_path = qstring_to_path(source_text);
-    job.output.output_path = qstring_to_path(output_text);
-    job.output.video.codec = codec;
-    job.output.video.preset = preset_text.toUtf8().toStdString();
-    job.output.video.crf = crf_spin_box_->value();
-    job.output.audio.mode = audio_mode;
-    job.output.audio.codec = current_output_audio_codec();
-    job.output.audio.bitrate_kbps = audio_bitrate_spin_box_->value();
-    job.output.audio.sample_rate_hz =
-        audio_mode == utsure::core::media::AudioOutputMode::auto_select ||
-            audio_mode == utsure::core::media::AudioOutputMode::encode_aac
-            ? current_audio_sample_rate_override()
-            : std::nullopt;
-    job.output.audio.channel_count =
-        audio_mode == utsure::core::media::AudioOutputMode::auto_select ||
-            audio_mode == utsure::core::media::AudioOutputMode::encode_aac
-            ? current_audio_channel_override()
-            : std::nullopt;
-    job.execution.threading.cpu_usage_mode = current_cpu_usage_mode();
-    job.execution.process_priority = current_encode_priority();
-
-    const QString subtitle_text = subtitle_path_edit_->text().trimmed();
-    if (!subtitle_text.isEmpty()) {
-        QString format_hint = QFileInfo(subtitle_text).suffix().trimmed().toLower();
-        if (format_hint.isEmpty()) {
-            format_hint = "ass";
-        }
-
-        job.subtitles = utsure::core::job::EncodeJobSubtitleSettings{
-            .subtitle_path = qstring_to_path(subtitle_text),
-            .format_hint = format_hint.toUtf8().toStdString()
-        };
-    }
-
-    const QString intro_text = intro_path_edit_->text().trimmed();
-    if (!intro_text.isEmpty()) {
-        job.input.intro_source_path = qstring_to_path(intro_text);
-    }
-
-    const QString outro_text = outro_path_edit_->text().trimmed();
-    if (!outro_text.isEmpty()) {
-        job.input.outro_source_path = qstring_to_path(outro_text);
-    }
-
-    return job;
-}
-
-utsure::core::media::OutputVideoCodec MainWindow::current_output_codec() const {
-    return codec_from_index(codec_combo_->currentData().toInt());
-}
-
-utsure::core::media::AudioOutputMode MainWindow::current_audio_mode() const {
-    return audio_mode_from_value(audio_mode_combo_->currentData().toInt());
-}
-
-utsure::core::media::OutputAudioCodec MainWindow::current_output_audio_codec() const {
-    return output_audio_codec_from_value(audio_codec_combo_->currentData().toInt());
-}
-
-utsure::core::media::CpuUsageMode MainWindow::current_cpu_usage_mode() const {
-    return cpu_usage_mode_from_value(cpu_mode_combo_->currentData().toInt());
-}
-
-utsure::core::job::EncodeJobProcessPriority MainWindow::current_encode_priority() const {
-    return priority_from_value(priority_combo_->currentData().toInt());
-}
-
-std::optional<int> MainWindow::current_audio_sample_rate_override() const {
-    const int sample_rate = audio_sample_rate_combo_->currentData().toInt();
-    return sample_rate > 0 ? std::optional<int>(sample_rate) : std::nullopt;
-}
-
-std::optional<int> MainWindow::current_audio_channel_override() const {
-    const int channel_count = audio_channels_combo_->currentData().toInt();
-    return channel_count > 0 ? std::optional<int>(channel_count) : std::nullopt;
-}
-
-void MainWindow::choose_source_video() {
-    const QString selected_path = QFileDialog::getOpenFileName(
+void MainWindow::add_source_jobs() {
+    const QStringList selected_paths = QFileDialog::getOpenFileNames(
         this,
-        "Choose Source Video",
-        source_path_edit_->text().trimmed(),
+        "Add Source Jobs",
+        QString(),
         video_file_filter()
     );
-    if (selected_path.isEmpty()) {
+    if (!selected_paths.isEmpty()) {
+        add_source_jobs_from_paths(selected_paths);
+    }
+}
+
+void MainWindow::add_source_jobs_from_paths(const QStringList &paths) {
+    if (paths.isEmpty()) {
         return;
     }
 
-    source_path_edit_->setText(QDir::toNativeSeparators(selected_path));
-    maybe_seed_output_path();
+    const int first_new_index = static_cast<int>(jobs_.size());
+    for (const QString &path : paths) {
+        QFileInfo info(path);
+        UiEncodeJob job{};
+        job.source_path = QDir::toNativeSeparators(path);
+        job.source_name = info.fileName();
+        job.type_label = info.suffix().isEmpty() ? "-" : "." + info.suffix().toLower();
+        job.input_size_bytes = info.exists() ? info.size() : -1;
+        jobs_.push_back(std::move(job));
+        append_session_log(QString("[info] Added '%1' to the queue.").arg(info.fileName()));
+    }
+
+    select_job(first_new_index);
+    refresh_all_views();
 }
 
-void MainWindow::choose_subtitle_file() {
-    const QString selected_path = QFileDialog::getOpenFileName(
-        this,
-        "Choose Subtitle File",
-        subtitle_path_edit_->text().trimmed(),
-        "Subtitle Files (*.ass *.ssa);;All Files (*)"
-    );
-    if (!selected_path.isEmpty()) {
-        subtitle_path_edit_->setText(QDir::toNativeSeparators(selected_path));
+void MainWindow::remove_selected_job() {
+    if (queue_run_active_ || selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        return;
+    }
+
+    append_session_log(QString("[info] Removed '%1' from the queue.").arg(selected_job_name()));
+    jobs_.erase(jobs_.begin() + selected_job_index_);
+
+    if (jobs_.empty()) {
+        selected_job_index_ = -1;
+    } else if (selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        selected_job_index_ = static_cast<int>(jobs_.size()) - 1;
+    }
+
+    if (selected_job_index_ >= 0) {
+        select_job(selected_job_index_);
+    } else {
+        refresh_all_views();
     }
 }
 
-void MainWindow::choose_intro_clip() {
-    const QString selected_path = QFileDialog::getOpenFileName(
+void MainWindow::show_settings_placeholder() {
+    QMessageBox::information(
         this,
-        "Choose Intro Clip",
-        intro_path_edit_->text().trimmed(),
-        video_file_filter()
+        "Settings",
+        "Settings is a placeholder in this M17 slice.\n\nThe current UI exposes the worker-thread priority in the toolbar and the per-job encode settings in the selected-job editor."
     );
-    if (!selected_path.isEmpty()) {
-        intro_path_edit_->setText(QDir::toNativeSeparators(selected_path));
-    }
 }
 
-void MainWindow::choose_outro_clip() {
-    const QString selected_path = QFileDialog::getOpenFileName(
+void MainWindow::show_info_dialog() {
+    QMessageBox::information(
         this,
-        "Choose Outro Clip",
-        outro_path_edit_->text().trimmed(),
-        video_file_filter()
+        "utsure",
+        QString("%1 %2\n\nQueue-based desktop shell over encoder-core.\n\nThis slice updates the UI around queue editing, preview/task logs, and placeholder surfaces for unfinished features.")
+            .arg(to_qstring(utsure::core::BuildInfo::project_name()))
+            .arg(to_qstring(utsure::core::BuildInfo::project_version()))
     );
-    if (!selected_path.isEmpty()) {
-        outro_path_edit_->setText(QDir::toNativeSeparators(selected_path));
-    }
 }
 
 void MainWindow::choose_output_path() {
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        return;
+    }
+
+    const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     QString suggested_path = output_path_edit_->text().trimmed();
     if (suggested_path.isEmpty()) {
-        suggested_path = source_path_edit_->text().trimmed();
+        suggested_path = job.same_as_input
+            ? QFileInfo(job.source_path).dir().absolutePath()
+            : job.source_path;
     }
 
     const QString selected_path = QFileDialog::getSaveFileName(
@@ -669,218 +1210,964 @@ void MainWindow::choose_output_path() {
     }
 }
 
-void MainWindow::start_encode() {
-    if (runner_controller_->is_running()) {
+void MainWindow::choose_subtitle_file() {
+    const QString selected_path = QFileDialog::getOpenFileName(
+        this,
+        "Choose Subtitle File",
+        subtitle_path_edit_->text().trimmed(),
+        subtitle_file_filter()
+    );
+    if (!selected_path.isEmpty()) {
+        subtitle_enable_check_->setChecked(true);
+        subtitle_path_edit_->setText(QDir::toNativeSeparators(selected_path));
+    }
+}
+
+void MainWindow::choose_intro_clip() {
+    const QString selected_path = QFileDialog::getOpenFileName(
+        this,
+        "Choose Intro Clip",
+        intro_path_edit_->text().trimmed(),
+        video_file_filter()
+    );
+    if (!selected_path.isEmpty()) {
+        intro_enable_check_->setChecked(true);
+        intro_path_edit_->setText(QDir::toNativeSeparators(selected_path));
+    }
+}
+
+void MainWindow::choose_intro_music_file() {
+    const QString selected_path = QFileDialog::getOpenFileName(
+        this,
+        "Choose Intro Music",
+        intro_music_path_edit_->text().trimmed(),
+        "Audio Files (*.aac *.flac *.m4a *.mp3 *.ogg *.opus *.wav);;All Files (*)"
+    );
+    if (!selected_path.isEmpty()) {
+        intro_enable_check_->setChecked(true);
+        intro_music_check_->setChecked(true);
+        intro_music_path_edit_->setText(QDir::toNativeSeparators(selected_path));
+    }
+}
+
+void MainWindow::choose_endcard_clip() {
+    const QString selected_path = QFileDialog::getOpenFileName(
+        this,
+        "Choose Endcard Clip",
+        endcard_path_edit_->text().trimmed(),
+        video_file_filter()
+    );
+    if (!selected_path.isEmpty()) {
+        endcard_enable_check_->setChecked(true);
+        endcard_path_edit_->setText(QDir::toNativeSeparators(selected_path));
+    }
+}
+
+void MainWindow::choose_endcard_music_file() {
+    const QString selected_path = QFileDialog::getOpenFileName(
+        this,
+        "Choose Endcard Music",
+        endcard_music_path_edit_->text().trimmed(),
+        "Audio Files (*.aac *.flac *.m4a *.mp3 *.ogg *.opus *.wav);;All Files (*)"
+    );
+    if (!selected_path.isEmpty()) {
+        endcard_enable_check_->setChecked(true);
+        endcard_music_check_->setChecked(true);
+        endcard_music_path_edit_->setText(QDir::toNativeSeparators(selected_path));
+    }
+}
+
+void MainWindow::choose_thumbnail_image() {
+    const QString selected_path = QFileDialog::getOpenFileName(
+        this,
+        "Choose Thumbnail Image",
+        thumbnail_image_path_edit_->text().trimmed(),
+        image_file_filter()
+    );
+    if (!selected_path.isEmpty()) {
+        thumbnail_image_path_edit_->setText(QDir::toNativeSeparators(selected_path));
+    }
+}
+
+void MainWindow::show_thumbnail_placeholder_note() {
+    QMessageBox::information(
+        this,
+        "Thumbnail Placeholder",
+        "The thumbnail subtitle-file editing/loading flow is intentionally placeholder-only in this milestone.\n\nThe UI is present so the workflow is visible, but thumbnail.ass parsing and temporary-file save behavior will be added later."
+    );
+}
+
+void MainWindow::handle_queue_selection_changed() {
+    const int current_row = queue_table_->currentRow();
+    if (current_row >= 0 && current_row < static_cast<int>(jobs_.size())) {
+        select_job(current_row);
+    }
+}
+
+void MainWindow::handle_queue_item_changed(QTableWidgetItem *item) {
+    if (item == nullptr || suppress_queue_table_changes_ || item->column() != 0) {
         return;
     }
 
-    log_view_->clear();
-    QString error_message{};
-    const auto job = build_job(error_message);
-    if (!job.has_value()) {
-        set_status_text(error_message, true);
-        append_log_line("[error] " + error_message);
+    const int row = item->row();
+    if (row < 0 || row >= static_cast<int>(jobs_.size())) {
         return;
     }
 
-    append_log_line("[info] Validating inputs before encode.");
-    const auto preflight = utsure::core::job::EncodeJobPreflight::inspect(*job);
+    if (queue_run_active_) {
+        refresh_queue_table();
+        return;
+    }
 
-    if (preflight.preview_summary.has_value()) {
-        const QString preview_text =
-            to_qstring(utsure::core::job::format_encode_job_preview(*preflight.preview_summary));
-        set_preview_text(preview_text, false);
-        append_log_line("[info] Preview: " + preview_text);
+    auto &job = jobs_[static_cast<std::size_t>(row)];
+    if (job_is_terminal(job)) {
+        if (item->checkState() == Qt::Checked) {
+            reset_job_for_rerun(job);
+            append_session_log(QString("[info] Reset '%1' back to Ready.").arg(job.source_name));
+        }
     } else {
-        set_preview_text("No preview available until the inputs pass validation.", true);
+        job.checked = item->checkState() == Qt::Checked;
     }
 
-    for (const auto &issue : preflight.issues) {
-        append_log_line(format_preflight_issue(issue));
-    }
+    refresh_all_views();
+}
 
-    if (!preflight.can_start_encode()) {
-        const auto first_issue = std::find_if(
-            preflight.issues.begin(),
-            preflight.issues.end(),
-            [](const utsure::core::job::EncodeJobPreflightIssue &issue) {
-                return issue.severity == utsure::core::job::EncodeJobPreflightIssueSeverity::error;
-            }
-        );
-        const QString status_text = first_issue != preflight.issues.end()
-            ? to_qstring(first_issue->message)
-            : "Fix the input issues before starting the encode.";
-        set_status_text(status_text, true);
+void MainWindow::handle_top_window_toggled(const bool enabled) {
+    const bool was_visible = isVisible();
+    setWindowFlag(Qt::WindowStaysOnTopHint, enabled);
+    if (was_visible) {
+        show();
+    }
+}
+
+void MainWindow::handle_same_as_input_toggled(const bool enabled) {
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
         return;
     }
 
-    if (preflight.requires_output_overwrite_confirmation()) {
-        const auto response = QMessageBox::question(
-            this,
-            "Overwrite Existing Output?",
-            "The selected output file already exists.\n\nDo you want to overwrite it?"
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    job.same_as_input = enabled;
+    if (enabled) {
+        apply_same_as_input_folder(job);
+    }
+
+    load_selected_job_into_editor();
+    refresh_all_views();
+}
+
+void MainWindow::handle_preview_toggled(const bool /*enabled*/) {
+    refresh_selected_job_preview();
+}
+
+void MainWindow::step_selected_job_frame(const int direction) {
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    const double frame_rate = job.inspected_source_info.has_value() &&
+            job.inspected_source_info->primary_video_stream.has_value()
+        ? rational_to_double(job.inspected_source_info->primary_video_stream->average_frame_rate)
+        : 0.0;
+    const qint64 frame_step_us = frame_rate > 0.0
+        ? static_cast<qint64>(std::llround(1000000.0 / frame_rate))
+        : 41708;
+
+    job.current_time_us = std::clamp(
+        job.current_time_us + (frame_step_us * direction),
+        0LL,
+        std::max<qint64>(job.duration_us, 0)
+    );
+    refresh_trim_controls();
+    refresh_selected_job_preview();
+}
+
+void MainWindow::set_selected_job_trim_in() {
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    job.trim_in_us = std::min(job.current_time_us, job.trim_out_us);
+    refresh_trim_controls();
+    refresh_selected_job_details();
+    refresh_selected_job_preview();
+}
+
+void MainWindow::set_selected_job_trim_out() {
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    job.trim_out_us = std::max(job.current_time_us, job.trim_in_us);
+    refresh_trim_controls();
+    refresh_selected_job_details();
+    refresh_selected_job_preview();
+}
+
+void MainWindow::jump_selected_job_to_in() {
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        return;
+    }
+
+    jobs_[static_cast<std::size_t>(selected_job_index_)].current_time_us =
+        jobs_[static_cast<std::size_t>(selected_job_index_)].trim_in_us;
+    refresh_trim_controls();
+    refresh_selected_job_preview();
+}
+
+void MainWindow::jump_selected_job_to_out() {
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        return;
+    }
+
+    jobs_[static_cast<std::size_t>(selected_job_index_)].current_time_us =
+        jobs_[static_cast<std::size_t>(selected_job_index_)].trim_out_us;
+    refresh_trim_controls();
+    refresh_selected_job_preview();
+}
+
+void MainWindow::handle_timeline_seek(const qint64 time_us) {
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    job.current_time_us = std::clamp<qint64>(time_us, 0, std::max<qint64>(job.duration_us, 0));
+    refresh_trim_controls();
+    refresh_selected_job_preview();
+}
+
+void MainWindow::sync_selected_job_from_editor() {
+    if (loading_selected_job_ || selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    job.output_path = output_path_edit_->text().trimmed();
+    job.subtitle_enabled = subtitle_enable_check_->isChecked();
+    job.subtitle_path = subtitle_path_edit_->text().trimmed();
+    job.intro_enabled = intro_enable_check_->isChecked();
+    job.intro_path = intro_path_edit_->text().trimmed();
+    job.intro_music_enabled = intro_music_check_->isChecked();
+    job.intro_music_path = intro_music_path_edit_->text().trimmed();
+    job.endcard_enabled = endcard_enable_check_->isChecked();
+    job.endcard_path = endcard_path_edit_->text().trimmed();
+    job.endcard_music_enabled = endcard_music_check_->isChecked();
+    job.endcard_music_path = endcard_music_path_edit_->text().trimmed();
+    job.thumbnail_image_path = thumbnail_image_path_edit_->text().trimmed();
+    job.thumbnail_title = thumbnail_title_edit_->text().trimmed();
+    job.video_codec = static_cast<utsure::core::media::OutputVideoCodec>(video_codec_combo_->currentData().toInt());
+    job.video_preset = preset_combo_->currentText().trimmed();
+    job.video_crf = crf_spin_box_->value();
+    job.audio_mode = static_cast<utsure::core::media::AudioOutputMode>(audio_format_combo_->currentData().toInt());
+    job.audio_bitrate_kbps = audio_quality_combo_->currentData().toInt();
+    job.audio_track_display = audio_track_combo_->currentText().trimmed();
+    job.preflight_preview_summary.clear();
+
+    if (job.state == UiJobState::pending) {
+        job.last_status_message = job_has_minimum_required_fields(job)
+            ? "Ready to queue."
+            : "Select an output path to make the job runnable.";
+    }
+
+    refresh_all_views();
+}
+
+void MainWindow::load_selected_job_into_editor() {
+    loading_selected_job_ = true;
+
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        output_path_edit_->clear();
+        same_as_input_check_->setChecked(true);
+        subtitle_enable_check_->setChecked(false);
+        subtitle_path_edit_->clear();
+        intro_enable_check_->setChecked(false);
+        intro_path_edit_->clear();
+        intro_music_check_->setChecked(false);
+        intro_music_path_edit_->clear();
+        endcard_enable_check_->setChecked(false);
+        endcard_path_edit_->clear();
+        endcard_music_check_->setChecked(false);
+        endcard_music_path_edit_->clear();
+        video_codec_combo_->setCurrentIndex(0);
+        preset_combo_->setCurrentText("medium");
+        crf_spin_box_->setValue(28);
+        audio_format_combo_->setCurrentIndex(0);
+        audio_quality_combo_->setCurrentIndex(audio_quality_combo_->findData(192));
+        audio_track_combo_->clear();
+        thumbnail_image_path_edit_->clear();
+        thumbnail_title_edit_->clear();
+    } else {
+        const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+        output_path_edit_->setText(job.output_path);
+        same_as_input_check_->setChecked(job.same_as_input);
+        subtitle_enable_check_->setChecked(job.subtitle_enabled);
+        subtitle_path_edit_->setText(job.subtitle_path);
+        intro_enable_check_->setChecked(job.intro_enabled);
+        intro_path_edit_->setText(job.intro_path);
+        intro_music_check_->setChecked(job.intro_music_enabled);
+        intro_music_path_edit_->setText(job.intro_music_path);
+        endcard_enable_check_->setChecked(job.endcard_enabled);
+        endcard_path_edit_->setText(job.endcard_path);
+        endcard_music_check_->setChecked(job.endcard_music_enabled);
+        endcard_music_path_edit_->setText(job.endcard_music_path);
+        video_codec_combo_->setCurrentIndex(video_codec_combo_->findData(static_cast<int>(job.video_codec)));
+        preset_combo_->setCurrentText(job.video_preset);
+        crf_spin_box_->setValue(job.video_crf);
+        audio_format_combo_->setCurrentIndex(audio_format_combo_->findData(static_cast<int>(job.audio_mode)));
+        audio_quality_combo_->setCurrentIndex(audio_quality_combo_->findData(job.audio_bitrate_kbps));
+        thumbnail_image_path_edit_->setText(job.thumbnail_image_path);
+        thumbnail_title_edit_->setText(job.thumbnail_title);
+        refresh_audio_track_combo();
+    }
+
+    loading_selected_job_ = false;
+    refresh_editor_state();
+}
+
+void MainWindow::select_job(const int index) {
+    if (index < 0 || index >= static_cast<int>(jobs_.size())) {
+        selected_job_index_ = -1;
+        refresh_all_views();
+        return;
+    }
+
+    selected_job_index_ = index;
+    ensure_job_inspection(index);
+
+    if (queue_table_->currentRow() != index) {
+        const QSignalBlocker blocker(queue_table_);
+        queue_table_->setCurrentCell(index, 0);
+    }
+
+    load_selected_job_into_editor();
+    refresh_all_views();
+}
+
+void MainWindow::ensure_job_inspection(const int job_index) {
+    if (job_index < 0 || job_index >= static_cast<int>(jobs_.size())) {
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(job_index)];
+    const QString normalized_key = QDir::toNativeSeparators(job.source_path.trimmed());
+    if (normalized_key.isEmpty() || job.inspected_source_key == normalized_key) {
+        return;
+    }
+
+    job.inspected_source_key = normalized_key;
+    job.inspected_source_info.reset();
+    job.source_inspection_error.clear();
+    job.input_size_bytes = QFileInfo(job.source_path).exists() ? QFileInfo(job.source_path).size() : -1;
+
+    const auto inspection_result = utsure::core::media::MediaInspector::inspect(qstring_to_path(job.source_path));
+    if (!inspection_result.succeeded()) {
+        job.source_inspection_error = to_qstring(inspection_result.error->message);
+        job.audio_track_display = "No source audio detected";
+        return;
+    }
+
+    job.inspected_source_info = *inspection_result.media_source_info;
+    job.audio_track_display = format_audio_track_display(job.inspected_source_info->primary_audio_stream);
+
+    if (job.inspected_source_info->container_duration_microseconds.has_value() &&
+        *job.inspected_source_info->container_duration_microseconds > 0) {
+        job.duration_us = *job.inspected_source_info->container_duration_microseconds;
+        job.trim_out_us = job.duration_us;
+    }
+
+    job.current_time_us = std::clamp<qint64>(job.current_time_us, 0, std::max<qint64>(job.duration_us, 0));
+    job.trim_in_us = std::clamp<qint64>(job.trim_in_us, 0, std::max<qint64>(job.duration_us, 0));
+    job.trim_out_us = std::clamp<qint64>(job.trim_out_us, job.trim_in_us, std::max<qint64>(job.duration_us, 0));
+}
+
+void MainWindow::reset_job_for_rerun(UiEncodeJob &job) {
+    job.state = UiJobState::pending;
+    job.checked = true;
+    job.efps_display.clear();
+    job.speed_display.clear();
+    job.elapsed_ms = 0;
+    job.remaining_ms = -1;
+    job.output_size_bytes = -1;
+    job.last_status_message = job_has_minimum_required_fields(job)
+        ? "Ready to queue."
+        : "Select an output path to make the job runnable.";
+    job.last_details_summary.clear();
+    job.preflight_preview_summary.clear();
+    job.task_log.clear();
+}
+
+void MainWindow::apply_same_as_input_folder(UiEncodeJob &job) {
+    if (!job.same_as_input || job.source_path.trimmed().isEmpty() || job.output_path.trimmed().isEmpty()) {
+        return;
+    }
+
+    const auto source_path = qstring_to_path(job.source_path);
+    auto output_path = qstring_to_path(job.output_path);
+    if (source_path.empty() || source_path.parent_path().empty() || output_path.empty()) {
+        return;
+    }
+
+    std::filesystem::path file_name = output_path.filename();
+    if (file_name.empty()) {
+        file_name = output_path;
+    }
+    if (file_name.empty()) {
+        return;
+    }
+
+    job.output_path = path_to_qstring((source_path.parent_path() / file_name).lexically_normal());
+}
+
+void MainWindow::refresh_all_views() {
+    refresh_queue_table();
+    refresh_editor_state();
+    refresh_selected_job_details();
+    refresh_selected_job_preview();
+    refresh_trim_controls();
+    refresh_task_log_view();
+    refresh_session_log_view();
+    refresh_toolbar_state();
+}
+
+void MainWindow::refresh_queue_table() {
+    suppress_queue_table_changes_ = true;
+    queue_table_->clearContents();
+    queue_table_->setRowCount(static_cast<int>(jobs_.size()));
+
+    for (int row = 0; row < static_cast<int>(jobs_.size()); ++row) {
+        const auto &job = jobs_[static_cast<std::size_t>(row)];
+
+        auto *file_item = new QTableWidgetItem(job.source_name);
+        Qt::ItemFlags file_flags = Qt::ItemIsSelectable | Qt::ItemIsEnabled;
+        if (!queue_run_active_) {
+            file_flags |= Qt::ItemIsUserCheckable;
+        }
+        file_item->setFlags(file_flags);
+        file_item->setCheckState(job.checked ? Qt::Checked : Qt::Unchecked);
+        file_item->setToolTip(job.source_path);
+        file_item->setBackground(accent_for_state(job.state));
+        file_item->setForeground(foreground_for_state(job.state));
+        queue_table_->setItem(row, 0, file_item);
+
+        const auto make_item = [](const QString &text) {
+            auto *item = new QTableWidgetItem(text);
+            item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+            return item;
+        };
+
+        queue_table_->setItem(row, 1, make_item(job.type_label));
+        auto *status_item = make_item(format_job_state_text(job));
+        status_item->setForeground(foreground_for_state(job.state));
+        queue_table_->setItem(row, 2, status_item);
+        queue_table_->setItem(row, 3, make_item(job.efps_display));
+        queue_table_->setItem(row, 4, make_item(job.speed_display));
+        queue_table_->setItem(row, 5, make_item(basename_from_path(job.output_path)));
+    }
+
+    suppress_queue_table_changes_ = false;
+
+    if (selected_job_index_ >= 0 && selected_job_index_ < static_cast<int>(jobs_.size())) {
+        const QSignalBlocker blocker(queue_table_);
+        queue_table_->setCurrentCell(selected_job_index_, 0);
+    }
+}
+
+void MainWindow::refresh_editor_state() {
+    const bool has_job = selected_job_index_ >= 0 && selected_job_index_ < static_cast<int>(jobs_.size());
+    const bool editable = has_job && !queue_run_active_;
+    const bool audio_quality_enabled = editable &&
+        audio_format_combo_->currentData().toInt() ==
+            static_cast<int>(utsure::core::media::AudioOutputMode::encode_aac);
+
+    output_path_edit_->setEnabled(editable);
+    output_browse_button_->setEnabled(editable);
+    same_as_input_check_->setEnabled(editable);
+
+    editor_tabs_->setTabEnabled(0, has_job && !queue_run_active_);
+    editor_tabs_->setTabEnabled(1, has_job && !queue_run_active_);
+    editor_tabs_->setTabEnabled(2, has_job && !queue_run_active_);
+    editor_tabs_->setTabEnabled(3, true);
+
+    subtitle_enable_check_->setEnabled(editable);
+    subtitle_path_edit_->setEnabled(editable);
+    subtitle_browse_button_->setEnabled(editable);
+    intro_enable_check_->setEnabled(editable);
+    intro_path_edit_->setEnabled(editable);
+    intro_browse_button_->setEnabled(editable);
+    intro_music_check_->setEnabled(editable);
+    intro_music_path_edit_->setEnabled(editable && intro_music_check_->isChecked());
+    intro_music_browse_button_->setEnabled(editable && intro_music_check_->isChecked());
+    endcard_enable_check_->setEnabled(editable);
+    endcard_path_edit_->setEnabled(editable);
+    endcard_browse_button_->setEnabled(editable);
+    endcard_music_check_->setEnabled(editable);
+    endcard_music_path_edit_->setEnabled(editable && endcard_music_check_->isChecked());
+    endcard_music_browse_button_->setEnabled(editable && endcard_music_check_->isChecked());
+    video_codec_combo_->setEnabled(editable);
+    preset_combo_->setEnabled(editable);
+    crf_spin_box_->setEnabled(editable);
+    audio_format_combo_->setEnabled(editable);
+    audio_quality_combo_->setEnabled(audio_quality_enabled);
+    audio_track_combo_->setEnabled(editable);
+    thumbnail_image_path_edit_->setEnabled(editable);
+    thumbnail_image_browse_button_->setEnabled(editable);
+    thumbnail_title_edit_->setEnabled(editable);
+    thumbnail_load_ass_button_->setEnabled(editable);
+    thumbnail_edit_title_button_->setEnabled(editable);
+
+    preview_enabled_check_->setEnabled(has_job);
+    trim_timeline_widget_->setEnabled(has_job);
+    frame_back_button_->setEnabled(has_job);
+    frame_forward_button_->setEnabled(has_job);
+    set_in_button_->setEnabled(has_job);
+    set_out_button_->setEnabled(has_job);
+    jump_in_button_->setEnabled(has_job);
+    jump_out_button_->setEnabled(has_job);
+}
+
+void MainWindow::refresh_selected_job_details() {
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        detail_status_value_->setText("--");
+        detail_elapsed_value_->setText("--");
+        detail_remaining_value_->setText("--");
+        detail_efps_value_->setText("--");
+        detail_speed_value_->setText("--");
+        detail_input_size_value_->setText("--");
+        detail_output_size_value_->setText("--");
+        detail_timeline_value_->setText("Select a queue row.");
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    update_job_file_sizes(job);
+
+    detail_status_value_->setText(format_job_state_text(job).isEmpty() ? "Not ready" : format_job_state_text(job));
+    detail_elapsed_value_->setText(format_duration_ms(job.elapsed_ms));
+    detail_remaining_value_->setText(format_duration_ms(job.remaining_ms));
+    detail_efps_value_->setText(job.efps_display.isEmpty() ? "--" : job.efps_display);
+    detail_speed_value_->setText(job.speed_display.isEmpty() ? "--" : job.speed_display);
+    detail_input_size_value_->setText(format_file_size(job.input_size_bytes));
+    detail_output_size_value_->setText(format_file_size(job.output_size_bytes));
+    detail_timeline_value_->setText(
+        QString("Thumb -> Intro -> Main [%1 to %2] -> EndCard")
+            .arg(format_time_us(job.trim_in_us))
+            .arg(format_time_us(job.trim_out_us))
+    );
+}
+
+void MainWindow::refresh_selected_job_preview() {
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        preview_title_label_->setText("PREVIEW OFFLINE");
+        preview_context_label_->setText("Select a queue row to inspect preview state.");
+        preview_time_badge_->setText("00:00:00.000");
+        return;
+    }
+
+    const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    preview_time_badge_->setText(format_time_us(job.current_time_us));
+
+    if (!preview_enabled_check_->isChecked()) {
+        preview_title_label_->setText("PREVIEW OFFLINE");
+        preview_context_label_->setText("Turn on Preview to inspect the selected job state.");
+        return;
+    }
+
+    if (!job.source_inspection_error.isEmpty()) {
+        preview_title_label_->setText("PREVIEW UNAVAILABLE");
+        preview_context_label_->setText(job.source_inspection_error);
+        return;
+    }
+
+    preview_title_label_->setText("PREVIEW PLACEHOLDER");
+    if (!job.preflight_preview_summary.isEmpty()) {
+        preview_context_label_->setText(job.preflight_preview_summary);
+    } else {
+        preview_context_label_->setText(
+            QString("%1\n\nConceptual order: thumbnail pre-roll, intro, trimmed main source, endcard.\nThe live preview surface is still placeholder-only in this milestone.")
+                .arg(job.source_name)
         );
-        if (response != QMessageBox::Yes) {
-            set_status_text("Encode cancelled before start.", false);
-            append_log_line("[info] Overwrite was declined. The encode did not start.");
+    }
+}
+
+void MainWindow::refresh_trim_controls() {
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        current_time_value_->setText("t=00:00:00.000");
+        trim_in_value_->setText("IN=00:00:00.000");
+        trim_out_value_->setText("OUT=00:00:00.000");
+        trim_timeline_widget_->set_duration_us(10000000);
+        trim_timeline_widget_->set_trim_range_us(0, 10000000);
+        trim_timeline_widget_->set_current_time_us(0);
+        return;
+    }
+
+    const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    current_time_value_->setText(QString("t=%1").arg(format_time_us(job.current_time_us)));
+    trim_in_value_->setText(QString("IN=%1").arg(format_time_us(job.trim_in_us)));
+    trim_out_value_->setText(QString("OUT=%1").arg(format_time_us(job.trim_out_us)));
+    trim_timeline_widget_->set_duration_us(std::max<qint64>(job.duration_us, 1));
+    trim_timeline_widget_->set_trim_range_us(job.trim_in_us, job.trim_out_us);
+    trim_timeline_widget_->set_current_time_us(job.current_time_us);
+}
+
+void MainWindow::refresh_task_log_view() {
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        task_log_summary_label_->setText("Select a job to inspect its task log.");
+        task_log_view_->setPlainText("No selected task.");
+        return;
+    }
+
+    const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    task_log_summary_label_->setText(
+        QString("Status: %1 | Output: %2")
+            .arg(format_job_state_text(job).isEmpty() ? "Not ready" : format_job_state_text(job))
+            .arg(basename_from_path(job.output_path).isEmpty() ? "(unset)" : basename_from_path(job.output_path))
+    );
+    task_log_view_->setPlainText(
+        job.task_log.isEmpty()
+            ? QString("No task log for '%1' yet.").arg(job.source_name)
+            : job.task_log.join('\n')
+    );
+}
+
+void MainWindow::refresh_session_log_view() {
+    session_log_view_->setPlainText(
+        session_log_lines_.isEmpty()
+            ? QString("Session log is empty.")
+            : session_log_lines_.join('\n')
+    );
+}
+
+void MainWindow::refresh_toolbar_state() {
+    const bool has_job = selected_job_index_ >= 0 && selected_job_index_ < static_cast<int>(jobs_.size());
+    add_button_->setEnabled(!queue_run_active_);
+    remove_button_->setEnabled(!queue_run_active_ && has_job);
+    priority_combo_->setEnabled(!queue_run_active_);
+    start_button_->setEnabled(!jobs_.empty());
+    stop_button_->setEnabled(queue_run_active_);
+    update_start_button_visuals();
+}
+
+void MainWindow::refresh_audio_track_combo() {
+    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+        return;
+    }
+
+    const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    const QSignalBlocker blocker(audio_track_combo_);
+    audio_track_combo_->clear();
+    audio_track_combo_->addItem(job.audio_track_display);
+}
+
+void MainWindow::update_start_button_visuals() {
+    if (queue_run_active_) {
+        if (!busy_spinner_timer_->isActive()) {
+            busy_spinner_timer_->start();
+        }
+        start_button_->setToolTip(stop_requested_ ? "Stopping..." : "Encoding...");
+        start_button_->setIcon(make_busy_icon(busy_spinner_phase_));
+        return;
+    }
+
+    busy_spinner_timer_->stop();
+    busy_spinner_phase_ = 0;
+    start_button_->setToolTip("Start checked jobs");
+    start_button_->setIcon(QIcon(":/icons/play.svg"));
+}
+
+void MainWindow::advance_busy_spinner() {
+    if (!queue_run_active_) {
+        return;
+    }
+
+    busy_spinner_phase_ = (busy_spinner_phase_ + 1) % 12;
+    start_button_->setIcon(make_busy_icon(busy_spinner_phase_));
+}
+
+void MainWindow::start_encode_queue() {
+    if (queue_run_active_ || runner_controller_->is_running()) {
+        return;
+    }
+
+    queued_job_indices_.clear();
+    queue_cursor_ = 0;
+    stop_requested_ = false;
+
+    for (int index = 0; index < static_cast<int>(jobs_.size()); ++index) {
+        auto &job = jobs_[static_cast<std::size_t>(index)];
+        if (!job.checked) {
+            continue;
+        }
+
+        QString build_error{};
+        const auto built_job = build_job_from_entry(index, build_error);
+        if (!built_job.has_value()) {
+            job.last_status_message = build_error;
+            append_job_log(index, "[error] " + build_error);
+            continue;
+        }
+
+        append_job_log(index, "[info] Validating job before queue start.");
+        const auto preflight = utsure::core::job::EncodeJobPreflight::inspect(*built_job);
+        if (preflight.preview_summary.has_value()) {
+            job.preflight_preview_summary =
+                to_qstring(utsure::core::job::format_encode_job_preview(*preflight.preview_summary));
+        } else {
+            job.preflight_preview_summary.clear();
+        }
+
+        for (const auto &issue : preflight.issues) {
+            append_job_log(index, format_preflight_issue(issue));
+        }
+
+        if (!preflight.can_start_encode()) {
+            const auto first_error = std::find_if(
+                preflight.issues.begin(),
+                preflight.issues.end(),
+                [](const utsure::core::job::EncodeJobPreflightIssue &issue) {
+                    return issue.severity == utsure::core::job::EncodeJobPreflightIssueSeverity::error;
+                }
+            );
+            job.last_status_message = first_error != preflight.issues.end()
+                ? to_qstring(first_error->message)
+                : "Job is not ready to start.";
+            continue;
+        }
+
+        job.last_status_message = "Queued for batch encode.";
+        queued_job_indices_.push_back(index);
+    }
+
+    if (queued_job_indices_.empty()) {
+        append_session_log("[warning] No checked jobs were runnable.");
+        refresh_all_views();
+        return;
+    }
+
+    queue_run_active_ = true;
+    append_session_log(QString("[info] Starting queue with %1 job(s).").arg(queued_job_indices_.size()));
+    refresh_all_views();
+    start_next_queued_job();
+}
+
+void MainWindow::start_next_queued_job() {
+    while (queue_cursor_ < static_cast<int>(queued_job_indices_.size())) {
+        if (stop_requested_) {
+            finish_queue_run();
             return;
         }
 
-        append_log_line("[warning] Existing output confirmed for overwrite.");
-    }
+        const int job_index = queued_job_indices_[static_cast<std::size_t>(queue_cursor_++)];
+        if (job_index < 0 || job_index >= static_cast<int>(jobs_.size())) {
+            continue;
+        }
 
-    append_log_line("[info] Requested encode job.");
-    append_log_line("[info] Source: " + source_path_edit_->text().trimmed());
-    append_log_line("[info] Output: " + output_path_edit_->text().trimmed());
-    append_log_line(
-        QString("[info] CPU mode: %1")
-            .arg(to_qstring(utsure::core::media::to_string(current_cpu_usage_mode())))
-    );
-    append_log_line(
-        QString("[info] Priority: %1")
-            .arg(to_qstring(utsure::core::job::to_display_string(current_encode_priority())))
-    );
-    set_status_text("Validation passed. Starting encode job.", false);
-    runner_controller_->start_job(*job);
-}
+        auto &job = jobs_[static_cast<std::size_t>(job_index)];
+        if (!job.checked) {
+            continue;
+        }
 
-void MainWindow::apply_codec_defaults() {
-    const auto codec = current_output_codec();
-    const QSignalBlocker preset_blocker(preset_combo_);
-    const QSignalBlocker crf_blocker(crf_spin_box_);
+        QString build_error{};
+        const auto built_job = build_job_from_entry(job_index, build_error);
+        if (!built_job.has_value()) {
+            job.last_status_message = build_error;
+            append_job_log(job_index, "[error] " + build_error);
+            continue;
+        }
 
-    preset_combo_->setCurrentText(recommended_preset(codec));
-    preset_combo_->setToolTip(codec_help_text(codec));
-    crf_spin_box_->setValue(recommended_crf(codec));
-    crf_spin_box_->setToolTip(codec_help_text(codec));
-}
+        const auto preflight = utsure::core::job::EncodeJobPreflight::inspect(*built_job);
+        if (!preflight.can_start_encode()) {
+            append_job_log(job_index, "[error] Job became unrunnable before start.");
+            continue;
+        }
 
-void MainWindow::update_audio_control_states() {
-    const auto mode = current_audio_mode();
-    const bool encode_controls_enabled =
-        mode == utsure::core::media::AudioOutputMode::auto_select ||
-        mode == utsure::core::media::AudioOutputMode::encode_aac;
+        if (preflight.requires_output_overwrite_confirmation()) {
+            const auto response = QMessageBox::question(
+                this,
+                "Overwrite Existing Output?",
+                QString("'%1' already exists.\n\nOverwrite it?")
+                    .arg(QDir::toNativeSeparators(job.output_path))
+            );
+            if (response != QMessageBox::Yes) {
+                append_job_log(job_index, "[warning] Overwrite declined. The job was skipped.");
+                continue;
+            }
+        }
 
-    audio_codec_combo_->setEnabled(encode_controls_enabled);
-    audio_bitrate_spin_box_->setEnabled(encode_controls_enabled);
-    audio_sample_rate_combo_->setEnabled(encode_controls_enabled);
-    audio_channels_combo_->setEnabled(encode_controls_enabled);
-}
-
-void MainWindow::handle_running_changed(const bool running) {
-    inputs_group_->setEnabled(!running);
-    output_group_->setEnabled(!running);
-    audio_group_->setEnabled(!running);
-    start_button_->setEnabled(!running);
-    cpu_mode_combo_->setEnabled(!running);
-    priority_combo_->setEnabled(!running);
-    start_button_->setText(running ? "Encoding..." : "Start Encode");
-
-    if (running) {
-        progress_bar_->setRange(0, 0);
-        progress_bar_->setValue(0);
-        progress_bar_->setFormat("Working...");
-    } else if (progress_bar_->maximum() == 0) {
-        progress_bar_->setRange(0, 1);
-        progress_bar_->setValue(0);
-        progress_bar_->setFormat("Ready");
-    }
-}
-
-void MainWindow::handle_progress_changed(const utsure::core::job::EncodeJobProgress &progress) {
-    if (has_fine_encode_progress(progress)) {
-        const double stage_fraction = clamp_progress_fraction(
-            progress.stage_fraction.value_or(progress.overall_fraction.value_or(0.0))
-        );
-        progress_bar_->setRange(0, 1000);
-        progress_bar_->setValue(static_cast<int>(std::lround(stage_fraction * 1000.0)));
-        progress_bar_->setFormat(format_encode_progress_bar_text(progress));
-        set_status_text(
-            progress.message.empty() ? "Encoding output..." : to_qstring(progress.message),
-            false
-        );
+        job.state = UiJobState::encoding;
+        job.last_status_message = "Encoding...";
+        job.elapsed_ms = 0;
+        job.remaining_ms = -1;
+        job.efps_display.clear();
+        job.speed_display.clear();
+        active_job_index_ = job_index;
+        active_job_elapsed_timer_.restart();
+        active_job_elapsed_valid_ = true;
+        select_job(job_index);
+        append_job_log(job_index, "[info] Starting encode job.");
+        runner_controller_->start_job(*built_job);
+        refresh_all_views();
         return;
     }
 
-    if (progress.total_steps > 0) {
-        progress_bar_->setRange(0, progress.total_steps);
-        progress_bar_->setValue(progress.current_step);
-        progress_bar_->setFormat(
-            QString("Step %1 of %2").arg(progress.current_step).arg(progress.total_steps)
-        );
-    } else {
-        progress_bar_->setRange(0, 0);
-        progress_bar_->setFormat("Working...");
+    append_session_log("[info] Queue completed.");
+    finish_queue_run();
+}
+
+void MainWindow::stop_encode_queue() {
+    if (!queue_run_active_) {
+        return;
     }
 
-    set_status_text(to_qstring(progress.message), false);
+    stop_requested_ = true;
+    append_session_log("[warning] Stop requested. Waiting for the current job to cancel.");
+    if (active_job_index_ >= 0 && active_job_index_ < static_cast<int>(jobs_.size())) {
+        append_job_log(active_job_index_, "[warning] Cancel requested by user.");
+    }
+
+    runner_controller_->cancel_job();
+    refresh_toolbar_state();
+}
+
+void MainWindow::finish_queue_run() {
+    queue_run_active_ = false;
+    stop_requested_ = false;
+    queued_job_indices_.clear();
+    queue_cursor_ = 0;
+    active_job_index_ = -1;
+    active_job_elapsed_valid_ = false;
+    refresh_all_views();
+}
+
+void MainWindow::append_session_log(const QString &line) {
+    session_log_lines_.push_back(QString("%1 %2").arg(QTime::currentTime().toString("HH:mm:ss"), line));
+    refresh_session_log_view();
+}
+
+void MainWindow::append_job_log(const int job_index, const QString &line, const bool mirror_to_session) {
+    if (job_index < 0 || job_index >= static_cast<int>(jobs_.size())) {
+        return;
+    }
+
+    jobs_[static_cast<std::size_t>(job_index)].task_log.push_back(line);
+    if (mirror_to_session) {
+        append_session_log(status_prefix_for_session(jobs_[static_cast<std::size_t>(job_index)].source_name, line));
+    }
+
+    if (job_index == selected_job_index_) {
+        refresh_task_log_view();
+    }
+}
+
+void MainWindow::update_active_job_progress(const utsure::core::job::EncodeJobProgress &progress) {
+    if (active_job_index_ < 0 || active_job_index_ >= static_cast<int>(jobs_.size())) {
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(active_job_index_)];
+    if (active_job_elapsed_valid_) {
+        job.elapsed_ms = active_job_elapsed_timer_.elapsed();
+    }
+
+    if (progress.encoded_video_duration_us.has_value()) {
+        job.current_time_us = std::clamp<qint64>(
+            *progress.encoded_video_duration_us,
+            0,
+            std::max<qint64>(job.duration_us, 0)
+        );
+    }
+
+    if (progress.encoded_fps.has_value() && *progress.encoded_fps > 0.0) {
+        job.efps_display = QString::number(*progress.encoded_fps, 'f', 1);
+        if (job.inspected_source_info.has_value() && job.inspected_source_info->primary_video_stream.has_value()) {
+            const double source_fps = rational_to_double(job.inspected_source_info->primary_video_stream->average_frame_rate);
+            if (source_fps > 0.0) {
+                job.speed_display = QString("%1x").arg(QString::number(*progress.encoded_fps / source_fps, 'f', 1));
+            }
+        }
+    }
+
+    const double fraction = std::clamp(
+        progress.stage_fraction.value_or(progress.overall_fraction.value_or(0.0)),
+        0.0,
+        1.0
+    );
+    if (fraction > 0.0 && fraction < 1.0 && job.elapsed_ms > 0) {
+        job.remaining_ms = static_cast<qint64>(
+            std::llround((static_cast<double>(job.elapsed_ms) * (1.0 - fraction)) / fraction)
+        );
+    }
+
+    job.last_status_message = progress.message.empty() ? "Encoding..." : to_qstring(progress.message);
+    refresh_all_views();
+}
+
+void MainWindow::update_job_file_sizes(UiEncodeJob &job) {
+    const QFileInfo source_info(job.source_path);
+    job.input_size_bytes = source_info.exists() ? source_info.size() : -1;
+
+    const QFileInfo output_info(job.output_path);
+    job.output_size_bytes = output_info.exists() ? output_info.size() : -1;
+}
+
+void MainWindow::handle_running_changed(const bool /*running*/) {
+    refresh_all_views();
+}
+
+void MainWindow::handle_progress_changed(const utsure::core::job::EncodeJobProgress &progress) {
+    update_active_job_progress(progress);
 }
 
 void MainWindow::handle_job_finished(
     const bool succeeded,
+    const bool canceled,
     const QString &status_text,
     const QString &details_text
 ) {
+    if (active_job_index_ < 0 || active_job_index_ >= static_cast<int>(jobs_.size())) {
+        finish_queue_run();
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(active_job_index_)];
+    if (active_job_elapsed_valid_) {
+        job.elapsed_ms = active_job_elapsed_timer_.elapsed();
+    }
+    job.last_status_message = status_text;
+    job.last_details_summary = details_text;
+    update_job_file_sizes(job);
+
     if (succeeded) {
-        if (progress_bar_->maximum() <= 0) {
-            progress_bar_->setRange(0, 1);
-            progress_bar_->setValue(1);
-        } else {
-            progress_bar_->setValue(progress_bar_->maximum());
-        }
-        progress_bar_->setFormat("Completed");
-
-        append_log_line("[info] Encode report:");
-    } else if (progress_bar_->maximum() <= 0) {
-        progress_bar_->setRange(0, 1);
-        progress_bar_->setValue(0);
-        progress_bar_->setFormat("Failed");
-        append_log_line("[error] Encode report:");
+        job.state = UiJobState::finished;
+        job.checked = false;
+        job.remaining_ms = 0;
+        append_job_log(active_job_index_, "[info] Encode finished successfully.");
+    } else if (canceled) {
+        job.state = UiJobState::canceled;
+        job.checked = false;
+        job.efps_display.clear();
+        job.speed_display.clear();
+        job.remaining_ms = -1;
+        append_job_log(active_job_index_, "[warning] Encode canceled.");
     } else {
-        progress_bar_->setFormat("Failed");
-        append_log_line("[error] Encode report:");
+        job.state = UiJobState::failed;
+        job.checked = false;
+        job.remaining_ms = -1;
+        append_job_log(active_job_index_, "[error] Encode failed.");
     }
 
-    set_status_text(status_text, !succeeded);
-    append_log_line(details_text);
-}
+    append_job_log(active_job_index_, details_text, false);
+    active_job_elapsed_valid_ = false;
 
-void MainWindow::append_log_line(const QString &line) {
-    log_view_->appendPlainText(line);
-}
-
-void MainWindow::mark_preview_stale() {
-    if (runner_controller_ != nullptr && runner_controller_->is_running()) {
+    if (stop_requested_ || canceled) {
+        append_session_log("[warning] Queue stopped after cancel.");
+        finish_queue_run();
         return;
     }
 
-    set_preview_text("Preview updates after input validation.", false);
-}
-
-void MainWindow::set_preview_text(const QString &text, const bool is_error) {
-    preview_label_->setText(text);
-    preview_label_->setStyleSheet(is_error ? "color: #8b0000;" : "color: #444444;");
-}
-
-void MainWindow::set_status_text(const QString &text, const bool is_error) {
-    status_label_->setText(text);
-    status_label_->setStyleSheet(is_error ? "color: #8b0000; font-weight: 600;" : "font-weight: 600;");
-}
-
-void MainWindow::maybe_seed_output_path() {
-    if (!output_path_edit_->text().trimmed().isEmpty()) {
-        return;
-    }
-
-    const auto source_path = qstring_to_path(source_path_edit_->text().trimmed());
-    if (source_path.empty()) {
-        return;
-    }
-
-    auto suggested_path = source_path.parent_path() / source_path.stem();
-    suggested_path += "-encoded.mp4";
-
-    output_path_edit_->setText(path_to_qstring(suggested_path.lexically_normal()));
+    start_next_queued_job();
 }
 
 std::filesystem::path MainWindow::qstring_to_path(const QString &text) {

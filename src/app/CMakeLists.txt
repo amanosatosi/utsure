@@ -8,11 +8,15 @@ qt_add_executable(utsure_encoder_app WIN32
     main.cpp
     main_window.cpp
     main_window.hpp
+    resources/app_resources.qrc
+    trim_timeline_widget.cpp
+    trim_timeline_widget.hpp
 )
 
 target_link_libraries(utsure_encoder_app
     PRIVATE
         Qt6::Widgets
+        Qt6::Svg
         utsure::encoder_core
 )
 

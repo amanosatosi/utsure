@@ -135,7 +135,8 @@ EncodeJobResult make_error(
     const EncodeJob &job,
     const std::string &message,
     const std::string &actionable_hint,
-    EncodeJobTelemetry *telemetry = nullptr
+    EncodeJobTelemetry *telemetry = nullptr,
+    const bool canceled = false
 ) {
     if (telemetry != nullptr) {
         notify_log(*telemetry, EncodeJobLogLevel::error, message);
@@ -150,7 +151,8 @@ EncodeJobResult make_error(
             .main_source_path = job.input.main_source_path.lexically_normal().string(),
             .output_path = job.output.output_path.lexically_normal().string(),
             .message = message,
-            .actionable_hint = actionable_hint
+            .actionable_hint = actionable_hint,
+            .canceled = canceled
         }
     };
 }
@@ -443,6 +445,16 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             .error = std::nullopt
         };
     } catch (const std::exception &exception) {
+        if (std::string_view(exception.what()) == kEncodeJobCanceledException) {
+            return make_error(
+                job,
+                std::string(kEncodeJobCanceledMessage),
+                "The active encode was canceled by the user. Any partial output may need to be deleted manually.",
+                &telemetry,
+                true
+            );
+        }
+
         return make_error(
             job,
             "Encode job aborted because an unexpected exception was raised.",

@@ -71,6 +71,7 @@ struct StreamingTranscodeSummary final {
 struct StreamingTranscodeError final {
     std::string message{};
     std::string actionable_hint{};
+    bool canceled{false};
 };
 
 struct StreamingTranscodeResult final {

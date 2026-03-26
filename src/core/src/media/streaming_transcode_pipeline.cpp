@@ -300,12 +300,13 @@ ResolvedVideoEncoderBackend resolve_video_encoder_backend(const OutputVideoCodec
     };
 }
 
-StreamingTranscodeResult make_error(std::string message, std::string actionable_hint) {
+StreamingTranscodeResult make_error(std::string message, std::string actionable_hint, const bool canceled = false) {
     return StreamingTranscodeResult{
         .summary = std::nullopt,
         .error = StreamingTranscodeError{
             .message = std::move(message),
-            .actionable_hint = std::move(actionable_hint)
+            .actionable_hint = std::move(actionable_hint),
+            .canceled = canceled
         }
     };
 }
@@ -3826,6 +3827,14 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
             }
         };
     } catch (const std::exception &exception) {
+        if (std::string_view(exception.what()) == job::kEncodeJobCanceledException) {
+            return make_error(
+                std::string(job::kEncodeJobCanceledMessage),
+                "The active encode was canceled by the user. Any partial output may need to be deleted manually.",
+                true
+            );
+        }
+
         return make_error(
             "Streaming transcode aborted because an unexpected exception was raised.",
             exception.what()

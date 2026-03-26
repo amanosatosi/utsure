@@ -5,6 +5,26 @@
 #include <QMetaType>
 #include <QMetaObject>
 
+namespace {
+
+QThread::Priority map_thread_priority(const utsure::core::job::EncodeJobProcessPriority priority) {
+    switch (priority) {
+    case utsure::core::job::EncodeJobProcessPriority::high:
+        return QThread::HighestPriority;
+    case utsure::core::job::EncodeJobProcessPriority::above_normal:
+        return QThread::HighPriority;
+    case utsure::core::job::EncodeJobProcessPriority::normal:
+        return QThread::NormalPriority;
+    case utsure::core::job::EncodeJobProcessPriority::below_normal:
+        return QThread::LowPriority;
+    case utsure::core::job::EncodeJobProcessPriority::low:
+    default:
+        return QThread::LowestPriority;
+    }
+}
+
+}  // namespace
+
 EncodeJobRunnerController::EncodeJobRunnerController(QObject *parent) : QObject(parent) {
     qRegisterMetaType<utsure::core::job::EncodeJobProgress>("utsure::core::job::EncodeJobProgress");
 
@@ -38,6 +58,8 @@ void EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &jo
         return;
     }
 
+    worker_->clear_cancel_request();
+    worker_thread_.setPriority(map_thread_priority(job.execution.process_priority));
     running_ = true;
     emit running_changed(true);
     emit progress_changed(utsure::core::job::EncodeJobProgress{
@@ -47,6 +69,10 @@ void EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &jo
         .message = "Starting encode job."
     });
     emit log_message("[info] Starting encode job.");
+    emit log_message(
+        QString("[info] Worker thread priority: %1.")
+            .arg(QString::fromUtf8(utsure::core::job::to_display_string(job.execution.process_priority)))
+    );
 
     QMetaObject::invokeMethod(
         worker_,
@@ -57,12 +83,23 @@ void EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &jo
     );
 }
 
+void EncodeJobRunnerController::cancel_job() noexcept {
+    if (!running_ || worker_ == nullptr) {
+        return;
+    }
+
+    worker_->request_cancel();
+    emit log_message("[warning] Cancel requested for the active encode job.");
+}
+
 void EncodeJobRunnerController::handle_worker_finished(
     const bool succeeded,
+    const bool canceled,
     const QString &status_text,
     const QString &details_text
 ) {
     running_ = false;
+    worker_thread_.setPriority(QThread::NormalPriority);
     emit running_changed(false);
-    emit job_finished(succeeded, status_text, details_text);
+    emit job_finished(succeeded, canceled, status_text, details_text);
 }

@@ -21,7 +21,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M13 Usability and safety slice completed.
 - [x] M15 Hardening and handoff completed.
 - [x] M16 Streaming transcoding pipeline completed.
-  * M17 Desktop GUI quality and usability planned.
+  * M17 Desktop GUI quality and usability in progress.
   * M18 Automatic output naming planned.
   * M19 Automatic subtitle selection planned.
   * M20 FontCollector-based subtitle font recovery and fallback planned.
@@ -57,6 +57,9 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M16 UX slice also includes replacing coarse encode-stage step progress with throttled frame-driven streaming progress that reports percent, encoded frames, encoded media time, and live EFPS through the existing observer and Qt worker/controller pipeline.
 - The current M16 throughput slice also includes backend-managed multi-core video encoder threading, one explicit 70-frame bounded video handoff queue with backpressure in the streaming path, and a safe GUI process-priority control that stays outside encoder-core platform policy.
 - The current M16 throughput slice now also includes explicit decoder/encoder thread selection, Auto / Conservative / Aggressive CPU usage modes, bounded parallel video normalization/subtitle preparation ahead of ordered encode, and lightweight per-stage runtime instrumentation.
+- The current M17 slice is limited to reshaping the Qt Widgets desktop shell around a queue-based batch encode workflow that matches the provided HTML reference as closely as practical without replacing the existing app framework.
+- The current M17 slice also includes native Qt placeholders for unfinished backend-backed features, especially the thumbnail subtitle-title integration surface and richer preview playback behavior, so the intended workflow is obvious without pretending the full implementation exists.
+- The current M17 slice excludes automatic output naming, automatic subtitle selection, and new encode-core media policy beyond the minimum UI/controller wiring needed to expose the current pipeline cleanly.
 
 ## Architecture direction
 
@@ -577,12 +580,14 @@ Done criteria:
 
 ### M17 Improve desktop GUI quality and usability
 
-Status: Planned
+Status: In progress
 
 Scope:
   * Improve the Qt 6 Widgets desktop shell so the main encode workflow feels cleaner, more understandable, and more efficient to use.
   * Keep encode policy, subtitle rules, and pipeline orchestration in `encoder-core` rather than moving them into the GUI layer.
   * Focus this milestone on visual polish, clearer control grouping, safer defaults, and more useful workflow feedback instead of adding unrelated encode features.
+  * Reshape the window around a queue table, selected-job editor, selected-job summary, session log, and preview/task-log side panel modeled after the provided HTML reference.
+  * Add obvious placeholder controls and notes for thumbnail pre-roll title/image behavior until the dedicated subtitle-file integration milestone exists.
 
 Likely files/modules:
   * `src/app/`
