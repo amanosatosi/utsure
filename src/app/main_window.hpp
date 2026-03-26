@@ -73,7 +73,6 @@ public:
         QString inspected_source_key{};
         std::optional<utsure::core::media::MediaSourceInfo> inspected_source_info{};
         QString source_inspection_error{};
-        QString preflight_preview_summary{};
         QString last_status_message{"Select an output path to make the job runnable."};
         QString last_details_summary{};
         QStringList task_log{};
@@ -93,6 +92,7 @@ private:
     [[nodiscard]] utsure::core::job::EncodeJobProcessPriority current_worker_priority() const;
     [[nodiscard]] QString selected_job_name() const;
     [[nodiscard]] QString format_job_state_text(const UiEncodeJob &job) const;
+    [[nodiscard]] QString format_job_state_display_text(const UiEncodeJob &job) const;
     [[nodiscard]] bool job_is_terminal(const UiEncodeJob &job) const;
     [[nodiscard]] bool job_has_minimum_required_fields(const UiEncodeJob &job) const;
     [[nodiscard]] QString current_audio_quality_label() const;

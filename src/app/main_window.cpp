@@ -185,6 +185,35 @@ QString basename_from_path(const QString &path_text) {
     return QFileInfo(path_text).fileName();
 }
 
+QString display_text_or_fallback(const QString &text, const QString &fallback_text) {
+    const QString normalized_text = text.trimmed();
+    return normalized_text.isEmpty() ? fallback_text : normalized_text;
+}
+
+QString queue_source_display_name(const MainWindow::UiEncodeJob &job) {
+    const QString explicit_name = job.source_name.trimmed();
+    if (!explicit_name.isEmpty()) {
+        return explicit_name;
+    }
+
+    const QString inferred_name = QFileInfo(job.source_path.trimmed()).fileName().trimmed();
+    return inferred_name.isEmpty() ? "(no file)" : inferred_name;
+}
+
+QString queue_type_display_name(const MainWindow::UiEncodeJob &job) {
+    const QString explicit_type = job.type_label.trimmed();
+    if (!explicit_type.isEmpty()) {
+        return explicit_type;
+    }
+
+    const QString source_suffix = QFileInfo(job.source_path.trimmed()).suffix().trimmed().toLower();
+    return source_suffix.isEmpty() ? "-" : "." + source_suffix;
+}
+
+QString queue_output_display_name(const MainWindow::UiEncodeJob &job) {
+    return display_text_or_fallback(basename_from_path(job.output_path), "(unset)");
+}
+
 QColor status_color_for_state(const MainWindow::UiJobState state) {
     switch (state) {
     case MainWindow::UiJobState::finished:
@@ -212,33 +241,23 @@ QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size, Q
         return {};
     }
 
-    QFile resource_file(resource_path);
-    if (!resource_file.exists()) {
+    if (!QFile::exists(resource_path)) {
         if (failure_reason != nullptr) {
             *failure_reason = QString("Resource not found: %1").arg(resource_path);
         }
         return {};
     }
 
-    if (!resource_file.open(QIODevice::ReadOnly)) {
-        if (failure_reason != nullptr) {
-            *failure_reason = QString("Failed to open resource: %1").arg(resource_path);
-        }
-        return {};
+    const QIcon direct_icon(resource_path);
+    const QPixmap direct_pixmap = direct_icon.pixmap(icon_size);
+    if (!direct_pixmap.isNull()) {
+        return direct_icon;
     }
 
-    const QByteArray svg_bytes = resource_file.readAll();
-    if (svg_bytes.isEmpty()) {
-        if (failure_reason != nullptr) {
-            *failure_reason = QString("Resource was empty: %1").arg(resource_path);
-        }
-        return {};
-    }
-
-    QSvgRenderer renderer(svg_bytes);
+    QSvgRenderer renderer(resource_path);
     if (!renderer.isValid()) {
         if (failure_reason != nullptr) {
-            *failure_reason = QString("QSvgRenderer rejected resource bytes: %1").arg(resource_path);
+            *failure_reason = QString("Qt failed to rasterize icon resource: %1").arg(resource_path);
         }
         return {};
     }
@@ -1298,7 +1317,7 @@ QString MainWindow::selected_job_name() const {
         return "No job selected";
     }
 
-    return jobs_[static_cast<std::size_t>(selected_job_index_)].source_name;
+    return queue_source_display_name(jobs_[static_cast<std::size_t>(selected_job_index_)]);
 }
 
 QString MainWindow::format_job_state_text(const UiEncodeJob &job) const {
@@ -1315,6 +1334,10 @@ QString MainWindow::format_job_state_text(const UiEncodeJob &job) const {
     default:
         return job_has_minimum_required_fields(job) ? "Ready" : QString();
     }
+}
+
+QString MainWindow::format_job_state_display_text(const UiEncodeJob &job) const {
+    return display_text_or_fallback(format_job_state_text(job), "Not ready");
 }
 
 bool MainWindow::job_is_terminal(const UiEncodeJob &job) const {
@@ -1686,7 +1709,6 @@ void MainWindow::sync_selected_job_from_editor() {
     job.audio_mode = static_cast<utsure::core::media::AudioOutputMode>(audio_format_combo_->currentData().toInt());
     job.audio_bitrate_kbps = audio_quality_combo_->currentData().toInt();
     job.audio_track_display = audio_track_combo_->currentText().trimmed();
-    job.preflight_preview_summary.clear();
 
     if (job.state == UiJobState::pending) {
         job.last_status_message = job_has_minimum_required_fields(job)
@@ -1821,7 +1843,6 @@ void MainWindow::reset_job_for_rerun(UiEncodeJob &job) {
         ? "Ready to queue."
         : "Select an output path to make the job runnable.";
     job.last_details_summary.clear();
-    job.preflight_preview_summary.clear();
     job.task_log.clear();
 }
 
@@ -1865,12 +1886,8 @@ void MainWindow::refresh_queue_table() {
 
     for (int row = 0; row < static_cast<int>(jobs_.size()); ++row) {
         const auto &job = jobs_[static_cast<std::size_t>(row)];
-        const QString source_name = job.source_name.trimmed().isEmpty()
-            ? QFileInfo(job.source_path).fileName()
-            : job.source_name;
-        const QString output_name = basename_from_path(job.output_path);
 
-        auto *file_item = new QTableWidgetItem(source_name.isEmpty() ? "(no file)" : source_name);
+        auto *file_item = new QTableWidgetItem(queue_source_display_name(job));
         Qt::ItemFlags file_flags = Qt::ItemIsSelectable | Qt::ItemIsEnabled;
         if (!queue_run_active_) {
             file_flags |= Qt::ItemIsUserCheckable;
@@ -1888,14 +1905,14 @@ void MainWindow::refresh_queue_table() {
             return item;
         };
 
-        queue_table_->setItem(row, 1, make_item(job.type_label.isEmpty() ? "-" : job.type_label, Qt::AlignCenter));
-        auto *status_item = make_item(format_job_state_text(job), Qt::AlignCenter);
+        queue_table_->setItem(row, 1, make_item(queue_type_display_name(job), Qt::AlignCenter));
+        auto *status_item = make_item(format_job_state_display_text(job), Qt::AlignCenter);
         status_item->setForeground(foreground_for_state(job.state));
         status_item->setToolTip(job.last_status_message);
         queue_table_->setItem(row, 2, status_item);
-        queue_table_->setItem(row, 3, make_item(job.efps_display.isEmpty() ? "--" : job.efps_display, Qt::AlignCenter));
-        queue_table_->setItem(row, 4, make_item(job.speed_display.isEmpty() ? "--" : job.speed_display, Qt::AlignCenter));
-        queue_table_->setItem(row, 5, make_item(output_name.isEmpty() ? "(unset)" : output_name));
+        queue_table_->setItem(row, 3, make_item(display_text_or_fallback(job.efps_display, "--"), Qt::AlignCenter));
+        queue_table_->setItem(row, 4, make_item(display_text_or_fallback(job.speed_display, "--"), Qt::AlignCenter));
+        queue_table_->setItem(row, 5, make_item(queue_output_display_name(job)));
     }
 
     suppress_queue_table_changes_ = false;
@@ -1949,6 +1966,10 @@ void MainWindow::refresh_editor_state() {
     thumbnail_load_ass_button_->setEnabled(editable);
     thumbnail_edit_title_button_->setEnabled(editable);
 
+    if (!has_job && preview_enabled_check_->isChecked()) {
+        const QSignalBlocker blocker(preview_enabled_check_);
+        preview_enabled_check_->setChecked(false);
+    }
     preview_enabled_check_->setEnabled(has_job);
     trim_timeline_widget_->setEnabled(has_job);
     frame_back_button_->setEnabled(has_job);
@@ -1975,11 +1996,11 @@ void MainWindow::refresh_selected_job_details() {
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     update_job_file_sizes(job);
 
-    detail_status_value_->setText(format_job_state_text(job).isEmpty() ? "Not ready" : format_job_state_text(job));
+    detail_status_value_->setText(format_job_state_display_text(job));
     detail_elapsed_value_->setText(format_duration_ms(job.elapsed_ms));
     detail_remaining_value_->setText(format_duration_ms(job.remaining_ms));
-    detail_efps_value_->setText(job.efps_display.isEmpty() ? "--" : job.efps_display);
-    detail_speed_value_->setText(job.speed_display.isEmpty() ? "--" : job.speed_display);
+    detail_efps_value_->setText(display_text_or_fallback(job.efps_display, "--"));
+    detail_speed_value_->setText(display_text_or_fallback(job.speed_display, "--"));
     detail_input_size_value_->setText(format_file_size(job.input_size_bytes));
     detail_output_size_value_->setText(format_file_size(job.output_size_bytes));
     detail_timeline_value_->setText(
@@ -2015,7 +2036,7 @@ void MainWindow::refresh_selected_job_preview() {
     preview_title_label_->setText("PREVIEW UNAVAILABLE");
     preview_context_label_->setText(
         QString("%1\n\nThis pane is reserved for video preview only. Live video preview is not wired in this milestone yet.\nUse Task Log for per-task status and log details.")
-            .arg(job.source_name)
+            .arg(queue_source_display_name(job))
     );
 }
 
@@ -2049,12 +2070,12 @@ void MainWindow::refresh_task_log_view() {
     const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     task_log_summary_label_->setText(
         QString("Status: %1 | Output: %2")
-            .arg(format_job_state_text(job).isEmpty() ? "Not ready" : format_job_state_text(job))
-            .arg(basename_from_path(job.output_path).isEmpty() ? "(unset)" : basename_from_path(job.output_path))
+            .arg(format_job_state_display_text(job))
+            .arg(queue_output_display_name(job))
     );
     task_log_view_->setPlainText(
         job.task_log.isEmpty()
-            ? QString("No task log for '%1' yet.").arg(job.source_name)
+            ? QString("No task log for '%1' yet.").arg(queue_source_display_name(job))
             : job.task_log.join('\n')
     );
 }
@@ -2145,7 +2166,6 @@ void MainWindow::start_encode_queue() {
 
         append_job_log(index, "[info] Validating job before queue start.");
         const auto preflight = utsure::core::job::EncodeJobPreflight::inspect(*built_job);
-        job.preflight_preview_summary.clear();
 
         for (const auto &issue : preflight.issues) {
             append_job_log(index, format_preflight_issue(issue));

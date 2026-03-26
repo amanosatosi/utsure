@@ -591,6 +591,12 @@ Scope:
   * Reshape the window around a queue table, selected-job editor, selected-job summary, session log, and preview/task-log side panel modeled after the provided HTML reference.
   * Add obvious placeholder controls and notes for thumbnail pre-roll title/image behavior until the dedicated subtitle-file integration milestone exists.
 
+Current slice status:
+  * Completed: verified the shipped SVG toolbar/timeline assets are well-formed UTF-8 XML with no BOM, UTF-16 encoding, NUL bytes, or stray binary junk.
+  * Completed: restored action-icon loading to Qt's resource-path icon pipeline with SVG renderer fallback after the post-`882e2d24c6e665f2f742a8045f2e3874df251a2e` raw-byte loader regression.
+  * Completed: normalized queue-table display text so file, type, status, EFPS, speed, and output cells render explicit values instead of leaking empty strings from partially populated jobs.
+  * Completed: kept the Preview tab reserved for video preview only, with the surface forced back offline when no queue row is selected.
+
 Likely files/modules:
   * `src/app/`
   * `src/app/widgets/`

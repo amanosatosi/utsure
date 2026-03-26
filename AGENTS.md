@@ -21,3 +21,4 @@ Current product direction:
 - `libassmod` subtitle burn-in.
 - Intro/outro clip support.
 - Output frame rate follows the main source video.
+- Compling and testing will be done through github actions. Do NOT compile on local machine. 
