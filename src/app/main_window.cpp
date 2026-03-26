@@ -11,6 +11,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
+#include <QDebug>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -203,36 +204,42 @@ QBrush foreground_for_state(const MainWindow::UiJobState state) {
     return QBrush(status_color_for_state(state));
 }
 
-QIcon make_status_indicator_icon(const MainWindow::UiJobState state) {
-    if (state == MainWindow::UiJobState::pending) {
+QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size, QString *failure_reason = nullptr) {
+    if (resource_path.isEmpty()) {
+        if (failure_reason != nullptr) {
+            *failure_reason = "Empty resource path.";
+        }
         return {};
     }
 
-    QPixmap pixmap(10, 10);
-    pixmap.fill(Qt::transparent);
-
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(status_color_for_state(state));
-    painter.drawEllipse(QRectF(1.0, 1.0, 8.0, 8.0));
-
-    return QIcon(pixmap);
-}
-
-QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size) {
-    if (resource_path.isEmpty() || !QFile::exists(resource_path)) {
+    QFile resource_file(resource_path);
+    if (!resource_file.exists()) {
+        if (failure_reason != nullptr) {
+            *failure_reason = QString("Resource not found: %1").arg(resource_path);
+        }
         return {};
     }
 
-    const QIcon direct_icon(resource_path);
-    const QPixmap direct_pixmap = direct_icon.pixmap(icon_size);
-    if (!direct_pixmap.isNull()) {
-        return direct_icon;
+    if (!resource_file.open(QIODevice::ReadOnly)) {
+        if (failure_reason != nullptr) {
+            *failure_reason = QString("Failed to open resource: %1").arg(resource_path);
+        }
+        return {};
     }
 
-    QSvgRenderer renderer(resource_path);
+    const QByteArray svg_bytes = resource_file.readAll();
+    if (svg_bytes.isEmpty()) {
+        if (failure_reason != nullptr) {
+            *failure_reason = QString("Resource was empty: %1").arg(resource_path);
+        }
+        return {};
+    }
+
+    QSvgRenderer renderer(svg_bytes);
     if (!renderer.isValid()) {
+        if (failure_reason != nullptr) {
+            *failure_reason = QString("QSvgRenderer rejected resource bytes: %1").arg(resource_path);
+        }
         return {};
     }
 
@@ -273,7 +280,8 @@ void apply_icon_or_text(
         return;
     }
 
-    const QIcon icon = load_resource_icon(resource_path, icon_size);
+    QString failure_reason{};
+    const QIcon icon = load_resource_icon(resource_path, icon_size, &failure_reason);
     const bool has_icon = !icon.isNull();
 
     button->setIconSize(icon_size);
@@ -294,6 +302,11 @@ void apply_icon_or_text(
 
     if (auto *tool_button = qobject_cast<QToolButton *>(button)) {
         tool_button->setToolButtonStyle(has_icon ? Qt::ToolButtonIconOnly : Qt::ToolButtonTextOnly);
+    }
+
+    if (!has_icon) {
+        qWarning().noquote()
+            << QString("Icon fallback active for '%1': %2").arg(resource_path, failure_reason);
     }
 
     refresh_button_style(button);
@@ -692,21 +705,28 @@ QLabel#PreviewTimeBadge {
     });
     queue_table_->verticalHeader()->setVisible(false);
     queue_table_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    queue_table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    queue_table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-    queue_table_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
-    queue_table_->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
-    queue_table_->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+    queue_table_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Fixed);
+    queue_table_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Fixed);
+    queue_table_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Fixed);
+    queue_table_->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Fixed);
+    queue_table_->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Fixed);
+    queue_table_->setColumnWidth(1, 78);
+    queue_table_->setColumnWidth(2, 94);
+    queue_table_->setColumnWidth(3, 64);
+    queue_table_->setColumnWidth(4, 72);
+    queue_table_->setColumnWidth(5, 180);
     queue_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     queue_table_->setSelectionMode(QAbstractItemView::SingleSelection);
     queue_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     queue_table_->setShowGrid(false);
     queue_table_->setAlternatingRowColors(true);
     queue_table_->setFrameShape(QFrame::NoFrame);
+    queue_table_->setFocusPolicy(Qt::NoFocus);
     queue_table_->setMinimumHeight(0);
     queue_table_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     queue_table_->horizontalHeader()->setHighlightSections(false);
     queue_table_->verticalHeader()->setDefaultSectionSize(24);
+    queue_table_->setTextElideMode(Qt::ElideMiddle);
     queue_table_->setWordWrap(false);
     queue_frame_layout->addWidget(queue_table_, 1);
 
@@ -1732,6 +1752,10 @@ void MainWindow::load_selected_job_into_editor() {
 void MainWindow::select_job(const int index) {
     if (index < 0 || index >= static_cast<int>(jobs_.size())) {
         selected_job_index_ = -1;
+        if (queue_table_ != nullptr) {
+            const QSignalBlocker blocker(queue_table_);
+            queue_table_->clearSelection();
+        }
         refresh_all_views();
         return;
     }
@@ -1741,7 +1765,7 @@ void MainWindow::select_job(const int index) {
 
     if (queue_table_->currentRow() != index) {
         const QSignalBlocker blocker(queue_table_);
-        queue_table_->setCurrentCell(index, 0);
+        queue_table_->selectRow(index);
     }
 
     load_selected_job_into_editor();
@@ -1841,8 +1865,12 @@ void MainWindow::refresh_queue_table() {
 
     for (int row = 0; row < static_cast<int>(jobs_.size()); ++row) {
         const auto &job = jobs_[static_cast<std::size_t>(row)];
+        const QString source_name = job.source_name.trimmed().isEmpty()
+            ? QFileInfo(job.source_path).fileName()
+            : job.source_name;
+        const QString output_name = basename_from_path(job.output_path);
 
-        auto *file_item = new QTableWidgetItem(job.source_name);
+        auto *file_item = new QTableWidgetItem(source_name.isEmpty() ? "(no file)" : source_name);
         Qt::ItemFlags file_flags = Qt::ItemIsSelectable | Qt::ItemIsEnabled;
         if (!queue_run_active_) {
             file_flags |= Qt::ItemIsUserCheckable;
@@ -1860,25 +1888,21 @@ void MainWindow::refresh_queue_table() {
             return item;
         };
 
-        queue_table_->setItem(row, 1, make_item(job.type_label));
+        queue_table_->setItem(row, 1, make_item(job.type_label.isEmpty() ? "-" : job.type_label, Qt::AlignCenter));
         auto *status_item = make_item(format_job_state_text(job), Qt::AlignCenter);
         status_item->setForeground(foreground_for_state(job.state));
-        const QIcon status_icon = make_status_indicator_icon(job.state);
-        if (!status_icon.isNull()) {
-            status_item->setIcon(status_icon);
-        }
         status_item->setToolTip(job.last_status_message);
         queue_table_->setItem(row, 2, status_item);
-        queue_table_->setItem(row, 3, make_item(job.efps_display, Qt::AlignCenter));
-        queue_table_->setItem(row, 4, make_item(job.speed_display, Qt::AlignCenter));
-        queue_table_->setItem(row, 5, make_item(basename_from_path(job.output_path)));
+        queue_table_->setItem(row, 3, make_item(job.efps_display.isEmpty() ? "--" : job.efps_display, Qt::AlignCenter));
+        queue_table_->setItem(row, 4, make_item(job.speed_display.isEmpty() ? "--" : job.speed_display, Qt::AlignCenter));
+        queue_table_->setItem(row, 5, make_item(output_name.isEmpty() ? "(unset)" : output_name));
     }
 
     suppress_queue_table_changes_ = false;
 
     if (selected_job_index_ >= 0 && selected_job_index_ < static_cast<int>(jobs_.size())) {
         const QSignalBlocker blocker(queue_table_);
-        queue_table_->setCurrentCell(selected_job_index_, 0);
+        queue_table_->selectRow(selected_job_index_);
     }
 }
 
@@ -1978,7 +2002,7 @@ void MainWindow::refresh_selected_job_preview() {
 
     if (!preview_enabled_check_->isChecked()) {
         preview_title_label_->setText("PREVIEW OFFLINE");
-        preview_context_label_->setText("Turn on Preview to inspect the selected job state.");
+        preview_context_label_->setText("Turn on Preview to enable the video preview surface.");
         return;
     }
 
@@ -1988,15 +2012,11 @@ void MainWindow::refresh_selected_job_preview() {
         return;
     }
 
-    preview_title_label_->setText("PREVIEW PLACEHOLDER");
-    if (!job.preflight_preview_summary.isEmpty()) {
-        preview_context_label_->setText(job.preflight_preview_summary);
-    } else {
-        preview_context_label_->setText(
-            QString("%1\n\nConceptual order: thumbnail pre-roll, intro, trimmed main source, endcard.\nThe live preview surface is still placeholder-only in this milestone.")
-                .arg(job.source_name)
-        );
-    }
+    preview_title_label_->setText("PREVIEW UNAVAILABLE");
+    preview_context_label_->setText(
+        QString("%1\n\nThis pane is reserved for video preview only. Live video preview is not wired in this milestone yet.\nUse Task Log for per-task status and log details.")
+            .arg(job.source_name)
+    );
 }
 
 void MainWindow::refresh_trim_controls() {
@@ -2125,12 +2145,7 @@ void MainWindow::start_encode_queue() {
 
         append_job_log(index, "[info] Validating job before queue start.");
         const auto preflight = utsure::core::job::EncodeJobPreflight::inspect(*built_job);
-        if (preflight.preview_summary.has_value()) {
-            job.preflight_preview_summary =
-                to_qstring(utsure::core::job::format_encode_job_preview(*preflight.preview_summary));
-        } else {
-            job.preflight_preview_summary.clear();
-        }
+        job.preflight_preview_summary.clear();
 
         for (const auto &issue : preflight.issues) {
             append_job_log(index, format_preflight_issue(issue));
