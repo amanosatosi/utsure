@@ -60,6 +60,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M17 slice is limited to reshaping the Qt Widgets desktop shell around a queue-based batch encode workflow that matches the provided HTML reference as closely as practical without replacing the existing app framework.
 - The current M17 slice also includes native Qt placeholders for unfinished backend-backed features, especially the thumbnail subtitle-title integration surface and richer preview playback behavior, so the intended workflow is obvious without pretending the full implementation exists.
 - The current M17 slice excludes automatic output naming, automatic subtitle selection, and new encode-core media policy beyond the minimum UI/controller wiring needed to expose the current pipeline cleanly.
+- The current M17 slice now also includes shipping the new SVG-backed desktop icon dependency through the Windows MSYS2 workflow and documented local setup so the refreshed app shell configures reproducibly in CI.
 
 ## Architecture direction
 

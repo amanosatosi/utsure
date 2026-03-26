@@ -18,6 +18,7 @@ pacman -S --needed \
   mingw-w64-ucrt-x86_64-pkgconf \
   mingw-w64-ucrt-x86_64-meson \
   mingw-w64-ucrt-x86_64-qt6-base \
+  mingw-w64-ucrt-x86_64-qt6-svg \
   mingw-w64-ucrt-x86_64-libx264 \
   mingw-w64-ucrt-x86_64-x265 \
   mingw-w64-ucrt-x86_64-freetype \
@@ -84,6 +85,7 @@ UTSURE_CMAKE_BUILD_TYPE=Release ./scripts/ci/windows-msys2-build.sh
 - `PKG_CONFIG_PATH` must resolve `libavcodec`, `libavformat`, `libavutil`, `libswresample`, and `libswscale` from the FFmpeg prefix before any system FFmpeg entry.
 - `PKG_CONFIG_PATH` must resolve `libass` from the `libassmod` prefix before any system `libass`.
 - `CMAKE_PREFIX_PATH` should include `/ucrt64` for the MSYS2 Qt and other packaged dependencies.
+- The desktop app now uses SVG-backed toolbar and timeline icons, so the MSYS2 setup must include both `mingw-w64-ucrt-x86_64-qt6-base` and `mingw-w64-ucrt-x86_64-qt6-svg`.
 - Configure now fails if the discovered FFmpeg core libraries are outside the pinned FFmpeg prefix or if the pinned `ffmpeg` executable is outside the supported `7.1.x` series.
 
 ## Current limits
