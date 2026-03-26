@@ -214,6 +214,44 @@ QString queue_output_display_name(const MainWindow::UiEncodeJob &job) {
     return display_text_or_fallback(basename_from_path(job.output_path), "(unset)");
 }
 
+QByteArray load_svg_resource_bytes(const QString &resource_path, QString *failure_reason = nullptr) {
+    QFile resource_file(resource_path);
+    if (!resource_file.exists()) {
+        if (failure_reason != nullptr) {
+            *failure_reason = QString("Resource not found: %1").arg(resource_path);
+        }
+        return {};
+    }
+
+    if (!resource_file.open(QIODevice::ReadOnly)) {
+        if (failure_reason != nullptr) {
+            *failure_reason = QString("Failed to open resource: %1").arg(resource_path);
+        }
+        return {};
+    }
+
+    QByteArray svg_bytes = resource_file.readAll();
+    if (svg_bytes.isEmpty()) {
+        if (failure_reason != nullptr) {
+            *failure_reason = QString("Resource was empty: %1").arg(resource_path);
+        }
+        return {};
+    }
+
+    if (svg_bytes.startsWith("\xEF\xBB\xBF")) {
+        svg_bytes.remove(0, 3);
+    }
+
+    if (svg_bytes.contains('\0')) {
+        if (failure_reason != nullptr) {
+            *failure_reason = QString("Resource contains NUL bytes: %1").arg(resource_path);
+        }
+        return {};
+    }
+
+    return svg_bytes;
+}
+
 QColor status_color_for_state(const MainWindow::UiJobState state) {
     switch (state) {
     case MainWindow::UiJobState::finished:
@@ -241,9 +279,11 @@ QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size, Q
         return {};
     }
 
-    if (!QFile::exists(resource_path)) {
+    QString svg_failure_reason{};
+    const QByteArray svg_bytes = load_svg_resource_bytes(resource_path, &svg_failure_reason);
+    if (svg_bytes.isEmpty()) {
         if (failure_reason != nullptr) {
-            *failure_reason = QString("Resource not found: %1").arg(resource_path);
+            *failure_reason = svg_failure_reason;
         }
         return {};
     }
@@ -254,10 +294,10 @@ QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size, Q
         return direct_icon;
     }
 
-    QSvgRenderer renderer(resource_path);
+    QSvgRenderer renderer(svg_bytes);
     if (!renderer.isValid()) {
         if (failure_reason != nullptr) {
-            *failure_reason = QString("Qt failed to rasterize icon resource: %1").arg(resource_path);
+            *failure_reason = QString("QSvgRenderer rejected resource bytes: %1").arg(resource_path);
         }
         return {};
     }
@@ -271,6 +311,8 @@ QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size, Q
     pixmap.setDevicePixelRatio(kDevicePixelRatio);
 
     QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
     renderer.render(&painter, QRectF(QPointF(0.0, 0.0), QSizeF(icon_size)));
 
     return QIcon(pixmap);

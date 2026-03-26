@@ -18,6 +18,8 @@ libassmod_pcdir="${libassmod_prefix}/lib/pkgconfig"
 msys2_prefix="${UTSURE_MSYS2_PREFIX:-/ucrt64}"
 msys2_bin_dir="${msys2_prefix}/bin"
 qt_plugin_root="${msys2_prefix}/share/qt6/plugins"
+qt_iconengines_dir="${qt_plugin_root}/iconengines"
+qt_imageformats_dir="${qt_plugin_root}/imageformats"
 app_executable="${build_dir}/src/app/utsure.exe"
 qt_runtime_manifest="${bundle_dir}/qt-runtime-files.txt"
 non_qt_runtime_manifest="${bundle_dir}/non-qt-runtime-dependencies.txt"
@@ -132,9 +134,24 @@ cp "${project_root}/LICENSE" "${bundle_dir}/"
 
 "${windeployqt}" --no-translations "${bundle_dir}/utsure.exe"
 
+if [ -f "${qt_iconengines_dir}/qsvgicon.dll" ]; then
+  mkdir -p "${bundle_dir}/iconengines"
+  cp "${qt_iconengines_dir}/qsvgicon.dll" "${bundle_dir}/iconengines/"
+fi
+
+if [ -f "${qt_imageformats_dir}/qsvg.dll" ]; then
+  mkdir -p "${bundle_dir}/imageformats"
+  cp "${qt_imageformats_dir}/qsvg.dll" "${bundle_dir}/imageformats/"
+fi
+
 if [ -f "${qt_plugin_root}/platforms/qoffscreen.dll" ]; then
   mkdir -p "${bundle_dir}/platforms"
   cp "${qt_plugin_root}/platforms/qoffscreen.dll" "${bundle_dir}/platforms/"
+fi
+
+if [ -f "${qt_iconengines_dir}/qsvgicon.dll" ] && [ ! -f "${bundle_dir}/iconengines/qsvgicon.dll" ]; then
+  echo "Portable bundle is missing Qt's SVG icon engine plugin (iconengines/qsvgicon.dll)."
+  exit 1
 fi
 
 write_qt_runtime_manifest

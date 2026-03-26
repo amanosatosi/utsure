@@ -594,9 +594,11 @@ Scope:
 Current slice status:
   * Completed: verified the shipped SVG toolbar/timeline assets are well-formed UTF-8 XML with no BOM, UTF-16 encoding, NUL bytes, or stray binary junk.
   * Completed: restored action-icon loading to Qt's resource-path icon pipeline with SVG renderer fallback after the post-`882e2d24c6e665f2f742a8045f2e3874df251a2e` raw-byte loader regression.
+  * Completed: narrowed the icon loader so runtime fallback now reads the qrc SVG bytes directly before rasterizing, instead of depending only on filename-based SVG handling.
   * Completed: normalized queue-table display text so file, type, status, EFPS, speed, and output cells render explicit values instead of leaking empty strings from partially populated jobs.
   * Completed: kept the Preview tab reserved for video preview only, with the surface forced back offline when no queue row is selected.
   * Completed: kept the qrc-backed icon path on the existing target-embedded Qt resource pipeline after confirming the app build does not emit a standalone `qInitResources_app_resources()` entry point for manual initialization.
+  * Completed: hardened the Windows portable bundle to carry and validate Qt's SVG icon engine plugin explicitly so deployed toolbar icons do not regress to text fallback.
   * Completed: replaced the queue table's native blue selection paint with an explicit muted selection palette so selected rows stay readable without bright blue artifacting.
   * Completed: reduced desktop-shell height pressure by lowering the default/minimum window height, shrinking the preview surface minimum, and relaxing the initial splitter allocations.
 
