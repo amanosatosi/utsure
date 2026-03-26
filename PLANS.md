@@ -601,6 +601,7 @@ Current slice status:
   * Completed: hardened the Windows portable bundle to carry and validate Qt's SVG icon engine plugin explicitly so deployed toolbar icons do not regress to text fallback.
   * Completed: replaced the queue table's native blue selection paint with an explicit muted selection palette so selected rows stay readable without bright blue artifacting.
   * Completed: reduced desktop-shell height pressure by lowering the default/minimum window height, shrinking the preview surface minimum, and relaxing the initial splitter allocations.
+  * Completed: fixed the second-source queue crash by blocking queue-table rebuild signals, avoiding row selection against stale pre-refresh row counts, and removing the redundant post-add full refresh that re-entered the editor/selection path.
 
 Likely files/modules:
   * `src/app/`

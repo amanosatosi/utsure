@@ -1407,6 +1407,10 @@ QString MainWindow::current_audio_quality_label() const {
     return audio_quality_combo_->currentText().trimmed();
 }
 
+bool MainWindow::is_valid_job_index(const int index) const {
+    return index >= 0 && index < static_cast<int>(jobs_.size());
+}
+
 void MainWindow::add_source_jobs() {
     const QStringList selected_paths = QFileDialog::getOpenFileNames(
         this,
@@ -1437,7 +1441,6 @@ void MainWindow::add_source_jobs_from_paths(const QStringList &paths) {
     }
 
     select_job(first_new_index);
-    refresh_all_views();
 }
 
 void MainWindow::remove_selected_job() {
@@ -1591,10 +1594,16 @@ void MainWindow::show_thumbnail_placeholder_note() {
 }
 
 void MainWindow::handle_queue_selection_changed() {
-    const int current_row = queue_table_->currentRow();
-    if (current_row >= 0 && current_row < static_cast<int>(jobs_.size())) {
-        select_job(current_row);
+    if (suppress_queue_table_changes_) {
+        return;
     }
+
+    const int current_row = queue_table_->currentRow();
+    if (!is_valid_job_index(current_row) || current_row == selected_job_index_) {
+        return;
+    }
+
+    select_job(current_row);
 }
 
 void MainWindow::handle_queue_item_changed(QTableWidgetItem *item) {
@@ -1773,7 +1782,7 @@ void MainWindow::sync_selected_job_from_editor() {
 void MainWindow::load_selected_job_into_editor() {
     loading_selected_job_ = true;
 
-    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+    if (!is_valid_job_index(selected_job_index_)) {
         output_path_edit_->clear();
         same_as_input_check_->setChecked(true);
         subtitle_enable_check_->setChecked(false);
@@ -1823,7 +1832,7 @@ void MainWindow::load_selected_job_into_editor() {
 }
 
 void MainWindow::select_job(const int index) {
-    if (index < 0 || index >= static_cast<int>(jobs_.size())) {
+    if (!is_valid_job_index(index)) {
         selected_job_index_ = -1;
         if (queue_table_ != nullptr) {
             const QSignalBlocker blocker(queue_table_);
@@ -1836,7 +1845,7 @@ void MainWindow::select_job(const int index) {
     selected_job_index_ = index;
     ensure_job_inspection(index);
 
-    if (queue_table_->currentRow() != index) {
+    if (queue_table_ != nullptr && index < queue_table_->rowCount() && queue_table_->currentRow() != index) {
         const QSignalBlocker blocker(queue_table_);
         queue_table_->selectRow(index);
     }
@@ -1932,6 +1941,7 @@ void MainWindow::refresh_all_views() {
 
 void MainWindow::refresh_queue_table() {
     suppress_queue_table_changes_ = true;
+    const QSignalBlocker blocker(queue_table_);
     queue_table_->clearContents();
     queue_table_->setRowCount(static_cast<int>(jobs_.size()));
 
@@ -1968,8 +1978,7 @@ void MainWindow::refresh_queue_table() {
 
     suppress_queue_table_changes_ = false;
 
-    if (selected_job_index_ >= 0 && selected_job_index_ < static_cast<int>(jobs_.size())) {
-        const QSignalBlocker blocker(queue_table_);
+    if (is_valid_job_index(selected_job_index_)) {
         queue_table_->selectRow(selected_job_index_);
     }
 }

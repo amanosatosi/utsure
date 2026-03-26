@@ -96,6 +96,7 @@ private:
     [[nodiscard]] bool job_is_terminal(const UiEncodeJob &job) const;
     [[nodiscard]] bool job_has_minimum_required_fields(const UiEncodeJob &job) const;
     [[nodiscard]] QString current_audio_quality_label() const;
+    [[nodiscard]] bool is_valid_job_index(int index) const;
 
     void add_source_jobs();
     void add_source_jobs_from_paths(const QStringList &paths);
