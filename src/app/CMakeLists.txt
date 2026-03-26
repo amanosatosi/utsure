@@ -20,6 +20,10 @@ target_link_libraries(utsure_encoder_app
         utsure::encoder_core
 )
 
+if(WIN32)
+    target_link_libraries(utsure_encoder_app PRIVATE dwmapi)
+endif()
+
 target_compile_features(utsure_encoder_app PRIVATE cxx_std_20)
 
 set_target_properties(utsure_encoder_app PROPERTIES OUTPUT_NAME "utsure")

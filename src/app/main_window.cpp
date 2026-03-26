@@ -6,6 +6,7 @@
 #include "utsure/core/job/encode_job_preflight.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 
+#include <QAbstractButton>
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
@@ -31,6 +32,9 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QSplitter>
+#include <QSizePolicy>
+#include <QStyle>
+#include <QSvgRenderer>
 #include <QTabWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -43,6 +47,24 @@
 #include <algorithm>
 #include <cmath>
 #include <string_view>
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#include <dwmapi.h>
+
+#ifndef DWMWA_BORDER_COLOR
+#define DWMWA_BORDER_COLOR 34
+#endif
+
+#ifndef DWMWA_CAPTION_COLOR
+#define DWMWA_CAPTION_COLOR 35
+#endif
+
+#ifndef DWMWA_TEXT_COLOR
+#define DWMWA_TEXT_COLOR 36
+#endif
+#endif
 
 namespace {
 
@@ -160,34 +182,136 @@ QString basename_from_path(const QString &path_text) {
     return QFileInfo(path_text).fileName();
 }
 
-QColor accent_for_state(const MainWindow::UiJobState state) {
+QColor status_color_for_state(const MainWindow::UiJobState state) {
     switch (state) {
     case MainWindow::UiJobState::finished:
-        return QColor(0, 180, 90, 45);
+        return QColor("#0f7a47");
     case MainWindow::UiJobState::failed:
     case MainWindow::UiJobState::canceled:
-        return QColor(217, 58, 58, 45);
+        return QColor("#a12b2b");
     case MainWindow::UiJobState::encoding:
-        return QColor(25, 183, 255, 55);
+        return QColor("#0f74a6");
     case MainWindow::UiJobState::pending:
     default:
-        return QColor(Qt::transparent);
+        return QColor("#6b6b6b");
     }
 }
 
 QBrush foreground_for_state(const MainWindow::UiJobState state) {
-    switch (state) {
-    case MainWindow::UiJobState::finished:
-        return QBrush(QColor("#0f7a47"));
-    case MainWindow::UiJobState::failed:
-    case MainWindow::UiJobState::canceled:
-        return QBrush(QColor("#a12b2b"));
-    case MainWindow::UiJobState::encoding:
-        return QBrush(QColor("#0f74a6"));
-    case MainWindow::UiJobState::pending:
-    default:
-        return QBrush(QColor("#1f1f1f"));
+    return QBrush(status_color_for_state(state));
+}
+
+QIcon make_status_indicator_icon(const MainWindow::UiJobState state) {
+    if (state == MainWindow::UiJobState::pending) {
+        return {};
     }
+
+    QPixmap pixmap(10, 10);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(status_color_for_state(state));
+    painter.drawEllipse(QRectF(1.0, 1.0, 8.0, 8.0));
+
+    return QIcon(pixmap);
+}
+
+QIcon load_svg_icon(const QString &resource_path, const QSize &icon_size) {
+    if (resource_path.isEmpty() || !QFile::exists(resource_path)) {
+        return {};
+    }
+
+    QSvgRenderer renderer(resource_path);
+    if (!renderer.isValid()) {
+        return {};
+    }
+
+    constexpr qreal kDevicePixelRatio = 2.0;
+    QPixmap pixmap(
+        static_cast<int>(std::lround(static_cast<qreal>(icon_size.width()) * kDevicePixelRatio)),
+        static_cast<int>(std::lround(static_cast<qreal>(icon_size.height()) * kDevicePixelRatio))
+    );
+    pixmap.fill(Qt::transparent);
+    pixmap.setDevicePixelRatio(kDevicePixelRatio);
+
+    QPainter painter(&pixmap);
+    renderer.render(&painter, QRectF(QPointF(0.0, 0.0), QSizeF(icon_size)));
+
+    return QIcon(pixmap);
+}
+
+void refresh_button_style(QAbstractButton *button) {
+    if (button == nullptr || button->style() == nullptr) {
+        return;
+    }
+
+    button->style()->unpolish(button);
+    button->style()->polish(button);
+    button->update();
+}
+
+void apply_icon_or_text(
+    QAbstractButton *button,
+    const QString &resource_path,
+    const QString &fallback_text,
+    const QSize &icon_size,
+    const int compact_width,
+    const int fixed_height,
+    const bool expand_for_text_fallback
+) {
+    if (button == nullptr) {
+        return;
+    }
+
+    const QIcon icon = load_svg_icon(resource_path, icon_size);
+    const bool has_icon = !icon.isNull();
+
+    button->setIconSize(icon_size);
+    button->setIcon(has_icon ? icon : QIcon{});
+    button->setText(has_icon ? QString{} : fallback_text);
+    button->setProperty("iconFallback", !has_icon);
+    button->setFixedHeight(fixed_height);
+
+    if (has_icon || !expand_for_text_fallback) {
+        button->setMinimumWidth(compact_width);
+        button->setMaximumWidth(compact_width);
+        button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    } else {
+        button->setMinimumWidth(std::max(compact_width, button->fontMetrics().horizontalAdvance(fallback_text) + 18));
+        button->setMaximumWidth(QWIDGETSIZE_MAX);
+        button->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    }
+
+    if (auto *tool_button = qobject_cast<QToolButton *>(button)) {
+        tool_button->setToolButtonStyle(has_icon ? Qt::ToolButtonIconOnly : Qt::ToolButtonTextOnly);
+    }
+
+    refresh_button_style(button);
+}
+
+void apply_native_caption_accent(QWidget *window) {
+    if (window == nullptr) {
+        return;
+    }
+
+#ifdef _WIN32
+    const auto hwnd = reinterpret_cast<HWND>(window->winId());
+    if (hwnd == nullptr) {
+        return;
+    }
+
+    const COLORREF caption_color = RGB(255, 62, 165);
+    const COLORREF text_color = RGB(255, 255, 255);
+    const COLORREF border_color = RGB(217, 47, 134);
+
+    DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &caption_color, sizeof(caption_color));
+    DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, &text_color, sizeof(text_color));
+    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &border_color, sizeof(border_color));
+#else
+    Q_UNUSED(window);
+#endif
 }
 
 PathFieldWidgets create_path_field(QWidget *parent, const QString &placeholder_text, const QString &browse_tooltip) {
@@ -202,9 +326,8 @@ PathFieldWidgets create_path_field(QWidget *parent, const QString &placeholder_t
     auto *browse_button = new QPushButton(container);
     browse_button->setProperty("browseButton", true);
     browse_button->setToolTip(browse_tooltip);
-    browse_button->setIcon(QIcon(":/icons/browse.svg"));
     browse_button->setCursor(Qt::PointingHandCursor);
-    browse_button->setFixedSize(32, 32);
+    apply_icon_or_text(browse_button, ":/icons/browse.svg", "...", QSize(16, 16), 32, 32, false);
 
     layout->addWidget(line_edit, 1);
     layout->addWidget(browse_button);
@@ -216,14 +339,17 @@ PathFieldWidgets create_path_field(QWidget *parent, const QString &placeholder_t
     };
 }
 
-QToolButton *create_toolbar_button(const QString &icon_path, const QString &tooltip, QWidget *parent) {
+QToolButton *create_toolbar_button(
+    const QString &icon_path,
+    const QString &fallback_text,
+    const QString &tooltip,
+    QWidget *parent
+) {
     auto *button = new QToolButton(parent);
     button->setProperty("toolbarButton", true);
     button->setToolTip(tooltip);
     button->setCursor(Qt::PointingHandCursor);
-    button->setIcon(QIcon(icon_path));
-    button->setIconSize(QSize(18, 18));
-    button->setFixedSize(34, 34);
+    apply_icon_or_text(button, icon_path, fallback_text, QSize(18, 18), 34, 34, true);
     return button;
 }
 
@@ -271,16 +397,16 @@ QWidget {
     font-family: "Segoe UI";
     font-size: 12.5px;
 }
-QFrame#AccentStrip {
-    background: #ff3ea5;
-    border: none;
-}
 QFrame#HeaderFrame,
 QFrame#ToolbarFrame,
-QFrame#PanelFrame,
-QFrame#PreviewSurface {
+QFrame#PanelFrame {
     background: #ffffff;
     border: 1px solid #cfcfcf;
+    border-radius: 6px;
+}
+QFrame#PreviewSurface {
+    background: #111111;
+    border: 1px solid #1f1f1f;
     border-radius: 6px;
 }
 QLabel#BrandMark {
@@ -313,6 +439,9 @@ QToolButton[toolbarButton="true"] {
     border-radius: 4px;
     padding: 0;
 }
+QToolButton[toolbarButton="true"][iconFallback="true"] {
+    padding: 0 10px;
+}
 QToolButton[toolbarButton="true"]:hover,
 QPushButton[browseButton="true"]:hover,
 QPushButton#TimelineButton:hover {
@@ -324,6 +453,9 @@ QPushButton[browseButton="true"] {
     border-radius: 3px;
     color: #ffffff;
     padding: 0;
+}
+QPushButton[browseButton="true"][iconFallback="true"] {
+    padding: 0 8px;
 }
 QPushButton#TimelineButton {
     background: #ffffff;
@@ -344,11 +476,21 @@ QLineEdit,
 QComboBox,
 QSpinBox,
 QPlainTextEdit,
-QTableWidget,
 QTabWidget::pane {
     background: #ffffff;
     border: 1px solid #bdbdbd;
     border-radius: 4px;
+}
+QTableWidget {
+    background: #ffffff;
+}
+QTableWidget#QueueTable {
+    border: none;
+    border-radius: 0;
+    alternate-background-color: #f8f8f8;
+}
+QTableWidget#QueueTable::item {
+    border: none;
 }
 QLineEdit,
 QComboBox,
@@ -392,6 +534,15 @@ QHeaderView::section {
     padding: 8px;
     font-weight: 700;
 }
+QSplitter::handle {
+    background: #e4e4e4;
+}
+QSplitter::handle:horizontal {
+    width: 6px;
+}
+QSplitter::handle:vertical {
+    height: 6px;
+}
 QLabel#PreviewTitleLabel {
     color: #eeeeee;
     font-size: 18px;
@@ -418,11 +569,6 @@ QLabel#PreviewTimeBadge {
     auto *root_layout = new QVBoxLayout(central_widget);
     root_layout->setContentsMargins(0, 0, 0, 0);
     root_layout->setSpacing(0);
-
-    auto *accent_strip = new QFrame(central_widget);
-    accent_strip->setObjectName("AccentStrip");
-    accent_strip->setFixedHeight(6);
-    root_layout->addWidget(accent_strip);
 
     auto *content_widget = new QWidget(central_widget);
     auto *content_layout = new QVBoxLayout(content_widget);
@@ -468,10 +614,10 @@ QLabel#PreviewTimeBadge {
     toolbar_layout->setContentsMargins(10, 8, 10, 8);
     toolbar_layout->setSpacing(8);
 
-    add_button_ = create_toolbar_button(":/icons/add.svg", "Add source jobs", toolbar_frame);
-    remove_button_ = create_toolbar_button(":/icons/remove.svg", "Remove selected job", toolbar_frame);
-    settings_button_ = create_toolbar_button(":/icons/settings.svg", "Settings", toolbar_frame);
-    info_button_ = create_toolbar_button(":/icons/info.svg", "Info", toolbar_frame);
+    add_button_ = create_toolbar_button(":/icons/add.svg", "Add", "Add source jobs", toolbar_frame);
+    remove_button_ = create_toolbar_button(":/icons/remove.svg", "Remove", "Remove selected job", toolbar_frame);
+    settings_button_ = create_toolbar_button(":/icons/settings.svg", "Settings", "Settings", toolbar_frame);
+    info_button_ = create_toolbar_button(":/icons/info.svg", "Info", "Info", toolbar_frame);
     toolbar_layout->addWidget(add_button_);
     toolbar_layout->addWidget(remove_button_);
     toolbar_layout->addWidget(settings_button_);
@@ -495,24 +641,36 @@ QLabel#PreviewTimeBadge {
     ));
     priority_combo_->setMinimumWidth(160);
 
-    start_button_ = create_toolbar_button(":/icons/play.svg", "Start checked jobs", toolbar_frame);
-    stop_button_ = create_toolbar_button(":/icons/stop.svg", "Stop current job", toolbar_frame);
+    start_button_ = create_toolbar_button(":/icons/play.svg", "Start", "Start checked jobs", toolbar_frame);
+    stop_button_ = create_toolbar_button(":/icons/stop.svg", "Stop", "Stop current job", toolbar_frame);
     toolbar_layout->addWidget(priority_combo_);
     toolbar_layout->addWidget(start_button_);
     toolbar_layout->addWidget(stop_button_);
     content_layout->addWidget(toolbar_frame);
 
-    auto *queue_row = new QWidget(content_widget);
+    auto *body_splitter = new QSplitter(Qt::Vertical, content_widget);
+    body_splitter->setChildrenCollapsible(false);
+
+    auto *top_section = new QWidget(body_splitter);
+    top_section->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    auto *top_section_layout = new QVBoxLayout(top_section);
+    top_section_layout->setContentsMargins(0, 0, 0, 0);
+    top_section_layout->setSpacing(10);
+
+    auto *queue_row = new QWidget(top_section);
+    queue_row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *queue_row_layout = new QHBoxLayout(queue_row);
     queue_row_layout->setContentsMargins(0, 0, 0, 0);
     queue_row_layout->setSpacing(10);
 
     auto *queue_frame = new QFrame(queue_row);
     queue_frame->setObjectName("PanelFrame");
+    queue_frame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *queue_frame_layout = new QVBoxLayout(queue_frame);
     queue_frame_layout->setContentsMargins(8, 8, 8, 8);
 
     queue_table_ = new QTableWidget(queue_frame);
+    queue_table_->setObjectName("QueueTable");
     queue_table_->setColumnCount(6);
     queue_table_->setHorizontalHeaderLabels(QStringList{
         "File",
@@ -533,10 +691,16 @@ QLabel#PreviewTimeBadge {
     queue_table_->setSelectionMode(QAbstractItemView::SingleSelection);
     queue_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     queue_table_->setShowGrid(false);
-    queue_frame_layout->addWidget(queue_table_);
+    queue_table_->setAlternatingRowColors(true);
+    queue_table_->setFrameShape(QFrame::NoFrame);
+    queue_table_->setMinimumHeight(0);
+    queue_table_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    queue_table_->horizontalHeader()->setHighlightSections(false);
+    queue_frame_layout->addWidget(queue_table_, 1);
 
     auto *details_frame = new QFrame(queue_row);
     details_frame->setObjectName("PanelFrame");
+    details_frame->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     auto *details_layout = new QFormLayout(details_frame);
     details_layout->setContentsMargins(10, 10, 10, 10);
 
@@ -572,9 +736,9 @@ QLabel#PreviewTimeBadge {
 
     queue_row_layout->addWidget(queue_frame, 5);
     queue_row_layout->addWidget(details_frame, 2);
-    content_layout->addWidget(queue_row, 1);
+    top_section_layout->addWidget(queue_row, 1);
 
-    auto *output_frame = new QFrame(content_widget);
+    auto *output_frame = new QFrame(top_section);
     output_frame->setObjectName("PanelFrame");
     auto *output_layout = new QVBoxLayout(output_frame);
     output_layout->setContentsMargins(10, 8, 10, 8);
@@ -590,8 +754,7 @@ QLabel#PreviewTimeBadge {
     output_path_edit_->setPlaceholderText("Manual output path");
     output_browse_button_ = new QPushButton(output_frame);
     output_browse_button_->setProperty("browseButton", true);
-    output_browse_button_->setIcon(QIcon(":/icons/browse.svg"));
-    output_browse_button_->setFixedSize(32, 32);
+    apply_icon_or_text(output_browse_button_, ":/icons/browse.svg", "...", QSize(16, 16), 32, 32, false);
     same_as_input_check_ = new QCheckBox("Same as input", output_frame);
     same_as_input_check_->setCursor(Qt::PointingHandCursor);
 
@@ -608,10 +771,12 @@ QLabel#PreviewTimeBadge {
     output_note->setObjectName("MutedNote");
     output_note->setWordWrap(true);
     output_layout->addWidget(output_note);
-    content_layout->addWidget(output_frame);
+    top_section_layout->addWidget(output_frame);
 
-    auto *content_splitter = new QSplitter(Qt::Horizontal, content_widget);
+    auto *content_splitter = new QSplitter(Qt::Horizontal, body_splitter);
+    content_splitter->setChildrenCollapsible(false);
     editor_tabs_ = new QTabWidget(content_splitter);
+    editor_tabs_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
     auto *main_tab_content = new QWidget(editor_tabs_);
     auto *main_tab_layout = new QVBoxLayout(main_tab_content);
@@ -787,6 +952,7 @@ QLabel#PreviewTimeBadge {
     editor_tabs_->addTab(logs_tab, "Logs");
 
     auto *right_tabs = new QTabWidget(content_splitter);
+    right_tabs->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *preview_tab = new QWidget(right_tabs);
     auto *preview_tab_layout = new QVBoxLayout(preview_tab);
     preview_tab_layout->setContentsMargins(10, 10, 10, 10);
@@ -802,8 +968,8 @@ QLabel#PreviewTimeBadge {
 
     auto *preview_surface = new QFrame(preview_tab);
     preview_surface->setObjectName("PreviewSurface");
-    preview_surface->setMinimumHeight(280);
-    preview_surface->setStyleSheet("QFrame#PreviewSurface { background: #111111; }");
+    preview_surface->setMinimumHeight(180);
+    preview_surface->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *preview_surface_layout = new QVBoxLayout(preview_surface);
     preview_surface_layout->setContentsMargins(12, 12, 12, 12);
     preview_surface_layout->setSpacing(6);
@@ -825,9 +991,9 @@ QLabel#PreviewTimeBadge {
     preview_badge_row->addStretch(1);
     preview_badge_row->addWidget(preview_time_badge_);
     preview_surface_layout->addLayout(preview_badge_row);
-    preview_tab_layout->addWidget(preview_surface);
 
     auto *timeline_group = new QGroupBox("Timeline", preview_tab);
+    timeline_group->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     auto *timeline_layout = new QVBoxLayout(timeline_group);
     timeline_layout->setSpacing(8);
     auto *timeline_badges = new QHBoxLayout();
@@ -849,10 +1015,10 @@ QLabel#PreviewTimeBadge {
     timeline_buttons->setSpacing(6);
     frame_back_button_ = new QPushButton(timeline_group);
     frame_back_button_->setObjectName("TimelineButton");
-    frame_back_button_->setIcon(QIcon(":/icons/frame-back.svg"));
+    apply_icon_or_text(frame_back_button_, ":/icons/frame-back.svg", "<", QSize(16, 16), 34, 28, false);
     frame_forward_button_ = new QPushButton(timeline_group);
     frame_forward_button_->setObjectName("TimelineButton");
-    frame_forward_button_->setIcon(QIcon(":/icons/frame-forward.svg"));
+    apply_icon_or_text(frame_forward_button_, ":/icons/frame-forward.svg", ">", QSize(16, 16), 34, 28, false);
     set_in_button_ = new QPushButton("Set IN", timeline_group);
     set_in_button_->setObjectName("TimelineButton");
     set_out_button_ = new QPushButton("Set OUT", timeline_group);
@@ -871,6 +1037,7 @@ QLabel#PreviewTimeBadge {
     timeline_layout->addLayout(timeline_buttons);
 
     trim_timeline_widget_ = new TrimTimelineWidget(timeline_group);
+    trim_timeline_widget_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     timeline_layout->addWidget(trim_timeline_widget_);
     auto *timeline_note = new QLabel(
         "Trim applies only to the main source clip. Thumbnail, intro, and endcard are outside this trim range, and the trim UI is currently staged ahead of core trim support.",
@@ -879,7 +1046,14 @@ QLabel#PreviewTimeBadge {
     timeline_note->setObjectName("MutedNote");
     timeline_note->setWordWrap(true);
     timeline_layout->addWidget(timeline_note);
-    preview_tab_layout->addWidget(timeline_group);
+
+    auto *preview_splitter = new QSplitter(Qt::Vertical, preview_tab);
+    preview_splitter->setChildrenCollapsible(false);
+    preview_splitter->addWidget(preview_surface);
+    preview_splitter->addWidget(timeline_group);
+    preview_splitter->setStretchFactor(0, 4);
+    preview_splitter->setStretchFactor(1, 2);
+    preview_tab_layout->addWidget(preview_splitter, 1);
     right_tabs->addTab(preview_tab, "Preview");
 
     auto *task_log_tab = new QWidget(right_tabs);
@@ -900,10 +1074,19 @@ QLabel#PreviewTimeBadge {
     content_splitter->addWidget(right_tabs);
     content_splitter->setStretchFactor(0, 5);
     content_splitter->setStretchFactor(1, 4);
-    content_layout->addWidget(content_splitter, 1);
+
+    body_splitter->addWidget(top_section);
+    body_splitter->addWidget(content_splitter);
+    body_splitter->setStretchFactor(0, 3);
+    body_splitter->setStretchFactor(1, 5);
+    content_layout->addWidget(body_splitter, 1);
 
     root_layout->addWidget(content_widget, 1);
     setCentralWidget(central_widget);
+
+    QTimer::singleShot(0, this, [this]() {
+        apply_native_caption_accent(this);
+    });
 
     connect(runner_controller_, &EncodeJobRunnerController::running_changed, this, &MainWindow::handle_running_changed);
     connect(runner_controller_, &EncodeJobRunnerController::progress_changed, this, &MainWindow::handle_progress_changed);
@@ -1337,6 +1520,9 @@ void MainWindow::handle_top_window_toggled(const bool enabled) {
     setWindowFlag(Qt::WindowStaysOnTopHint, enabled);
     if (was_visible) {
         show();
+        QTimer::singleShot(0, this, [this]() {
+            apply_native_caption_accent(this);
+        });
     }
 }
 
@@ -1648,22 +1834,27 @@ void MainWindow::refresh_queue_table() {
         file_item->setFlags(file_flags);
         file_item->setCheckState(job.checked ? Qt::Checked : Qt::Unchecked);
         file_item->setToolTip(job.source_path);
-        file_item->setBackground(accent_for_state(job.state));
-        file_item->setForeground(foreground_for_state(job.state));
+        file_item->setTextAlignment(Qt::AlignVCenter | Qt::AlignLeft);
         queue_table_->setItem(row, 0, file_item);
 
-        const auto make_item = [](const QString &text) {
+        const auto make_item = [](const QString &text, const Qt::Alignment alignment = Qt::AlignVCenter | Qt::AlignLeft) {
             auto *item = new QTableWidgetItem(text);
             item->setFlags(Qt::ItemIsSelectable | Qt::ItemIsEnabled);
+            item->setTextAlignment(alignment);
             return item;
         };
 
         queue_table_->setItem(row, 1, make_item(job.type_label));
-        auto *status_item = make_item(format_job_state_text(job));
+        auto *status_item = make_item(format_job_state_text(job), Qt::AlignCenter);
         status_item->setForeground(foreground_for_state(job.state));
+        const QIcon status_icon = make_status_indicator_icon(job.state);
+        if (!status_icon.isNull()) {
+            status_item->setIcon(status_icon);
+        }
+        status_item->setToolTip(job.last_status_message);
         queue_table_->setItem(row, 2, status_item);
-        queue_table_->setItem(row, 3, make_item(job.efps_display));
-        queue_table_->setItem(row, 4, make_item(job.speed_display));
+        queue_table_->setItem(row, 3, make_item(job.efps_display, Qt::AlignCenter));
+        queue_table_->setItem(row, 4, make_item(job.speed_display, Qt::AlignCenter));
         queue_table_->setItem(row, 5, make_item(basename_from_path(job.output_path)));
     }
 
@@ -1867,14 +2058,21 @@ void MainWindow::update_start_button_visuals() {
             busy_spinner_timer_->start();
         }
         start_button_->setToolTip(stop_requested_ ? "Stopping..." : "Encoding...");
+        start_button_->setText(QString{});
+        start_button_->setProperty("iconFallback", false);
         start_button_->setIcon(make_busy_icon(busy_spinner_phase_));
+        start_button_->setMinimumWidth(34);
+        start_button_->setMaximumWidth(34);
+        start_button_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        start_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        refresh_button_style(start_button_);
         return;
     }
 
     busy_spinner_timer_->stop();
     busy_spinner_phase_ = 0;
     start_button_->setToolTip("Start checked jobs");
-    start_button_->setIcon(QIcon(":/icons/play.svg"));
+    apply_icon_or_text(start_button_, ":/icons/play.svg", "Start", QSize(18, 18), 34, 34, true);
 }
 
 void MainWindow::advance_busy_spinner() {
