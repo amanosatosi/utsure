@@ -220,9 +220,15 @@ QIcon make_status_indicator_icon(const MainWindow::UiJobState state) {
     return QIcon(pixmap);
 }
 
-QIcon load_svg_icon(const QString &resource_path, const QSize &icon_size) {
+QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size) {
     if (resource_path.isEmpty() || !QFile::exists(resource_path)) {
         return {};
+    }
+
+    const QIcon direct_icon(resource_path);
+    const QPixmap direct_pixmap = direct_icon.pixmap(icon_size);
+    if (!direct_pixmap.isNull()) {
+        return direct_icon;
     }
 
     QSvgRenderer renderer(resource_path);
@@ -267,7 +273,7 @@ void apply_icon_or_text(
         return;
     }
 
-    const QIcon icon = load_svg_icon(resource_path, icon_size);
+    const QIcon icon = load_resource_icon(resource_path, icon_size);
     const bool has_icon = !icon.isNull();
 
     button->setIconSize(icon_size);
@@ -329,7 +335,7 @@ PathFieldWidgets create_path_field(QWidget *parent, const QString &placeholder_t
     browse_button->setProperty("browseButton", true);
     browse_button->setToolTip(browse_tooltip);
     browse_button->setCursor(Qt::PointingHandCursor);
-    apply_icon_or_text(browse_button, ":/icons/browse.svg", "...", QSize(16, 16), 32, 32, false);
+    apply_icon_or_text(browse_button, ":/icons/browse.svg", "...", QSize(15, 15), 30, 30, false);
 
     layout->addWidget(line_edit, 1);
     layout->addWidget(browse_button);
@@ -351,7 +357,7 @@ QToolButton *create_toolbar_button(
     button->setProperty("toolbarButton", true);
     button->setToolTip(tooltip);
     button->setCursor(Qt::PointingHandCursor);
-    apply_icon_or_text(button, icon_path, fallback_text, QSize(18, 18), 34, 34, true);
+    apply_icon_or_text(button, icon_path, fallback_text, QSize(16, 16), 30, 30, true);
     return button;
 }
 
@@ -390,14 +396,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setWindowTitle(QString("%1 %2")
                        .arg(to_qstring(utsure::core::BuildInfo::project_name()))
                        .arg(to_qstring(utsure::core::BuildInfo::project_version())));
-    resize(1360, 900);
+    resize(1280, 760);
+    setMinimumSize(1040, 620);
 
     setStyleSheet(R"(
 QWidget {
     background: #f2f2f2;
     color: #1f1f1f;
     font-family: "Segoe UI";
-    font-size: 12.5px;
+    font-size: 12px;
 }
 QFrame#HeaderFrame,
 QFrame#ToolbarFrame,
@@ -412,20 +419,21 @@ QFrame#PreviewSurface {
     border-radius: 6px;
 }
 QLabel#BrandMark {
-    min-width: 34px;
-    min-height: 34px;
-    max-width: 34px;
-    max-height: 34px;
-    border-radius: 7px;
+    min-width: 30px;
+    min-height: 30px;
+    max-width: 30px;
+    max-height: 30px;
+    border-radius: 6px;
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #ff7bc7, stop:1 #ff3ea5);
     color: white;
-    font-size: 17px;
+    font-family: "Yu Gothic UI", "Yu Gothic", "Meiryo UI", "Meiryo", "Segoe UI";
+    font-size: 16px;
     font-weight: 900;
-    padding-top: 4px;
+    padding: 0;
 }
 QLabel#BrandName {
     color: #ff3ea5;
-    font-size: 18px;
+    font-size: 17px;
     font-weight: 900;
 }
 QLabel#BrandSubtitle,
@@ -463,16 +471,16 @@ QPushButton#TimelineButton {
     background: #ffffff;
     border: 1px solid #cfcfcf;
     border-radius: 4px;
-    min-height: 28px;
-    padding: 0 10px;
+    min-height: 26px;
+    padding: 0 8px;
 }
 QPushButton#TimelinePrimaryButton {
     background: #ff3ea5;
     border: 1px solid #d92f86;
     border-radius: 4px;
     color: #ffffff;
-    min-height: 28px;
-    padding: 0 10px;
+    min-height: 26px;
+    padding: 0 8px;
 }
 QLineEdit,
 QComboBox,
@@ -497,20 +505,20 @@ QTableWidget#QueueTable::item {
 QLineEdit,
 QComboBox,
 QSpinBox {
-    min-height: 30px;
+    min-height: 28px;
     padding: 4px 8px;
 }
 QGroupBox {
     background: #ffffff;
     border: 1px solid #cfcfcf;
     border-radius: 6px;
-    margin-top: 8px;
-    padding-top: 14px;
+    margin-top: 6px;
+    padding-top: 12px;
     font-weight: 700;
 }
 QGroupBox::title {
     subcontrol-origin: margin;
-    left: 10px;
+    left: 8px;
     padding: 0 4px;
 }
 QTabBar::tab {
@@ -519,21 +527,21 @@ QTabBar::tab {
     border-bottom: none;
     border-top-left-radius: 6px;
     border-top-right-radius: 6px;
-    padding: 7px 12px;
-    margin-right: 4px;
+    padding: 6px 10px;
+    margin-right: 3px;
     color: #6b6b6b;
 }
 QTabBar::tab:selected {
     background: #ffffff;
     color: #111111;
     border-top: 2px solid #ff3ea5;
-    padding-top: 6px;
+    padding-top: 5px;
 }
 QHeaderView::section {
     background: #fafafa;
     border: none;
     border-bottom: 1px solid #cfcfcf;
-    padding: 8px;
+    padding: 6px;
     font-weight: 700;
 }
 QSplitter::handle {
@@ -547,7 +555,7 @@ QSplitter::handle:vertical {
 }
 QLabel#PreviewTitleLabel {
     color: #eeeeee;
-    font-size: 18px;
+    font-size: 16px;
     font-weight: 900;
     letter-spacing: 0.7px;
 }
@@ -558,7 +566,7 @@ QLabel#PreviewTimeBadge {
     background: rgba(0, 0, 0, 140);
     color: #ffffff;
     border-radius: 10px;
-    padding: 4px 8px;
+    padding: 3px 7px;
     font-family: Consolas, "Courier New", monospace;
 }
 )");
@@ -574,19 +582,19 @@ QLabel#PreviewTimeBadge {
 
     auto *content_widget = new QWidget(central_widget);
     auto *content_layout = new QVBoxLayout(content_widget);
-    content_layout->setContentsMargins(10, 8, 10, 10);
-    content_layout->setSpacing(10);
+    content_layout->setContentsMargins(8, 6, 8, 8);
+    content_layout->setSpacing(8);
 
     auto *header_frame = new QFrame(content_widget);
     header_frame->setObjectName("HeaderFrame");
     auto *header_layout = new QHBoxLayout(header_frame);
-    header_layout->setContentsMargins(12, 8, 12, 8);
+    header_layout->setContentsMargins(10, 6, 10, 6);
 
     auto *brand_layout = new QHBoxLayout();
     brand_layout->setContentsMargins(0, 0, 0, 0);
-    brand_layout->setSpacing(10);
+    brand_layout->setSpacing(8);
 
-    auto *brand_mark = new QLabel("U", header_frame);
+    auto *brand_mark = new QLabel(QString::fromUtf8(u8"\u5199"), header_frame);
     brand_mark->setObjectName("BrandMark");
     brand_mark->setAlignment(Qt::AlignCenter);
 
@@ -613,8 +621,8 @@ QLabel#PreviewTimeBadge {
     auto *toolbar_frame = new QFrame(content_widget);
     toolbar_frame->setObjectName("ToolbarFrame");
     auto *toolbar_layout = new QHBoxLayout(toolbar_frame);
-    toolbar_layout->setContentsMargins(10, 8, 10, 8);
-    toolbar_layout->setSpacing(8);
+    toolbar_layout->setContentsMargins(8, 6, 8, 6);
+    toolbar_layout->setSpacing(6);
 
     add_button_ = create_toolbar_button(":/icons/add.svg", "Add", "Add source jobs", toolbar_frame);
     remove_button_ = create_toolbar_button(":/icons/remove.svg", "Remove", "Remove selected job", toolbar_frame);
@@ -641,7 +649,7 @@ QLabel#PreviewTimeBadge {
     priority_combo_->setCurrentIndex(priority_combo_->findData(
         static_cast<int>(utsure::core::job::EncodeJobProcessPriority::below_normal)
     ));
-    priority_combo_->setMinimumWidth(160);
+    priority_combo_->setMinimumWidth(148);
 
     start_button_ = create_toolbar_button(":/icons/play.svg", "Start", "Start checked jobs", toolbar_frame);
     stop_button_ = create_toolbar_button(":/icons/stop.svg", "Stop", "Stop current job", toolbar_frame);
@@ -657,19 +665,19 @@ QLabel#PreviewTimeBadge {
     top_section->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *top_section_layout = new QVBoxLayout(top_section);
     top_section_layout->setContentsMargins(0, 0, 0, 0);
-    top_section_layout->setSpacing(10);
+    top_section_layout->setSpacing(8);
 
     auto *queue_row = new QWidget(top_section);
     queue_row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *queue_row_layout = new QHBoxLayout(queue_row);
     queue_row_layout->setContentsMargins(0, 0, 0, 0);
-    queue_row_layout->setSpacing(10);
+    queue_row_layout->setSpacing(8);
 
     auto *queue_frame = new QFrame(queue_row);
     queue_frame->setObjectName("PanelFrame");
     queue_frame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *queue_frame_layout = new QVBoxLayout(queue_frame);
-    queue_frame_layout->setContentsMargins(8, 8, 8, 8);
+    queue_frame_layout->setContentsMargins(6, 6, 6, 6);
 
     queue_table_ = new QTableWidget(queue_frame);
     queue_table_->setObjectName("QueueTable");
@@ -698,13 +706,17 @@ QLabel#PreviewTimeBadge {
     queue_table_->setMinimumHeight(0);
     queue_table_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     queue_table_->horizontalHeader()->setHighlightSections(false);
+    queue_table_->verticalHeader()->setDefaultSectionSize(24);
+    queue_table_->setWordWrap(false);
     queue_frame_layout->addWidget(queue_table_, 1);
 
     auto *details_frame = new QFrame(queue_row);
     details_frame->setObjectName("PanelFrame");
     details_frame->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     auto *details_layout = new QFormLayout(details_frame);
-    details_layout->setContentsMargins(10, 10, 10, 10);
+    details_layout->setContentsMargins(8, 8, 8, 8);
+    details_layout->setHorizontalSpacing(8);
+    details_layout->setVerticalSpacing(4);
 
     const auto make_detail_label = [details_frame]() {
         auto *label = new QLabel("--", details_frame);
@@ -743,12 +755,12 @@ QLabel#PreviewTimeBadge {
     auto *output_frame = new QFrame(top_section);
     output_frame->setObjectName("PanelFrame");
     auto *output_layout = new QVBoxLayout(output_frame);
-    output_layout->setContentsMargins(10, 8, 10, 8);
-    output_layout->setSpacing(6);
+    output_layout->setContentsMargins(8, 6, 8, 6);
+    output_layout->setSpacing(4);
 
     auto *output_row = new QHBoxLayout();
     output_row->setContentsMargins(0, 0, 0, 0);
-    output_row->setSpacing(10);
+    output_row->setSpacing(8);
 
     auto *output_label = new QLabel("Output", output_frame);
     output_label->setMinimumWidth(52);
@@ -756,7 +768,7 @@ QLabel#PreviewTimeBadge {
     output_path_edit_->setPlaceholderText("Manual output path");
     output_browse_button_ = new QPushButton(output_frame);
     output_browse_button_->setProperty("browseButton", true);
-    apply_icon_or_text(output_browse_button_, ":/icons/browse.svg", "...", QSize(16, 16), 32, 32, false);
+    apply_icon_or_text(output_browse_button_, ":/icons/browse.svg", "...", QSize(15, 15), 30, 30, false);
     same_as_input_check_ = new QCheckBox("Same as input", output_frame);
     same_as_input_check_->setCursor(Qt::PointingHandCursor);
 
@@ -782,8 +794,8 @@ QLabel#PreviewTimeBadge {
 
     auto *main_tab_content = new QWidget(editor_tabs_);
     auto *main_tab_layout = new QVBoxLayout(main_tab_content);
-    main_tab_layout->setContentsMargins(10, 10, 10, 10);
-    main_tab_layout->setSpacing(10);
+    main_tab_layout->setContentsMargins(8, 8, 8, 8);
+    main_tab_layout->setSpacing(8);
 
     auto *subtitle_group = new QGroupBox("Subtitle", main_tab_content);
     auto *subtitle_layout = new QGridLayout(subtitle_group);
@@ -852,8 +864,8 @@ QLabel#PreviewTimeBadge {
 
     auto *encode_tab_content = new QWidget(editor_tabs_);
     auto *encode_tab_layout = new QHBoxLayout(encode_tab_content);
-    encode_tab_layout->setContentsMargins(10, 10, 10, 10);
-    encode_tab_layout->setSpacing(10);
+    encode_tab_layout->setContentsMargins(8, 8, 8, 8);
+    encode_tab_layout->setSpacing(8);
 
     auto *video_group = new QGroupBox("Video", encode_tab_content);
     auto *video_layout = new QFormLayout(video_group);
@@ -910,8 +922,8 @@ QLabel#PreviewTimeBadge {
 
     auto *special_tab_content = new QWidget(editor_tabs_);
     auto *special_tab_layout = new QVBoxLayout(special_tab_content);
-    special_tab_layout->setContentsMargins(10, 10, 10, 10);
-    special_tab_layout->setSpacing(10);
+    special_tab_layout->setContentsMargins(8, 8, 8, 8);
+    special_tab_layout->setSpacing(8);
 
     auto *thumbnail_group = new QGroupBox("Thumbnail Pre-roll", special_tab_content);
     auto *thumbnail_layout = new QGridLayout(thumbnail_group);
@@ -945,7 +957,7 @@ QLabel#PreviewTimeBadge {
 
     auto *logs_tab = new QWidget(editor_tabs_);
     auto *logs_tab_layout = new QVBoxLayout(logs_tab);
-    logs_tab_layout->setContentsMargins(10, 10, 10, 10);
+    logs_tab_layout->setContentsMargins(8, 8, 8, 8);
     session_log_view_ = new QPlainTextEdit(logs_tab);
     session_log_view_->setReadOnly(true);
     session_log_view_->setLineWrapMode(QPlainTextEdit::NoWrap);
@@ -957,8 +969,8 @@ QLabel#PreviewTimeBadge {
     right_tabs->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *preview_tab = new QWidget(right_tabs);
     auto *preview_tab_layout = new QVBoxLayout(preview_tab);
-    preview_tab_layout->setContentsMargins(10, 10, 10, 10);
-    preview_tab_layout->setSpacing(10);
+    preview_tab_layout->setContentsMargins(8, 8, 8, 8);
+    preview_tab_layout->setSpacing(8);
 
     auto *preview_top_row = new QHBoxLayout();
     preview_top_row->setContentsMargins(0, 0, 0, 0);
@@ -970,11 +982,11 @@ QLabel#PreviewTimeBadge {
 
     auto *preview_surface = new QFrame(preview_tab);
     preview_surface->setObjectName("PreviewSurface");
-    preview_surface->setMinimumHeight(180);
+    preview_surface->setMinimumHeight(150);
     preview_surface->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *preview_surface_layout = new QVBoxLayout(preview_surface);
-    preview_surface_layout->setContentsMargins(12, 12, 12, 12);
-    preview_surface_layout->setSpacing(6);
+    preview_surface_layout->setContentsMargins(10, 10, 10, 10);
+    preview_surface_layout->setSpacing(4);
     preview_title_label_ = new QLabel("PREVIEW OFFLINE", preview_surface);
     preview_title_label_->setObjectName("PreviewTitleLabel");
     preview_title_label_->setAlignment(Qt::AlignCenter);
@@ -997,7 +1009,7 @@ QLabel#PreviewTimeBadge {
     auto *timeline_group = new QGroupBox("Timeline", preview_tab);
     timeline_group->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     auto *timeline_layout = new QVBoxLayout(timeline_group);
-    timeline_layout->setSpacing(8);
+    timeline_layout->setSpacing(6);
     auto *timeline_badges = new QHBoxLayout();
     timeline_badges->setContentsMargins(0, 0, 0, 0);
     current_time_value_ = new QLabel("t=00:00:00.000", timeline_group);
@@ -1005,7 +1017,7 @@ QLabel#PreviewTimeBadge {
     trim_out_value_ = new QLabel("OUT=00:00:00.000", timeline_group);
     for (const auto label : {current_time_value_, trim_in_value_, trim_out_value_}) {
         label->setStyleSheet(
-            "QLabel { background: #ffffff; border: 1px solid #cfcfcf; border-radius: 10px; padding: 4px 8px; font-family: Consolas, 'Courier New', monospace; }"
+            "QLabel { background: #ffffff; border: 1px solid #cfcfcf; border-radius: 10px; padding: 3px 7px; font-family: Consolas, 'Courier New', monospace; }"
         );
         timeline_badges->addWidget(label);
     }
@@ -1017,10 +1029,10 @@ QLabel#PreviewTimeBadge {
     timeline_buttons->setSpacing(6);
     frame_back_button_ = new QPushButton(timeline_group);
     frame_back_button_->setObjectName("TimelineButton");
-    apply_icon_or_text(frame_back_button_, ":/icons/frame-back.svg", "<", QSize(16, 16), 34, 28, false);
+    apply_icon_or_text(frame_back_button_, ":/icons/frame-back.svg", "<", QSize(14, 14), 30, 26, false);
     frame_forward_button_ = new QPushButton(timeline_group);
     frame_forward_button_->setObjectName("TimelineButton");
-    apply_icon_or_text(frame_forward_button_, ":/icons/frame-forward.svg", ">", QSize(16, 16), 34, 28, false);
+    apply_icon_or_text(frame_forward_button_, ":/icons/frame-forward.svg", ">", QSize(14, 14), 30, 26, false);
     set_in_button_ = new QPushButton("Set IN", timeline_group);
     set_in_button_->setObjectName("TimelineButton");
     set_out_button_ = new QPushButton("Set OUT", timeline_group);
@@ -1053,14 +1065,14 @@ QLabel#PreviewTimeBadge {
     preview_splitter->setChildrenCollapsible(false);
     preview_splitter->addWidget(preview_surface);
     preview_splitter->addWidget(timeline_group);
-    preview_splitter->setStretchFactor(0, 4);
+    preview_splitter->setStretchFactor(0, 3);
     preview_splitter->setStretchFactor(1, 2);
     preview_tab_layout->addWidget(preview_splitter, 1);
     right_tabs->addTab(preview_tab, "Preview");
 
     auto *task_log_tab = new QWidget(right_tabs);
     auto *task_log_layout = new QVBoxLayout(task_log_tab);
-    task_log_layout->setContentsMargins(10, 10, 10, 10);
+    task_log_layout->setContentsMargins(8, 8, 8, 8);
     task_log_summary_label_ = new QLabel("Select a job to inspect its task log.", task_log_tab);
     task_log_summary_label_->setObjectName("TaskLogSummaryLabel");
     task_log_summary_label_->setWordWrap(true);
@@ -1079,14 +1091,16 @@ QLabel#PreviewTimeBadge {
 
     body_splitter->addWidget(top_section);
     body_splitter->addWidget(content_splitter);
-    body_splitter->setStretchFactor(0, 3);
+    body_splitter->setStretchFactor(0, 2);
     body_splitter->setStretchFactor(1, 5);
     content_layout->addWidget(body_splitter, 1);
 
     root_layout->addWidget(content_widget, 1);
     setCentralWidget(central_widget);
 
-    QTimer::singleShot(0, this, [this]() {
+    QTimer::singleShot(0, this, [this, body_splitter, preview_splitter]() {
+        body_splitter->setSizes(QList<int>{240, 420});
+        preview_splitter->setSizes(QList<int>{220, 170});
         apply_native_caption_accent(this);
     });
 
@@ -2063,8 +2077,8 @@ void MainWindow::update_start_button_visuals() {
         start_button_->setText(QString{});
         start_button_->setProperty("iconFallback", false);
         start_button_->setIcon(make_busy_icon(busy_spinner_phase_));
-        start_button_->setMinimumWidth(34);
-        start_button_->setMaximumWidth(34);
+        start_button_->setMinimumWidth(30);
+        start_button_->setMaximumWidth(30);
         start_button_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         start_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
         refresh_button_style(start_button_);
@@ -2074,7 +2088,7 @@ void MainWindow::update_start_button_visuals() {
     busy_spinner_timer_->stop();
     busy_spinner_phase_ = 0;
     start_button_->setToolTip("Start checked jobs");
-    apply_icon_or_text(start_button_, ":/icons/play.svg", "Start", QSize(18, 18), 34, 34, true);
+    apply_icon_or_text(start_button_, ":/icons/play.svg", "Start", QSize(16, 16), 30, 30, true);
 }
 
 void MainWindow::advance_busy_spinner() {

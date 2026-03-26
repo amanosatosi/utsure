@@ -8,7 +8,7 @@
 
 namespace {
 
-constexpr auto kTrackHeight = 36.0;
+constexpr auto kTrackHeight = 30.0;
 constexpr auto kTrackMargin = 8.0;
 constexpr auto kHandleWidth = 3.0;
 constexpr auto kTickSpacing = 50.0;
@@ -20,7 +20,7 @@ qint64 clamp_time(const qint64 value, const qint64 duration_us) {
 }  // namespace
 
 TrimTimelineWidget::TrimTimelineWidget(QWidget *parent) : QWidget(parent) {
-    setMinimumHeight(54);
+    setMinimumHeight(46);
     setMouseTracking(true);
 }
 
@@ -67,11 +67,11 @@ void TrimTimelineWidget::set_trim_range_us(qint64 trim_in_us, qint64 trim_out_us
 }
 
 QSize TrimTimelineWidget::sizeHint() const {
-    return QSize(480, 54);
+    return QSize(480, 46);
 }
 
 QSize TrimTimelineWidget::minimumSizeHint() const {
-    return QSize(240, 54);
+    return QSize(220, 46);
 }
 
 void TrimTimelineWidget::paintEvent(QPaintEvent *event) {

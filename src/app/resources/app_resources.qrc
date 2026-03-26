@@ -1,13 +1,13 @@
 <RCC>
-  <qresource prefix="/">
-    <file>icons/add.svg</file>
-    <file>icons/remove.svg</file>
-    <file>icons/settings.svg</file>
-    <file>icons/info.svg</file>
-    <file>icons/play.svg</file>
-    <file>icons/stop.svg</file>
-    <file>icons/browse.svg</file>
-    <file>icons/frame-back.svg</file>
-    <file>icons/frame-forward.svg</file>
+  <qresource prefix="/icons">
+    <file alias="add.svg">icons/add.svg</file>
+    <file alias="remove.svg">icons/remove.svg</file>
+    <file alias="settings.svg">icons/settings.svg</file>
+    <file alias="info.svg">icons/info.svg</file>
+    <file alias="play.svg">icons/play.svg</file>
+    <file alias="stop.svg">icons/stop.svg</file>
+    <file alias="browse.svg">icons/browse.svg</file>
+    <file alias="frame-back.svg">icons/frame-back.svg</file>
+    <file alias="frame-forward.svg">icons/frame-forward.svg</file>
   </qresource>
 </RCC>
