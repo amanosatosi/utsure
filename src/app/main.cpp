@@ -6,6 +6,7 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QDebug>
+#include <QResource>
 #include <QTimer>
 
 namespace {
@@ -18,6 +19,7 @@ QString to_qstring(std::string_view text) {
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
+    Q_INIT_RESOURCE(app_resources);
     QApplication::setApplicationName(to_qstring(utsure::core::BuildInfo::project_name()));
     QApplication::setApplicationVersion(to_qstring(utsure::core::BuildInfo::project_version()));
 

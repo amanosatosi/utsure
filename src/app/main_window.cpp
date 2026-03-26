@@ -428,8 +428,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setWindowTitle(QString("%1 %2")
                        .arg(to_qstring(utsure::core::BuildInfo::project_name()))
                        .arg(to_qstring(utsure::core::BuildInfo::project_version())));
-    resize(1280, 760);
-    setMinimumSize(1040, 620);
+    resize(1240, 680);
+    setMinimumSize(960, 500);
 
     setStyleSheet(R"(
 QWidget {
@@ -530,9 +530,18 @@ QTableWidget#QueueTable {
     border: none;
     border-radius: 0;
     alternate-background-color: #f8f8f8;
+    selection-background-color: #e8edf4;
+    selection-color: #1f1f1f;
+    outline: 0;
 }
 QTableWidget#QueueTable::item {
     border: none;
+}
+QTableWidget#QueueTable::item:selected,
+QTableWidget#QueueTable::item:selected:active,
+QTableWidget#QueueTable::item:selected:!active {
+    background: #e8edf4;
+    color: #1f1f1f;
 }
 QLineEdit,
 QComboBox,
@@ -1021,7 +1030,7 @@ QLabel#PreviewTimeBadge {
 
     auto *preview_surface = new QFrame(preview_tab);
     preview_surface->setObjectName("PreviewSurface");
-    preview_surface->setMinimumHeight(150);
+    preview_surface->setMinimumHeight(110);
     preview_surface->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *preview_surface_layout = new QVBoxLayout(preview_surface);
     preview_surface_layout->setContentsMargins(10, 10, 10, 10);
@@ -1138,8 +1147,8 @@ QLabel#PreviewTimeBadge {
     setCentralWidget(central_widget);
 
     QTimer::singleShot(0, this, [this, body_splitter, preview_splitter]() {
-        body_splitter->setSizes(QList<int>{240, 420});
-        preview_splitter->setSizes(QList<int>{220, 170});
+        body_splitter->setSizes(QList<int>{210, 320});
+        preview_splitter->setSizes(QList<int>{150, 120});
         apply_native_caption_accent(this);
     });
 
@@ -2019,13 +2028,15 @@ void MainWindow::refresh_selected_job_preview() {
     }
 
     const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
-    preview_time_badge_->setText(format_time_us(job.current_time_us));
 
     if (!preview_enabled_check_->isChecked()) {
         preview_title_label_->setText("PREVIEW OFFLINE");
         preview_context_label_->setText("Turn on Preview to enable the video preview surface.");
+        preview_time_badge_->setText("00:00:00.000");
         return;
     }
+
+    preview_time_badge_->setText(format_time_us(job.current_time_us));
 
     if (!job.source_inspection_error.isEmpty()) {
         preview_title_label_->setText("PREVIEW UNAVAILABLE");
