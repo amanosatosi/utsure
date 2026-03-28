@@ -100,6 +100,7 @@ private:
     [[nodiscard]] bool job_has_minimum_required_fields(const UiEncodeJob &job) const;
     [[nodiscard]] QString current_audio_quality_label() const;
     [[nodiscard]] bool is_valid_job_index(int index) const;
+    [[nodiscard]] qint64 selected_job_frame_step_us() const;
 
     void add_source_jobs();
     void add_source_jobs_from_paths(const QStringList &paths);
@@ -137,9 +138,17 @@ private:
     void apply_same_as_input_folder(UiEncodeJob &job);
     void request_selected_job_preview_frame();
     void clear_preview_surface();
+    void start_preview_playback();
+    void pause_preview_playback();
+    void stop_preview_playback();
+    void sync_preview_surface_state();
     void handle_preview_loading(quint64 request_token, qint64 requested_time_us);
     void handle_preview_ready(quint64 request_token, qint64 requested_time_us, qint64 frame_time_us, const QImage &image);
     void handle_preview_failed(quint64 request_token, qint64 requested_time_us, const QString &title, const QString &detail);
+    void handle_preview_surface_clicked();
+    void handle_preview_play_pause_requested();
+    void handle_preview_stop_requested();
+    void handle_preview_playback_tick();
 
     void refresh_all_views();
     void refresh_queue_table();
@@ -182,6 +191,8 @@ private:
     int busy_spinner_phase_{0};
     QElapsedTimer active_job_elapsed_timer_{};
     bool active_job_elapsed_valid_{false};
+    bool preview_playing_{false};
+    QElapsedTimer preview_playback_elapsed_timer_{};
     QStringList session_log_lines_{};
     quint64 preview_request_token_{0};
     int preview_requested_job_index_{-1};
@@ -255,6 +266,7 @@ private:
     QToolButton *start_button_{nullptr};
     QToolButton *stop_button_{nullptr};
     QTimer *busy_spinner_timer_{nullptr};
+    QTimer *preview_playback_timer_{nullptr};
     EncodeJobRunnerController *runner_controller_{nullptr};
     PreviewFrameRendererController *preview_renderer_controller_{nullptr};
 };

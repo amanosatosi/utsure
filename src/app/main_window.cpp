@@ -502,6 +502,9 @@ QFrame#PreviewSurface {
     border: 1px solid #1f1f1f;
     border-radius: 6px;
 }
+QWidget#PreviewTabCorner {
+    background: transparent;
+}
 QLabel#BrandMark {
     min-width: 30px;
     min-height: 30px;
@@ -538,8 +541,18 @@ QToolButton[toolbarButton="true"][iconFallback="true"] {
 }
 QToolButton[toolbarButton="true"]:hover,
 QPushButton[browseButton="true"]:hover,
+QToolButton#PreviewOverlayButton:hover,
 QPushButton#TimelineButton:hover {
     background: #f7f7f7;
+}
+QToolButton#PreviewOverlayButton {
+    background: rgba(255, 255, 255, 220);
+    border: 1px solid rgba(255, 255, 255, 120);
+    border-radius: 17px;
+    padding: 0;
+}
+QToolButton#PreviewOverlayButton[iconFallback="true"] {
+    padding: 0 10px;
 }
 QPushButton[browseButton="true"] {
     background: #19b7ff;
@@ -668,6 +681,9 @@ QLabel#PreviewTimeBadge {
     preview_renderer_controller_ = new PreviewFrameRendererController(this);
     busy_spinner_timer_ = new QTimer(this);
     busy_spinner_timer_->setInterval(90);
+    preview_playback_timer_ = new QTimer(this);
+    preview_playback_timer_->setInterval(33);
+    preview_playback_timer_->setTimerType(Qt::PreciseTimer);
 
     auto *central_widget = new QWidget(this);
     auto *root_layout = new QVBoxLayout(central_widget);
@@ -1068,22 +1084,25 @@ QLabel#PreviewTimeBadge {
 
     auto *right_tabs = new QTabWidget(content_splitter);
     right_tabs->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    auto *preview_corner_widget = new QWidget(right_tabs);
+    preview_corner_widget->setObjectName("PreviewTabCorner");
+    auto *preview_corner_layout = new QHBoxLayout(preview_corner_widget);
+    preview_corner_layout->setContentsMargins(0, 0, 0, 0);
+    preview_corner_layout->setSpacing(0);
+    preview_enabled_check_ = new QCheckBox("Preview", preview_corner_widget);
+    preview_enabled_check_->setCursor(Qt::PointingHandCursor);
+    preview_corner_layout->addStretch(1);
+    preview_corner_layout->addWidget(preview_enabled_check_);
+    right_tabs->setCornerWidget(preview_corner_widget, Qt::TopRightCorner);
+
     auto *preview_tab = new QWidget(right_tabs);
     auto *preview_tab_layout = new QVBoxLayout(preview_tab);
     preview_tab_layout->setContentsMargins(8, 8, 8, 8);
     preview_tab_layout->setSpacing(8);
 
-    auto *preview_top_row = new QHBoxLayout();
-    preview_top_row->setContentsMargins(0, 0, 0, 0);
-    preview_top_row->addStretch(1);
-    preview_enabled_check_ = new QCheckBox("Preview", preview_tab);
-    preview_enabled_check_->setCursor(Qt::PointingHandCursor);
-    preview_top_row->addWidget(preview_enabled_check_);
-    preview_tab_layout->addLayout(preview_top_row);
-
     auto *preview_surface = new QFrame(preview_tab);
     preview_surface->setObjectName("PreviewSurface");
-    preview_surface->setMinimumHeight(110);
+    preview_surface->setMinimumHeight(240);
     preview_surface->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *preview_surface_layout = new QVBoxLayout(preview_surface);
     preview_surface_layout->setContentsMargins(10, 10, 10, 10);
@@ -1121,18 +1140,34 @@ QLabel#PreviewTimeBadge {
     timeline_buttons->setSpacing(6);
     frame_back_button_ = new QPushButton(timeline_group);
     frame_back_button_->setObjectName("TimelineButton");
+    frame_back_button_->setCursor(Qt::PointingHandCursor);
+    frame_back_button_->setToolTip("Previous frame");
     apply_icon_or_text(frame_back_button_, ":/icons/frame-back.svg", "<", QSize(14, 14), 30, 26, false);
     frame_forward_button_ = new QPushButton(timeline_group);
     frame_forward_button_->setObjectName("TimelineButton");
+    frame_forward_button_->setCursor(Qt::PointingHandCursor);
+    frame_forward_button_->setToolTip("Next frame");
     apply_icon_or_text(frame_forward_button_, ":/icons/frame-forward.svg", ">", QSize(14, 14), 30, 26, false);
-    set_in_button_ = new QPushButton("Set IN", timeline_group);
+    set_in_button_ = new QPushButton(timeline_group);
     set_in_button_->setObjectName("TimelineButton");
-    set_out_button_ = new QPushButton("Set OUT", timeline_group);
+    set_in_button_->setCursor(Qt::PointingHandCursor);
+    set_in_button_->setToolTip("Set trim in to the current preview time");
+    apply_icon_or_text(set_in_button_, ":/icons/set-in.svg", "Set IN", QSize(15, 15), 34, 26, true);
+    set_out_button_ = new QPushButton(timeline_group);
     set_out_button_->setObjectName("TimelineButton");
-    jump_in_button_ = new QPushButton("To IN", timeline_group);
+    set_out_button_->setCursor(Qt::PointingHandCursor);
+    set_out_button_->setToolTip("Set trim out to the current preview time");
+    apply_icon_or_text(set_out_button_, ":/icons/set-out.svg", "Set OUT", QSize(15, 15), 34, 26, true);
+    jump_in_button_ = new QPushButton(timeline_group);
     jump_in_button_->setObjectName("TimelinePrimaryButton");
-    jump_out_button_ = new QPushButton("To OUT", timeline_group);
+    jump_in_button_->setCursor(Qt::PointingHandCursor);
+    jump_in_button_->setToolTip("Jump preview to trim in");
+    apply_icon_or_text(jump_in_button_, ":/icons/jump-in.svg", "To IN", QSize(15, 15), 36, 26, true);
+    jump_out_button_ = new QPushButton(timeline_group);
     jump_out_button_->setObjectName("TimelinePrimaryButton");
+    jump_out_button_->setCursor(Qt::PointingHandCursor);
+    jump_out_button_->setToolTip("Jump preview to trim out");
+    apply_icon_or_text(jump_out_button_, ":/icons/jump-out.svg", "To OUT", QSize(15, 15), 36, 26, true);
     timeline_buttons->addWidget(frame_back_button_);
     timeline_buttons->addWidget(frame_forward_button_);
     timeline_buttons->addWidget(set_in_button_);
@@ -1150,7 +1185,7 @@ QLabel#PreviewTimeBadge {
     preview_splitter->setChildrenCollapsible(false);
     preview_splitter->addWidget(preview_surface);
     preview_splitter->addWidget(timeline_group);
-    preview_splitter->setStretchFactor(0, 3);
+    preview_splitter->setStretchFactor(0, 5);
     preview_splitter->setStretchFactor(1, 2);
     preview_tab_layout->addWidget(preview_splitter, 1);
     right_tabs->addTab(preview_tab, "Preview");
@@ -1185,7 +1220,7 @@ QLabel#PreviewTimeBadge {
 
     QTimer::singleShot(0, this, [this, body_splitter, preview_splitter]() {
         body_splitter->setSizes(QList<int>{210, 320});
-        preview_splitter->setSizes(QList<int>{150, 120});
+        preview_splitter->setSizes(QList<int>{280, 120});
         apply_native_caption_accent(this);
     });
 
@@ -1223,7 +1258,16 @@ QLabel#PreviewTimeBadge {
         this,
         &MainWindow::handle_preview_failed
     );
+    connect(preview_surface_widget_, &PreviewSurfaceWidget::surface_clicked, this, &MainWindow::handle_preview_surface_clicked);
+    connect(
+        preview_surface_widget_,
+        &PreviewSurfaceWidget::play_pause_requested,
+        this,
+        &MainWindow::handle_preview_play_pause_requested
+    );
+    connect(preview_surface_widget_, &PreviewSurfaceWidget::stop_requested, this, &MainWindow::handle_preview_stop_requested);
     connect(busy_spinner_timer_, &QTimer::timeout, this, &MainWindow::advance_busy_spinner);
+    connect(preview_playback_timer_, &QTimer::timeout, this, &MainWindow::handle_preview_playback_tick);
 
     connect(add_button_, &QToolButton::clicked, this, &MainWindow::add_source_jobs);
     connect(remove_button_, &QToolButton::clicked, this, &MainWindow::remove_selected_job);
@@ -1294,7 +1338,7 @@ QString MainWindow::window_structure_summary() const {
         "- Queue row: batch queue table plus selected-job details summary\n"
         "- Output strip: selected-job output path plus Same as input toggle\n"
         "- Left tabs: Main, Encode, Special, and global Logs\n"
-        "- Right tabs: Preview with trim timeline plus selected-task log"
+        "- Right tabs: transport-controlled Preview with trim timeline plus selected-task log"
     );
 }
 
@@ -1417,6 +1461,21 @@ QString MainWindow::current_audio_quality_label() const {
 
 bool MainWindow::is_valid_job_index(const int index) const {
     return index >= 0 && index < static_cast<int>(jobs_.size());
+}
+
+qint64 MainWindow::selected_job_frame_step_us() const {
+    if (!is_valid_job_index(selected_job_index_)) {
+        return 41708;
+    }
+
+    const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    const double frame_rate = job.inspected_source_info.has_value() &&
+            job.inspected_source_info->primary_video_stream.has_value()
+        ? rational_to_double(job.inspected_source_info->primary_video_stream->average_frame_rate)
+        : 0.0;
+    return frame_rate > 0.0
+        ? static_cast<qint64>(std::llround(1000000.0 / frame_rate))
+        : 41708;
 }
 
 void MainWindow::add_source_jobs() {
@@ -1668,7 +1727,12 @@ void MainWindow::handle_same_as_input_toggled(const bool enabled) {
     refresh_all_views();
 }
 
-void MainWindow::handle_preview_toggled(const bool /*enabled*/) {
+void MainWindow::handle_preview_toggled(const bool enabled) {
+    if (!enabled) {
+        pause_preview_playback();
+    }
+
+    sync_preview_surface_state();
     refresh_selected_job_preview();
 }
 
@@ -1689,6 +1753,12 @@ void MainWindow::request_selected_job_preview_frame() {
         0,
         std::max<qint64>(job.duration_us, 0)
     );
+    const bool preview_context_changed =
+        preview_requested_job_index_ != selected_job_index_ ||
+        preview_requested_source_path_ != normalized_source_path ||
+        preview_requested_subtitle_enabled_ != subtitles_enabled ||
+        preview_requested_subtitle_path_ != normalized_subtitle_path ||
+        preview_requested_subtitle_format_hint_ != subtitle_format_hint;
 
     if (preview_requested_job_index_ == selected_job_index_ &&
         preview_requested_time_us_ == requested_time_us &&
@@ -1697,6 +1767,10 @@ void MainWindow::request_selected_job_preview_frame() {
         preview_requested_subtitle_path_ == normalized_subtitle_path &&
         preview_requested_subtitle_format_hint_ == subtitle_format_hint) {
         return;
+    }
+
+    if (preview_context_changed && preview_surface_widget_ != nullptr) {
+        preview_surface_widget_->clear_frame();
     }
 
     preview_requested_job_index_ = selected_job_index_;
@@ -1740,12 +1814,71 @@ void MainWindow::clear_preview_surface() {
     }
 }
 
+void MainWindow::start_preview_playback() {
+    if (!preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_) || preview_playback_timer_ == nullptr) {
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    const qint64 bounded_duration_us = std::max<qint64>(job.duration_us, 0);
+    const qint64 trim_in_us = std::clamp<qint64>(job.trim_in_us, 0, bounded_duration_us);
+    const qint64 trim_out_us = std::clamp<qint64>(std::max(job.trim_out_us, trim_in_us), trim_in_us, bounded_duration_us);
+
+    if (job.current_time_us < trim_in_us || job.current_time_us >= trim_out_us) {
+        job.current_time_us = trim_in_us;
+        refresh_trim_controls();
+        refresh_selected_job_preview();
+    }
+
+    preview_playing_ = true;
+    preview_playback_timer_->setInterval(
+        std::clamp<int>(static_cast<int>(selected_job_frame_step_us() / 1000), 16, 67)
+    );
+    preview_playback_elapsed_timer_.restart();
+    preview_playback_timer_->start();
+    sync_preview_surface_state();
+}
+
+void MainWindow::pause_preview_playback() {
+    preview_playing_ = false;
+    if (preview_playback_timer_ != nullptr) {
+        preview_playback_timer_->stop();
+    }
+    sync_preview_surface_state();
+}
+
+void MainWindow::stop_preview_playback() {
+    pause_preview_playback();
+    if (!is_valid_job_index(selected_job_index_)) {
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    job.current_time_us = std::clamp<qint64>(job.trim_in_us, 0, std::max<qint64>(job.duration_us, 0));
+    refresh_trim_controls();
+    refresh_selected_job_preview();
+}
+
+void MainWindow::sync_preview_surface_state() {
+    if (preview_surface_widget_ == nullptr || preview_enabled_check_ == nullptr) {
+        return;
+    }
+
+    const bool controls_enabled = preview_enabled_check_->isChecked() &&
+        is_valid_job_index(selected_job_index_) &&
+        jobs_[static_cast<std::size_t>(selected_job_index_)].source_inspection_error.trimmed().isEmpty();
+    preview_surface_widget_->set_controls_enabled(controls_enabled);
+    preview_surface_widget_->set_playing(preview_playing_);
+}
+
 void MainWindow::handle_preview_loading(const quint64 request_token, const qint64 requested_time_us) {
     if (request_token != preview_request_token_ || !preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_)) {
         return;
     }
 
-    preview_surface_widget_->set_placeholder("LOADING PREVIEW");
+    if (!preview_surface_widget_->has_frame()) {
+        preview_surface_widget_->set_placeholder("LOADING PREVIEW");
+    }
     preview_time_badge_->setText(format_time_us(requested_time_us));
 }
 
@@ -1755,14 +1888,17 @@ void MainWindow::handle_preview_ready(
     const qint64 frame_time_us,
     const QImage &image
 ) {
-    Q_UNUSED(frame_time_us);
+    Q_UNUSED(requested_time_us);
 
     if (request_token != preview_request_token_ || !preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_)) {
         return;
     }
 
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    job.current_time_us = std::clamp<qint64>(frame_time_us, 0, std::max<qint64>(job.duration_us, 0));
     preview_surface_widget_->set_frame_image(image);
-    preview_time_badge_->setText(format_time_us(requested_time_us));
+    preview_time_badge_->setText(format_time_us(job.current_time_us));
+    refresh_trim_controls();
 }
 
 void MainWindow::handle_preview_failed(
@@ -1775,8 +1911,66 @@ void MainWindow::handle_preview_failed(
         return;
     }
 
+    pause_preview_playback();
     preview_surface_widget_->set_placeholder(title, detail);
     preview_time_badge_->setText(format_time_us(requested_time_us));
+}
+
+void MainWindow::handle_preview_surface_clicked() {
+    if (!preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_)) {
+        return;
+    }
+
+    if (preview_playing_) {
+        pause_preview_playback();
+        return;
+    }
+
+    start_preview_playback();
+}
+
+void MainWindow::handle_preview_play_pause_requested() {
+    handle_preview_surface_clicked();
+}
+
+void MainWindow::handle_preview_stop_requested() {
+    stop_preview_playback();
+}
+
+void MainWindow::handle_preview_playback_tick() {
+    if (!preview_playing_ || preview_playback_timer_ == nullptr || !preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_)) {
+        pause_preview_playback();
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    const qint64 bounded_duration_us = std::max<qint64>(job.duration_us, 0);
+    const qint64 trim_in_us = std::clamp<qint64>(job.trim_in_us, 0, bounded_duration_us);
+    const qint64 trim_out_us = std::clamp<qint64>(std::max(job.trim_out_us, trim_in_us), trim_in_us, bounded_duration_us);
+    const qint64 elapsed_us = std::max<qint64>(
+        preview_playback_elapsed_timer_.restart() * 1000,
+        selected_job_frame_step_us()
+    );
+
+    if (job.current_time_us < trim_in_us) {
+        job.current_time_us = trim_in_us;
+    }
+
+    if (job.current_time_us >= trim_out_us) {
+        job.current_time_us = trim_out_us;
+        pause_preview_playback();
+        refresh_trim_controls();
+        refresh_selected_job_preview();
+        return;
+    }
+
+    job.current_time_us = std::min(trim_out_us, job.current_time_us + elapsed_us);
+    refresh_trim_controls();
+    refresh_selected_job_preview();
+
+    if (job.current_time_us >= trim_out_us) {
+        pause_preview_playback();
+    }
 }
 
 void MainWindow::step_selected_job_frame(const int direction) {
@@ -1784,14 +1978,9 @@ void MainWindow::step_selected_job_frame(const int direction) {
         return;
     }
 
+    pause_preview_playback();
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
-    const double frame_rate = job.inspected_source_info.has_value() &&
-            job.inspected_source_info->primary_video_stream.has_value()
-        ? rational_to_double(job.inspected_source_info->primary_video_stream->average_frame_rate)
-        : 0.0;
-    const qint64 frame_step_us = frame_rate > 0.0
-        ? static_cast<qint64>(std::llround(1000000.0 / frame_rate))
-        : 41708;
+    const qint64 frame_step_us = selected_job_frame_step_us();
 
     job.current_time_us = std::clamp(
         job.current_time_us + (frame_step_us * direction),
@@ -1807,6 +1996,7 @@ void MainWindow::set_selected_job_trim_in() {
         return;
     }
 
+    pause_preview_playback();
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     job.trim_in_us = std::min(job.current_time_us, job.trim_out_us);
     refresh_trim_controls();
@@ -1819,6 +2009,7 @@ void MainWindow::set_selected_job_trim_out() {
         return;
     }
 
+    pause_preview_playback();
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     job.trim_out_us = std::max(job.current_time_us, job.trim_in_us);
     refresh_trim_controls();
@@ -1831,6 +2022,7 @@ void MainWindow::jump_selected_job_to_in() {
         return;
     }
 
+    pause_preview_playback();
     jobs_[static_cast<std::size_t>(selected_job_index_)].current_time_us =
         jobs_[static_cast<std::size_t>(selected_job_index_)].trim_in_us;
     refresh_trim_controls();
@@ -1842,6 +2034,7 @@ void MainWindow::jump_selected_job_to_out() {
         return;
     }
 
+    pause_preview_playback();
     jobs_[static_cast<std::size_t>(selected_job_index_)].current_time_us =
         jobs_[static_cast<std::size_t>(selected_job_index_)].trim_out_us;
     refresh_trim_controls();
@@ -1853,6 +2046,7 @@ void MainWindow::handle_timeline_seek(const qint64 time_us) {
         return;
     }
 
+    pause_preview_playback();
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     job.current_time_us = std::clamp<qint64>(time_us, 0, std::max<qint64>(job.duration_us, 0));
     refresh_trim_controls();
@@ -1947,6 +2141,10 @@ void MainWindow::load_selected_job_into_editor() {
 }
 
 void MainWindow::select_job(const int index) {
+    if (index != selected_job_index_) {
+        pause_preview_playback();
+    }
+
     if (!is_valid_job_index(index)) {
         selected_job_index_ = -1;
         if (queue_table_ != nullptr) {
@@ -2146,6 +2344,10 @@ void MainWindow::refresh_editor_state() {
         preview_enabled_check_->setChecked(false);
     }
     preview_enabled_check_->setEnabled(has_job);
+    if (!has_job) {
+        pause_preview_playback();
+    }
+    sync_preview_surface_state();
     trim_timeline_widget_->setEnabled(has_job);
     frame_back_button_->setEnabled(has_job);
     frame_forward_button_->setEnabled(has_job);
@@ -2191,7 +2393,9 @@ void MainWindow::refresh_selected_job_preview() {
     }
 
     if (!is_valid_job_index(selected_job_index_)) {
+        pause_preview_playback();
         clear_preview_surface();
+        sync_preview_surface_state();
         preview_surface_widget_->set_placeholder("PREVIEW OFFLINE", "Select a queue row.");
         preview_time_badge_->setText("00:00:00.000");
         return;
@@ -2200,7 +2404,9 @@ void MainWindow::refresh_selected_job_preview() {
     const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
 
     if (!preview_enabled_check_->isChecked()) {
+        pause_preview_playback();
         clear_preview_surface();
+        sync_preview_surface_state();
         preview_surface_widget_->set_placeholder("PREVIEW OFFLINE");
         preview_time_badge_->setText("00:00:00.000");
         return;
@@ -2209,11 +2415,14 @@ void MainWindow::refresh_selected_job_preview() {
     preview_time_badge_->setText(format_time_us(job.current_time_us));
 
     if (!job.source_inspection_error.isEmpty()) {
+        pause_preview_playback();
         clear_preview_surface();
+        sync_preview_surface_state();
         preview_surface_widget_->set_placeholder("PREVIEW UNAVAILABLE", job.source_inspection_error);
         return;
     }
 
+    sync_preview_surface_state();
     request_selected_job_preview_frame();
 }
 

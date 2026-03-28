@@ -9,5 +9,10 @@
     <file alias="browse.svg">icons/browse.svg</file>
     <file alias="frame-back.svg">icons/frame-back.svg</file>
     <file alias="frame-forward.svg">icons/frame-forward.svg</file>
+    <file alias="pause.svg">icons/pause.svg</file>
+    <file alias="set-in.svg">icons/set-in.svg</file>
+    <file alias="set-out.svg">icons/set-out.svg</file>
+    <file alias="jump-in.svg">icons/jump-in.svg</file>
+    <file alias="jump-out.svg">icons/jump-out.svg</file>
   </qresource>
 </RCC>
