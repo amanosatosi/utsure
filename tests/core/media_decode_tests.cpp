@@ -9,6 +9,7 @@
 namespace {
 
 using utsure::core::media::DecodedMediaSource;
+using utsure::core::media::DecodeNormalizationPolicy;
 using utsure::core::media::MediaDecodeResult;
 using utsure::core::media::MediaDecoder;
 using utsure::core::media::NormalizedAudioSampleFormat;
@@ -192,11 +193,83 @@ int run_missing_input_assertion(const std::filesystem::path &missing_path) {
     return 0;
 }
 
+int run_preview_session_sequential_assertion(const std::filesystem::path &sample_path) {
+    DecodeNormalizationPolicy normalization_policy{};
+    normalization_policy.video_max_width = 320;
+    normalization_policy.video_max_height = 180;
+
+    auto session_result = MediaDecoder::create_video_preview_session(sample_path, normalization_policy);
+    if (!session_result.succeeded()) {
+        const std::string error_message =
+            "Preview session creation failed unexpectedly: " +
+            session_result.error->message +
+            " Hint: " +
+            session_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    constexpr std::size_t kPreviewWindowFrameCount = 96;
+    auto first_window_result = session_result.session->seek_and_decode_window_at_time(0, kPreviewWindowFrameCount);
+    if (!first_window_result.succeeded()) {
+        const std::string error_message =
+            "The initial preview seek window failed unexpectedly: " +
+            first_window_result.error->message +
+            " Hint: " +
+            first_window_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const auto &first_window = *first_window_result.video_frames;
+    if (first_window.size() != kPreviewWindowFrameCount) {
+        return fail("The initial preview seek window did not fill the expected 96-frame cache window.");
+    }
+
+    auto second_window_result = session_result.session->decode_next_window(kPreviewWindowFrameCount);
+    if (!second_window_result.succeeded()) {
+        const std::string error_message =
+            "The sequential preview window failed unexpectedly after the first 96-frame window: " +
+            second_window_result.error->message +
+            " Hint: " +
+            second_window_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const auto &second_window = *second_window_result.video_frames;
+    if (second_window.empty()) {
+        return fail("The second preview window unexpectedly returned no frames.");
+    }
+
+    if (second_window.front().timestamp.start_microseconds <=
+        first_window.back().timestamp.start_microseconds) {
+        return fail("The sequential preview window did not advance past the first 96-frame boundary.");
+    }
+
+    auto seek_after_sequential_result = session_result.session->seek_and_decode_window_at_time(1000000, 16);
+    if (!seek_after_sequential_result.succeeded()) {
+        const std::string error_message =
+            "Preview seek failed unexpectedly after sequential window playback: " +
+            seek_after_sequential_result.error->message +
+            " Hint: " +
+            seek_after_sequential_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    if (seek_after_sequential_result.video_frames->empty()) {
+        return fail("Preview seek after sequential playback returned no frames.");
+    }
+
+    std::cout << "first_window.frames=" << first_window.size() << '\n';
+    std::cout << "second_window.frames=" << second_window.size() << '\n';
+    std::cout << "second_window.first_start_us=" << second_window.front().timestamp.start_microseconds << '\n';
+    std::cout << "seek_after_sequential.frames=" << seek_after_sequential_result.video_frames->size() << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
-        return fail("Usage: utsure_core_media_decode_tests [--sample|--missing] <path>");
+        return fail("Usage: utsure_core_media_decode_tests [--sample|--missing|--preview-session-sequential] <path>");
     }
 
     const std::string_view mode(argv[1]);
@@ -210,5 +283,9 @@ int main(int argc, char *argv[]) {
         return run_missing_input_assertion(path);
     }
 
-    return fail("Unknown mode. Use --sample or --missing.");
+    if (mode == "--preview-session-sequential") {
+        return run_preview_session_sequential_assertion(path);
+    }
+
+    return fail("Unknown mode. Use --sample, --missing, or --preview-session-sequential.");
 }

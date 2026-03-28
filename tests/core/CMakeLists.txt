@@ -2,6 +2,7 @@ find_program(UTSURE_FFMPEG_EXECUTABLE NAMES ffmpeg REQUIRED)
 
 set(UTSURE_TEST_MEDIA_DIR "${CMAKE_CURRENT_BINARY_DIR}/media")
 set(UTSURE_SAMPLE_MEDIA_FILE "${UTSURE_TEST_MEDIA_DIR}/inspection-sample.avi")
+set(UTSURE_PREVIEW_SESSION_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/preview-session-sample.mp4")
 set(UTSURE_MEMORY_HEAVY_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/memory-heavy-main.mp4")
 set(UTSURE_TIMELINE_INTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-intro.avi")
 set(UTSURE_TIMELINE_OUTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-outro.avi")
@@ -39,6 +40,19 @@ add_custom_command(
         -pix_fmt yuv420p
         -c:a pcm_s16le
         "${UTSURE_SAMPLE_MEDIA_FILE}"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "testsrc=size=320x180:rate=24"
+        -frames:v 144
+        -c:v libx264
+        -preset ultrafast
+        -pix_fmt yuv420p
+        -an
+        "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
     VERBATIM
 )
 
@@ -131,6 +145,7 @@ add_custom_target(
     utsure_generate_sample_media
     DEPENDS
         "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
         "${UTSURE_MEMORY_HEAVY_MAIN_FILE}"
         "${UTSURE_TIMELINE_INTRO_FILE}"
         "${UTSURE_TIMELINE_OUTRO_FILE}"
@@ -187,6 +202,11 @@ add_test(
 add_test(
     NAME utsure.core.media.decode.missing
     COMMAND utsure_core_media_decode_tests --missing "${UTSURE_TEST_MEDIA_DIR}/missing-input.avi"
+)
+
+add_test(
+    NAME utsure.core.media.preview_session.sequential
+    COMMAND utsure_core_media_decode_tests --preview-session-sequential "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
 )
 
 add_executable(utsure_core_media_encode_tests

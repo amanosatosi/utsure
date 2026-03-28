@@ -767,13 +767,18 @@ std::vector<DecodedVideoFrame> decode_video_frame_window_from_current_position(
     }
 
     std::vector<DecodedVideoFrame> preview_frames{};
+    bool decoder_reached_eof = false;
     auto receive_frames = [&]() {
         while (preview_frames.size() < maximum_frame_count) {
             const auto receive_result = avcodec_receive_frame(
                 session.resources.codec_context.get(),
                 session.decoded_frame.get()
             );
-            if (receive_result == AVERROR(EAGAIN) || receive_result == AVERROR_EOF) {
+            if (receive_result == AVERROR(EAGAIN)) {
+                return;
+            }
+            if (receive_result == AVERROR_EOF) {
+                decoder_reached_eof = true;
                 return;
             }
 
@@ -803,10 +808,18 @@ std::vector<DecodedVideoFrame> decode_video_frame_window_from_current_position(
     };
 
     receive_frames();
+    bool reached_input_eof = false;
     while (preview_frames.size() < maximum_frame_count) {
         const auto read_result = av_read_frame(session.resources.format_context.get(), session.packet.get());
-        if (read_result < 0) {
+        if (read_result == AVERROR_EOF) {
+            reached_input_eof = true;
             break;
+        }
+        if (read_result < 0) {
+            throw std::runtime_error(
+                "Failed to read the next preview packet from '" + session.input_path_string + "'. FFmpeg reported: " +
+                ffmpeg_support::ffmpeg_error_to_string(read_result)
+            );
         }
 
         if (session.packet->stream_index == session.video_stream_info.stream_index) {
@@ -817,10 +830,14 @@ std::vector<DecodedVideoFrame> decode_video_frame_window_from_current_position(
         av_packet_unref(session.packet.get());
     }
 
-    if (!session.drain_sent) {
+    if (reached_input_eof && !session.drain_sent) {
         send_packet_or_throw(*session.resources.codec_context, nullptr);
         session.drain_sent = true;
         receive_frames();
+    }
+
+    if (session.drain_sent && decoder_reached_eof) {
+        session.exhausted = true;
     }
 
     if (preview_frames.empty()) {
@@ -879,6 +896,7 @@ std::vector<DecodedVideoFrame> seek_and_decode_video_frame_window(
     std::optional<DecodedVideoFrame> frame_before_or_at{};
     std::vector<DecodedVideoFrame> preview_frames{};
     bool collecting_frames = false;
+    bool decoder_reached_eof = false;
 
     auto receive_frames = [&]() {
         while (true) {
@@ -886,7 +904,11 @@ std::vector<DecodedVideoFrame> seek_and_decode_video_frame_window(
                 session.resources.codec_context.get(),
                 session.decoded_frame.get()
             );
-            if (receive_result == AVERROR(EAGAIN) || receive_result == AVERROR_EOF) {
+            if (receive_result == AVERROR(EAGAIN)) {
+                return;
+            }
+            if (receive_result == AVERROR_EOF) {
+                decoder_reached_eof = true;
                 return;
             }
 
@@ -947,7 +969,20 @@ std::vector<DecodedVideoFrame> seek_and_decode_video_frame_window(
         }
     };
 
-    while (av_read_frame(session.resources.format_context.get(), session.packet.get()) >= 0) {
+    bool reached_input_eof = false;
+    while (true) {
+        const auto read_result = av_read_frame(session.resources.format_context.get(), session.packet.get());
+        if (read_result == AVERROR_EOF) {
+            reached_input_eof = true;
+            break;
+        }
+        if (read_result < 0) {
+            throw std::runtime_error(
+                "Failed to read the next preview packet from '" + session.input_path_string + "'. FFmpeg reported: " +
+                ffmpeg_support::ffmpeg_error_to_string(read_result)
+            );
+        }
+
         if (session.packet->stream_index == session.video_stream_info.stream_index) {
             send_packet_or_throw(*session.resources.codec_context, session.packet.get());
             receive_frames();
@@ -961,10 +996,14 @@ std::vector<DecodedVideoFrame> seek_and_decode_video_frame_window(
         av_packet_unref(session.packet.get());
     }
 
-    if (!session.drain_sent) {
+    if (reached_input_eof && !session.drain_sent) {
         send_packet_or_throw(*session.resources.codec_context, nullptr);
         session.drain_sent = true;
         receive_frames();
+    }
+
+    if (session.drain_sent && decoder_reached_eof) {
+        session.exhausted = true;
     }
 
     if (preview_frames.empty() && frame_before_or_at.has_value()) {

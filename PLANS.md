@@ -615,6 +615,7 @@ Current slice status:
   * Completed: changed preview playback to advance from delivered frame timestamps and frame durations, instead of wall-clock drift, so delayed decode responses no longer make the picture stall and then jump backward.
   * Completed: added preview-resolution video normalization so Preview can cache a longer frame window without holding full-resolution RGBA frames for every buffered playback step.
   * Completed: added a persistent preview decode session in core so sequential playback can decode the next preview window from the already-open source instead of reopening and reseeking every few seconds.
+  * Completed: fixed the persistent preview decode session so normal sequential window refills no longer send the decoder into drain/EOF mode before the input stream actually reaches EOF, and added focused core regression coverage for seek-plus-sequential preview windows across the first 96-frame cache boundary.
 
 Likely files/modules:
   * `src/app/`
