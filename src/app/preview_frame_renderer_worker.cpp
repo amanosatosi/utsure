@@ -123,7 +123,7 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
             }
 
             if (!preview_session_) {
-                const auto session_result = utsure::core::media::MediaDecoder::create_video_preview_session(
+                auto session_result = utsure::core::media::MediaDecoder::create_video_preview_session(
                     qstring_to_path(normalized_source_path),
                     preview_decode_normalization_policy()
                 );
@@ -143,7 +143,7 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
                 preview_session_ = std::move(session_result.session);
             }
 
-            const auto preview_window_result = should_decode_next_preview_window(request.requested_time_us)
+            auto preview_window_result = should_decode_next_preview_window(request.requested_time_us)
                 ? preview_session_->decode_next_window(kPreviewWindowFrameCount)
                 : preview_session_->seek_and_decode_window_at_time(
                     request.requested_time_us,
