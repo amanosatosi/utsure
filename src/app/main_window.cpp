@@ -1769,6 +1769,10 @@ void MainWindow::request_selected_job_preview_frame() {
         return;
     }
 
+    if (preview_context_changed) {
+        ++preview_request_token_;
+    }
+
     if (preview_context_changed && preview_surface_widget_ != nullptr) {
         preview_surface_widget_->clear_frame();
     }
@@ -1781,7 +1785,7 @@ void MainWindow::request_selected_job_preview_frame() {
     preview_requested_subtitle_format_hint_ = subtitle_format_hint;
 
     preview_renderer_controller_->request_preview(PreviewFrameRenderRequest{
-        .request_token = ++preview_request_token_,
+        .request_token = preview_request_token_,
         .source_path = normalized_source_path,
         .requested_time_us = requested_time_us,
         .subtitle_enabled = subtitles_enabled,
@@ -1840,6 +1844,8 @@ void MainWindow::start_preview_playback() {
 }
 
 void MainWindow::pause_preview_playback() {
+    ++preview_request_token_;
+    preview_requested_time_us_ = -1;
     preview_playing_ = false;
     if (preview_playback_timer_ != nullptr) {
         preview_playback_timer_->stop();
