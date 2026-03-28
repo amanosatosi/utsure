@@ -66,6 +66,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M17 preview slice now also includes upgrading the right-side Preview tab from still-frame inspection to an opt-in transport-controlled preview player with a larger default 16:9 surface, hover-only playback controls, and icon-first trim navigation.
 - The current M17 preview playback slice now also includes fixing request-generation handling so continuous visual playback can present intermediate frames while paused/offline state changes still invalidate delayed in-flight renders correctly.
 - The current M17 preview playback slice now also includes replacing per-frame reopen/seek preview decode with a small cached frame-window path so initial seek/index work can be reused across nearby playback frames.
+- The current M17 preview playback slice now also includes preview-resolution frame normalization so the cache window can span several seconds instead of only about one second of full-resolution RGBA frames.
 
 ## Architecture direction
 
@@ -611,6 +612,7 @@ Current slice status:
   * Completed: shared subtitle preview composition with the existing libassmod-backed burn-in path by adding a one-frame subtitle composition helper in core and reusing the same subtitle renderer/session plus RGBA bitmap compositor for Preview overlays.
   * Completed: replaced the old per-frame reopen/seek preview path with a bounded cached frame-window decoder so Preview can reuse nearby decoded frames instead of reopening the source for every visual step.
   * Completed: changed preview playback to advance from delivered frame timestamps and frame durations, instead of wall-clock drift, so delayed decode responses no longer make the picture stall and then jump backward.
+  * Completed: added preview-resolution video normalization so Preview can cache a longer frame window without holding full-resolution RGBA frames for every buffered playback step.
 
 Likely files/modules:
   * `src/app/`

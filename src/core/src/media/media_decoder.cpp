@@ -9,6 +9,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -327,6 +328,37 @@ void send_packet_or_throw(AVCodecContext &codec_context, AVPacket *packet) {
     }
 }
 
+std::pair<int, int> choose_normalized_video_dimensions(
+    const AVFrame &source_frame,
+    const DecodeNormalizationPolicy &normalization_policy
+) {
+    if (source_frame.width <= 0 || source_frame.height <= 0) {
+        throw std::runtime_error("The video decoder returned a frame without valid dimensions.");
+    }
+
+    const int max_width = normalization_policy.video_max_width;
+    const int max_height = normalization_policy.video_max_height;
+    if (max_width <= 0 && max_height <= 0) {
+        return {source_frame.width, source_frame.height};
+    }
+
+    const double width_scale = max_width > 0
+        ? static_cast<double>(max_width) / static_cast<double>(source_frame.width)
+        : 1.0;
+    const double height_scale = max_height > 0
+        ? static_cast<double>(max_height) / static_cast<double>(source_frame.height)
+        : 1.0;
+    const double scale = std::min(width_scale, height_scale);
+    if (scale >= 1.0) {
+        return {source_frame.width, source_frame.height};
+    }
+
+    return {
+        std::max(1, static_cast<int>(std::lround(static_cast<double>(source_frame.width) * scale))),
+        std::max(1, static_cast<int>(std::lround(static_cast<double>(source_frame.height) * scale)))
+    };
+}
+
 DecodedVideoFrame normalize_video_frame(
     const AVFrame &source_frame,
     const AVStream &stream,
@@ -348,16 +380,17 @@ DecodedVideoFrame normalize_video_frame(
         throw std::runtime_error("The video decoder returned a frame without a usable pixel format.");
     }
 
+    const auto [target_width, target_height] = choose_normalized_video_dimensions(source_frame, normalization_policy);
     if (!scale_context ||
-        scale_width != source_frame.width ||
-        scale_height != source_frame.height ||
+        scale_width != target_width ||
+        scale_height != target_height ||
         scale_source_pixel_format != source_pixel_format) {
         SwsContext *raw_scale_context = sws_getContext(
             source_frame.width,
             source_frame.height,
             source_pixel_format,
-            source_frame.width,
-            source_frame.height,
+            target_width,
+            target_height,
             AV_PIX_FMT_RGBA,
             SWS_BILINEAR,
             nullptr,
@@ -370,15 +403,15 @@ DecodedVideoFrame normalize_video_frame(
         }
 
         scale_context.reset(raw_scale_context);
-        scale_width = source_frame.width;
-        scale_height = source_frame.height;
+        scale_width = target_width;
+        scale_height = target_height;
         scale_source_pixel_format = source_pixel_format;
     }
 
     auto normalized_frame = allocate_frame();
     normalized_frame->format = AV_PIX_FMT_RGBA;
-    normalized_frame->width = source_frame.width;
-    normalized_frame->height = source_frame.height;
+    normalized_frame->width = target_width;
+    normalized_frame->height = target_height;
 
     const auto buffer_result = av_frame_get_buffer(normalized_frame.get(), 1);
     if (buffer_result < 0) {
@@ -403,14 +436,14 @@ DecodedVideoFrame normalize_video_frame(
 
     VideoPlane plane{
         .line_stride_bytes = normalized_frame->linesize[0],
-        .visible_width = source_frame.width,
-        .visible_height = source_frame.height,
+        .visible_width = target_width,
+        .visible_height = target_height,
         .bytes = std::vector<std::uint8_t>(
-            static_cast<std::size_t>(normalized_frame->linesize[0]) * static_cast<std::size_t>(source_frame.height)
+            static_cast<std::size_t>(normalized_frame->linesize[0]) * static_cast<std::size_t>(target_height)
         )
     };
 
-    for (int row = 0; row < source_frame.height; ++row) {
+    for (int row = 0; row < target_height; ++row) {
         std::memcpy(
             plane.bytes.data() + static_cast<std::size_t>(row) * static_cast<std::size_t>(normalized_frame->linesize[0]),
             normalized_frame->data[0] + static_cast<std::size_t>(row) * static_cast<std::size_t>(normalized_frame->linesize[0]),
@@ -432,8 +465,8 @@ DecodedVideoFrame normalize_video_frame(
             ),
             .duration_microseconds = std::nullopt
         },
-        .width = source_frame.width,
-        .height = source_frame.height,
+        .width = target_width,
+        .height = target_height,
         .sample_aspect_ratio = choose_sample_aspect_ratio(source_frame, stream),
         .pixel_format = normalization_policy.video_pixel_format,
         .planes = {std::move(plane)}

@@ -15,10 +15,19 @@
 
 namespace {
 
-constexpr std::size_t kPreviewWindowFrameCount = 24;
+constexpr std::size_t kPreviewWindowFrameCount = 96;
+constexpr int kPreviewDecodeMaxWidth = 960;
+constexpr int kPreviewDecodeMaxHeight = 540;
 
 QString to_qstring(std::string_view text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+}
+
+utsure::core::media::DecodeNormalizationPolicy preview_decode_normalization_policy() {
+    utsure::core::media::DecodeNormalizationPolicy normalization_policy{};
+    normalization_policy.video_max_width = kPreviewDecodeMaxWidth;
+    normalization_policy.video_max_height = kPreviewDecodeMaxHeight;
+    return normalization_policy;
 }
 
 std::filesystem::path qstring_to_path(const QString &text) {
@@ -112,7 +121,8 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
             const auto preview_window_result = utsure::core::media::MediaDecoder::decode_video_frame_window_at_time(
                 qstring_to_path(normalized_source_path),
                 request.requested_time_us,
-                kPreviewWindowFrameCount
+                kPreviewWindowFrameCount,
+                preview_decode_normalization_policy()
             );
             if (!preview_window_result.succeeded()) {
                 emit preview_failed(

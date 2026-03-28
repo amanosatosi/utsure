@@ -30,6 +30,8 @@ struct DecodeNormalizationPolicy final {
     NormalizedVideoPixelFormat video_pixel_format{NormalizedVideoPixelFormat::rgba8};
     NormalizedAudioSampleFormat audio_sample_format{NormalizedAudioSampleFormat::f32_planar};
     int audio_block_samples{1024};
+    int video_max_width{0};
+    int video_max_height{0};
 };
 
 struct MediaTimestamp final {
