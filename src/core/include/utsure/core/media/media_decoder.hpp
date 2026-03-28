@@ -3,6 +3,7 @@
 #include "utsure/core/media/decoded_media.hpp"
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -35,9 +36,44 @@ struct VideoFrameWindowDecodeResult final {
     [[nodiscard]] bool succeeded() const noexcept;
 };
 
+class VideoPreviewSession;
+
+struct VideoPreviewSessionCreateResult final {
+    std::unique_ptr<VideoPreviewSession> session{};
+    std::optional<MediaDecodeError> error{};
+
+    [[nodiscard]] bool succeeded() const noexcept;
+};
+
 struct DecodeStreamSelection final {
     bool decode_video{true};
     bool decode_audio{true};
+};
+
+class VideoPreviewSession final {
+public:
+    struct Impl;
+
+    VideoPreviewSession(VideoPreviewSession &&) noexcept;
+    VideoPreviewSession &operator=(VideoPreviewSession &&) noexcept;
+    ~VideoPreviewSession();
+
+    VideoPreviewSession(const VideoPreviewSession &) = delete;
+    VideoPreviewSession &operator=(const VideoPreviewSession &) = delete;
+
+    [[nodiscard]] VideoFrameWindowDecodeResult seek_and_decode_window_at_time(
+        std::int64_t requested_time_microseconds,
+        std::size_t maximum_frame_count
+    ) noexcept;
+
+    [[nodiscard]] VideoFrameWindowDecodeResult decode_next_window(std::size_t maximum_frame_count) noexcept;
+
+private:
+    explicit VideoPreviewSession(std::unique_ptr<Impl> impl) noexcept;
+
+    std::unique_ptr<Impl> impl_{};
+
+    friend class MediaDecoder;
 };
 
 class MediaDecoder final {
@@ -58,6 +94,11 @@ public:
         const std::filesystem::path &input_path,
         std::int64_t requested_time_microseconds,
         std::size_t maximum_frame_count,
+        const DecodeNormalizationPolicy &normalization_policy = {}
+    ) noexcept;
+
+    [[nodiscard]] static VideoPreviewSessionCreateResult create_video_preview_session(
+        const std::filesystem::path &input_path,
         const DecodeNormalizationPolicy &normalization_policy = {}
     ) noexcept;
 };

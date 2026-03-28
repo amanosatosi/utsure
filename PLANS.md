@@ -67,6 +67,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M17 preview playback slice now also includes fixing request-generation handling so continuous visual playback can present intermediate frames while paused/offline state changes still invalidate delayed in-flight renders correctly.
 - The current M17 preview playback slice now also includes replacing per-frame reopen/seek preview decode with a small cached frame-window path so initial seek/index work can be reused across nearby playback frames.
 - The current M17 preview playback slice now also includes preview-resolution frame normalization so the cache window can span several seconds instead of only about one second of full-resolution RGBA frames.
+- The current M17 preview playback slice now also includes a persistent core preview decode session so playback can keep reading forward across cache boundaries instead of stalling on repeated reopen/seek window refills.
 
 ## Architecture direction
 
@@ -613,6 +614,7 @@ Current slice status:
   * Completed: replaced the old per-frame reopen/seek preview path with a bounded cached frame-window decoder so Preview can reuse nearby decoded frames instead of reopening the source for every visual step.
   * Completed: changed preview playback to advance from delivered frame timestamps and frame durations, instead of wall-clock drift, so delayed decode responses no longer make the picture stall and then jump backward.
   * Completed: added preview-resolution video normalization so Preview can cache a longer frame window without holding full-resolution RGBA frames for every buffered playback step.
+  * Completed: added a persistent preview decode session in core so sequential playback can decode the next preview window from the already-open source instead of reopening and reseeking every few seconds.
 
 Likely files/modules:
   * `src/app/`

@@ -8,16 +8,20 @@
 #include <QFile>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 #include <filesystem>
+#include <iterator>
 #include <stdexcept>
 #include <string_view>
 
 namespace {
 
 constexpr std::size_t kPreviewWindowFrameCount = 96;
+constexpr std::size_t kRetainedPreviewFrameCount = 192;
 constexpr int kPreviewDecodeMaxWidth = 960;
 constexpr int kPreviewDecodeMaxHeight = 540;
+constexpr qint64 kSequentialPreviewRefillToleranceUs = 1000000;
 
 QString to_qstring(std::string_view text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -118,12 +122,33 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
                 invalidate_subtitle_session();
             }
 
-            const auto preview_window_result = utsure::core::media::MediaDecoder::decode_video_frame_window_at_time(
-                qstring_to_path(normalized_source_path),
-                request.requested_time_us,
-                kPreviewWindowFrameCount,
-                preview_decode_normalization_policy()
-            );
+            if (!preview_session_) {
+                const auto session_result = utsure::core::media::MediaDecoder::create_video_preview_session(
+                    qstring_to_path(normalized_source_path),
+                    preview_decode_normalization_policy()
+                );
+                if (!session_result.succeeded()) {
+                    emit preview_failed(
+                        request.request_token,
+                        request.requested_time_us,
+                        "PREVIEW UNAVAILABLE",
+                        format_error_detail(
+                            session_result.error->message,
+                            session_result.error->actionable_hint
+                        )
+                    );
+                    return;
+                }
+
+                preview_session_ = std::move(session_result.session);
+            }
+
+            const auto preview_window_result = should_decode_next_preview_window(request.requested_time_us)
+                ? preview_session_->decode_next_window(kPreviewWindowFrameCount)
+                : preview_session_->seek_and_decode_window_at_time(
+                    request.requested_time_us,
+                    kPreviewWindowFrameCount
+                );
             if (!preview_window_result.succeeded()) {
                 emit preview_failed(
                     request.request_token,
@@ -138,7 +163,23 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
             }
 
             cached_source_path_ = normalized_source_path;
-            cached_preview_frames_ = std::move(*preview_window_result.video_frames);
+            auto new_preview_frames = std::move(*preview_window_result.video_frames);
+            if (should_decode_next_preview_window(request.requested_time_us) && !cached_preview_frames_.empty()) {
+                cached_preview_frames_.insert(
+                    cached_preview_frames_.end(),
+                    std::make_move_iterator(new_preview_frames.begin()),
+                    std::make_move_iterator(new_preview_frames.end())
+                );
+                if (cached_preview_frames_.size() > kRetainedPreviewFrameCount) {
+                    const auto frames_to_discard = cached_preview_frames_.size() - kRetainedPreviewFrameCount;
+                    cached_preview_frames_.erase(
+                        cached_preview_frames_.begin(),
+                        cached_preview_frames_.begin() + static_cast<std::ptrdiff_t>(frames_to_discard)
+                    );
+                }
+            } else {
+                cached_preview_frames_ = std::move(new_preview_frames);
+            }
         }
 
         const auto *cached_preview_frame = select_cached_preview_frame(request.requested_time_us);
@@ -212,6 +253,7 @@ void PreviewFrameRendererWorker::clear_cache() {
 void PreviewFrameRendererWorker::invalidate_preview_frame_cache() {
     cached_source_path_.clear();
     cached_preview_frames_.clear();
+    preview_session_.reset();
 }
 
 void PreviewFrameRendererWorker::invalidate_subtitle_session() {
@@ -267,6 +309,16 @@ const utsure::core::media::DecodedVideoFrame *PreviewFrameRendererWorker::select
     }
 
     return &(*upper_bound);
+}
+
+bool PreviewFrameRendererWorker::should_decode_next_preview_window(const qint64 requested_time_us) const {
+    if (!preview_session_ || cached_preview_frames_.empty()) {
+        return false;
+    }
+
+    const qint64 cached_window_end_us = frame_coverage_end_us(cached_preview_frames_.back());
+    return requested_time_us > cached_window_end_us &&
+        requested_time_us <= (cached_window_end_us + kSequentialPreviewRefillToleranceUs);
 }
 
 void PreviewFrameRendererWorker::ensure_subtitle_session(

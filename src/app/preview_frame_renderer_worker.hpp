@@ -49,9 +49,11 @@ private:
     );
     [[nodiscard]] bool cached_preview_window_covers(const QString &source_path, qint64 requested_time_us) const;
     [[nodiscard]] const utsure::core::media::DecodedVideoFrame *select_cached_preview_frame(qint64 requested_time_us) const;
+    [[nodiscard]] bool should_decode_next_preview_window(qint64 requested_time_us) const;
 
     QString cached_source_path_{};
     std::vector<utsure::core::media::DecodedVideoFrame> cached_preview_frames_{};
+    std::unique_ptr<utsure::core::media::VideoPreviewSession> preview_session_{};
     QString cached_subtitle_path_{};
     QString cached_subtitle_format_hint_{"auto"};
     int cached_subtitle_canvas_width_{0};
