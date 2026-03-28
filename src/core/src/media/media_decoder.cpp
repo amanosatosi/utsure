@@ -24,8 +24,6 @@ extern "C" {
 
 namespace utsure::core::media {
 
-namespace {
-
 using ffmpeg_support::FormatContextHandle;
 
 struct CodecContextDeleter final {
@@ -112,6 +110,8 @@ struct VideoPreviewSession::Impl final {
     bool drain_sent{false};
     bool exhausted{false};
 };
+
+namespace {
 
 struct TimestampSeed final {
     std::int64_t source_pts{0};
