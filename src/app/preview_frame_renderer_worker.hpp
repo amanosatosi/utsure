@@ -11,6 +11,10 @@
 #include <memory>
 #include <optional>
 
+namespace utsure::core::media {
+class VideoPreviewSession;
+}
+
 struct PreviewFrameRenderRequest final {
     quint64 request_token{0};
     QString source_path{};
