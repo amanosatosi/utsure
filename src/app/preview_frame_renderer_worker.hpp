@@ -36,14 +36,10 @@ signals:
 
 private:
     void invalidate_subtitle_session();
-    void ensure_decoded_source(const PreviewFrameRenderRequest &request);
     void ensure_subtitle_session(
         const PreviewFrameRenderRequest &request,
-        const utsure::core::media::DecodedMediaSource &decoded_media_source
+        const utsure::core::media::DecodedVideoFrame &preview_frame
     );
-
-    QString cached_source_path_{};
-    std::optional<utsure::core::media::DecodedMediaSource> cached_decoded_source_{};
 
     QString cached_subtitle_path_{};
     QString cached_subtitle_format_hint_{"auto"};

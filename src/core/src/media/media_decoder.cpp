@@ -9,6 +9,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <filesystem>
@@ -104,6 +105,21 @@ MediaDecodeResult make_error(
 ) {
     return MediaDecodeResult{
         .decoded_media_source = std::nullopt,
+        .error = MediaDecodeError{
+            .input_path = std::move(input_path),
+            .message = std::move(message),
+            .actionable_hint = std::move(actionable_hint)
+        }
+    };
+}
+
+VideoFrameDecodeResult make_video_frame_error(
+    std::string input_path,
+    std::string message,
+    std::string actionable_hint
+) {
+    return VideoFrameDecodeResult{
+        .video_frame = std::nullopt,
         .error = MediaDecodeError{
             .input_path = std::move(input_path),
             .message = std::move(message),
@@ -513,6 +529,146 @@ std::vector<DecodedVideoFrame> decode_video_frames(
     return video_frames;
 }
 
+DecodedVideoFrame choose_nearest_video_frame(
+    std::optional<DecodedVideoFrame> frame_before_or_at,
+    std::optional<DecodedVideoFrame> frame_after,
+    const std::int64_t requested_time_us
+) {
+    if (frame_before_or_at.has_value() && frame_after.has_value()) {
+        const auto previous_distance =
+            std::llabs(requested_time_us - frame_before_or_at->timestamp.start_microseconds);
+        const auto next_distance =
+            std::llabs(frame_after->timestamp.start_microseconds - requested_time_us);
+        return previous_distance <= next_distance
+            ? std::move(*frame_before_or_at)
+            : std::move(*frame_after);
+    }
+
+    if (frame_before_or_at.has_value()) {
+        return std::move(*frame_before_or_at);
+    }
+
+    if (frame_after.has_value()) {
+        return std::move(*frame_after);
+    }
+
+    throw std::runtime_error("The selected source did not decode into any previewable video frames.");
+}
+
+DecodedVideoFrame decode_video_frame_at_time_internal(
+    const std::string &input_path_string,
+    const VideoStreamInfo &video_stream_info,
+    const DecodeNormalizationPolicy &normalization_policy,
+    const std::int64_t requested_time_us
+) {
+    OpenStreamResources resources = open_stream_resources(
+        input_path_string,
+        video_stream_info.stream_index,
+        AVMEDIA_TYPE_VIDEO
+    );
+
+    if (normalization_policy.video_pixel_format != NormalizedVideoPixelFormat::rgba8) {
+        throw std::runtime_error("Only rgba8 video normalization is implemented in this milestone.");
+    }
+
+    const auto fallback_duration_pts = infer_video_frame_duration_pts(video_stream_info).value_or(1);
+    const auto stream_time_base = to_av_rational(video_stream_info.timestamps.time_base);
+    const auto normalized_requested_time_us = std::max<std::int64_t>(requested_time_us, 0);
+    std::int64_t next_fallback_source_pts = video_stream_info.timestamps.start_pts.value_or(0);
+
+    if (normalized_requested_time_us > 0 && video_stream_info.timestamps.time_base.is_valid()) {
+        const auto requested_pts = av_rescale_q(normalized_requested_time_us, AV_TIME_BASE_Q, stream_time_base);
+        const auto seek_result = av_seek_frame(
+            resources.format_context.get(),
+            video_stream_info.stream_index,
+            requested_pts,
+            AVSEEK_FLAG_BACKWARD
+        );
+        if (seek_result >= 0) {
+            avcodec_flush_buffers(resources.codec_context.get());
+            next_fallback_source_pts = requested_pts;
+        }
+    }
+
+    PacketHandle packet = allocate_packet();
+    FrameHandle decoded_frame = allocate_frame();
+    SwsContextHandle scale_context{};
+    int scale_width = 0;
+    int scale_height = 0;
+    AVPixelFormat scale_source_pixel_format = AV_PIX_FMT_NONE;
+
+    std::optional<DecodedVideoFrame> frame_before_or_at{};
+    std::optional<DecodedVideoFrame> frame_after{};
+    std::int64_t frame_index = 0;
+
+    auto receive_frames = [&]() {
+        while (true) {
+            const auto receive_result = avcodec_receive_frame(resources.codec_context.get(), decoded_frame.get());
+            if (receive_result == AVERROR(EAGAIN) || receive_result == AVERROR_EOF) {
+                return false;
+            }
+
+            if (receive_result < 0) {
+                throw std::runtime_error(
+                    "Failed to receive a decoded preview video frame. FFmpeg reported: " +
+                    ffmpeg_support::ffmpeg_error_to_string(receive_result)
+                );
+            }
+
+            auto normalized_frame = normalize_video_frame(
+                *decoded_frame,
+                *resources.stream,
+                video_stream_info.stream_index,
+                frame_index,
+                normalization_policy,
+                scale_context,
+                scale_width,
+                scale_height,
+                scale_source_pixel_format,
+                next_fallback_source_pts,
+                fallback_duration_pts
+            );
+            ++frame_index;
+            av_frame_unref(decoded_frame.get());
+
+            if (normalized_frame.timestamp.start_microseconds <= normalized_requested_time_us) {
+                frame_before_or_at = std::move(normalized_frame);
+                continue;
+            }
+
+            frame_after = std::move(normalized_frame);
+            return true;
+        }
+    };
+
+    while (av_read_frame(resources.format_context.get(), packet.get()) >= 0) {
+        if (packet->stream_index == video_stream_info.stream_index) {
+            send_packet_or_throw(*resources.codec_context, packet.get());
+            const bool target_frame_found = receive_frames();
+            av_packet_unref(packet.get());
+            if (target_frame_found) {
+                return choose_nearest_video_frame(
+                    std::move(frame_before_or_at),
+                    std::move(frame_after),
+                    normalized_requested_time_us
+                );
+            }
+            continue;
+        }
+
+        av_packet_unref(packet.get());
+    }
+
+    send_packet_or_throw(*resources.codec_context, nullptr);
+    receive_frames();
+
+    return choose_nearest_video_frame(
+        std::move(frame_before_or_at),
+        std::move(frame_after),
+        normalized_requested_time_us
+    );
+}
+
 std::vector<std::vector<float>> resample_audio_frame(
     SwrContext &resample_context,
     const AVFrame *decoded_frame,
@@ -808,6 +964,10 @@ bool MediaDecodeResult::succeeded() const noexcept {
     return decoded_media_source.has_value() && !error.has_value();
 }
 
+bool VideoFrameDecodeResult::succeeded() const noexcept {
+    return video_frame.has_value() && !error.has_value();
+}
+
 MediaDecodeResult MediaDecoder::decode(
     const std::filesystem::path &input_path,
     const DecodeNormalizationPolicy &normalization_policy,
@@ -922,6 +1082,92 @@ MediaDecodeResult MediaDecoder::decode(
         return make_error(
             input_path.string(),
             "Media decode aborted because an unexpected exception was raised.",
+            exception.what()
+        );
+    }
+}
+
+VideoFrameDecodeResult MediaDecoder::decode_video_frame_at_time(
+    const std::filesystem::path &input_path,
+    const std::int64_t requested_time_microseconds,
+    const DecodeNormalizationPolicy &normalization_policy
+) noexcept {
+    try {
+        const auto normalized_input_path = input_path.lexically_normal();
+        const auto input_path_string = normalized_input_path.string();
+
+        if (input_path_string.empty()) {
+            return make_video_frame_error(
+                input_path_string,
+                "Cannot decode a preview frame because no file path was provided.",
+                "Provide a path to a readable media file before requesting preview."
+            );
+        }
+
+        std::error_code filesystem_error;
+        const bool input_exists = std::filesystem::exists(normalized_input_path, filesystem_error);
+        if (filesystem_error) {
+            return make_video_frame_error(
+                input_path_string,
+                "Cannot decode preview media input '" + input_path_string + "': the file system could not be queried.",
+                "The operating system reported: " + filesystem_error.message()
+            );
+        }
+
+        if (!input_exists) {
+            return make_video_frame_error(
+                input_path_string,
+                "Cannot decode preview media input '" + input_path_string + "': the file does not exist.",
+                "Check that the path is correct and that the file has been created before requesting preview."
+            );
+        }
+
+        auto format_context = open_format_context(input_path_string);
+        const auto primary_video_stream_index = av_find_best_stream(
+            format_context.get(),
+            AVMEDIA_TYPE_VIDEO,
+            -1,
+            -1,
+            nullptr,
+            0
+        );
+        if (primary_video_stream_index < 0) {
+            return make_video_frame_error(
+                input_path_string,
+                "No previewable video stream was found in '" + input_path_string + "'.",
+                primary_video_stream_index == AVERROR_STREAM_NOT_FOUND
+                    ? "Provide a media file that contains a decodable video stream before enabling Preview."
+                    : "FFmpeg reported: " + ffmpeg_support::ffmpeg_error_to_string(primary_video_stream_index)
+            );
+        }
+
+        const auto source_info = ffmpeg_support::build_media_source_info(
+            normalized_input_path,
+            *format_context,
+            primary_video_stream_index,
+            -1
+        );
+        if (!source_info.primary_video_stream.has_value()) {
+            return make_video_frame_error(
+                input_path_string,
+                "The selected source does not expose a primary video stream for preview.",
+                "Choose a source file with a decodable video stream before enabling Preview."
+            );
+        }
+
+        return VideoFrameDecodeResult{
+            .video_frame = decode_video_frame_at_time_internal(
+                input_path_string,
+                *source_info.primary_video_stream,
+                normalization_policy,
+                requested_time_microseconds
+            ),
+            .error = std::nullopt
+        };
+    } catch (const std::exception &exception) {
+        return make_video_frame_error(
+            input_path.string(),
+            "Preview frame decode aborted because an unexpected exception was raised.",
             exception.what()
         );
     }

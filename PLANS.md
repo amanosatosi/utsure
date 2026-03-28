@@ -62,6 +62,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M17 slice excludes automatic output naming, automatic subtitle selection, and new encode-core media policy beyond the minimum UI/controller wiring needed to expose the current pipeline cleanly.
 - The current M17 slice now also includes shipping the new SVG-backed desktop icon dependency through the Windows MSYS2 workflow and documented local setup so the refreshed app shell configures reproducibly in CI.
 - The current M17 slice now also includes a targeted regression pass from commit `882e2d24c6e665f2f742a8045f2e3874df251a2e` for SVG-backed action icons, branding consistency, queue-table rendering, Preview-vs-Task-Log semantics, native Windows caption behavior, and overly constrained desktop-shell sizing/density in the refreshed window.
+- The current M17 preview slice now also includes replacing the temporary full-clip preview decode with a bounded frame-at-time decode path so Preview remains opt-in, usable on long sources, and shares subtitle composition without buffering an entire video into memory.
 
 ## Architecture direction
 
