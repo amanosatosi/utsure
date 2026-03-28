@@ -6,6 +6,7 @@
 
 #include <QImage>
 #include <QFile>
+#include <QLoggingCategory>
 
 #include <algorithm>
 #include <cstddef>
@@ -22,6 +23,15 @@ constexpr std::size_t kRetainedPreviewFrameCount = 192;
 constexpr int kPreviewDecodeMaxWidth = 960;
 constexpr int kPreviewDecodeMaxHeight = 540;
 constexpr qint64 kSequentialPreviewRefillToleranceUs = 1000000;
+
+Q_LOGGING_CATEGORY(previewWorkerLog, "utsure.preview.worker")
+
+struct CachedPreviewWindowSummary final {
+    bool has_frames{false};
+    std::size_t frame_count{0};
+    qint64 start_us{0};
+    qint64 end_us{0};
+};
 
 QString to_qstring(std::string_view text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -97,6 +107,53 @@ qint64 frame_coverage_end_us(const utsure::core::media::DecodedVideoFrame &frame
         : frame.timestamp.start_microseconds;
 }
 
+QString format_time_us(const qint64 microseconds) {
+    const auto total_milliseconds = std::max<qint64>(0, microseconds / 1000);
+    const auto milliseconds = total_milliseconds % 1000;
+    const auto total_seconds = total_milliseconds / 1000;
+    const auto seconds = total_seconds % 60;
+    const auto minutes = (total_seconds / 60) % 60;
+    const auto hours = total_seconds / 3600;
+
+    return QString("%1:%2:%3.%4")
+        .arg(hours, 2, 10, QChar('0'))
+        .arg(minutes, 2, 10, QChar('0'))
+        .arg(seconds, 2, 10, QChar('0'))
+        .arg(milliseconds, 3, 10, QChar('0'));
+}
+
+QString bool_text(const bool value) {
+    return value ? "true" : "false";
+}
+
+CachedPreviewWindowSummary summarize_cached_preview_window(
+    const std::vector<utsure::core::media::DecodedVideoFrame> &frames
+) {
+    if (frames.empty()) {
+        return {};
+    }
+
+    return CachedPreviewWindowSummary{
+        .has_frames = true,
+        .frame_count = frames.size(),
+        .start_us = frames.front().timestamp.start_microseconds,
+        .end_us = frame_coverage_end_us(frames.back())
+    };
+}
+
+QString format_cached_preview_window_summary(const CachedPreviewWindowSummary &summary) {
+    if (!summary.has_frames) {
+        return "empty";
+    }
+
+    return QString("frames=%1 start=%2 (%3) end=%4 (%5)")
+        .arg(static_cast<qulonglong>(summary.frame_count))
+        .arg(summary.start_us)
+        .arg(format_time_us(summary.start_us))
+        .arg(summary.end_us)
+        .arg(format_time_us(summary.end_us));
+}
+
 }  // namespace
 
 PreviewFrameRendererWorker::PreviewFrameRendererWorker(QObject *parent) : QObject(parent) {}
@@ -116,8 +173,21 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
         }
 
         const QString normalized_source_path = request.source_path.trimmed();
-        if (!cached_preview_window_covers(normalized_source_path, request.requested_time_us)) {
+        const auto cache_summary_before = summarize_cached_preview_window(cached_preview_frames_);
+        const bool cache_covers_request = cached_preview_window_covers(normalized_source_path, request.requested_time_us);
+        qCInfo(previewWorkerLog).noquote()
+            << QString("render_request token=%1 requested=%2 (%3) cache=%4 covers=%5")
+                   .arg(request.request_token)
+                   .arg(request.requested_time_us)
+                   .arg(format_time_us(request.requested_time_us))
+                   .arg(format_cached_preview_window_summary(cache_summary_before))
+                   .arg(bool_text(cache_covers_request));
+
+        if (!cache_covers_request) {
             if (cached_source_path_ != normalized_source_path) {
+                qCInfo(previewWorkerLog).noquote()
+                    << QString("render_request source_changed old='%1' new='%2' resetting cache and subtitle session")
+                           .arg(cached_source_path_, normalized_source_path);
                 invalidate_preview_frame_cache();
                 invalidate_subtitle_session();
             }
@@ -141,9 +211,19 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
                 }
 
                 preview_session_ = std::move(session_result.session);
+                qCInfo(previewWorkerLog).noquote()
+                    << QString("render_request created preview session for '%1'").arg(normalized_source_path);
             }
 
-            auto preview_window_result = should_decode_next_preview_window(request.requested_time_us)
+            const bool use_sequential_refill = should_decode_next_preview_window(request.requested_time_us);
+            qCInfo(previewWorkerLog).noquote()
+                << QString("render_request refill_strategy requested=%1 (%2) sequential=%3 method=%4")
+                       .arg(request.requested_time_us)
+                       .arg(format_time_us(request.requested_time_us))
+                       .arg(bool_text(use_sequential_refill))
+                       .arg(use_sequential_refill ? "decode_next_window" : "seek_and_decode_window_at_time");
+
+            auto preview_window_result = use_sequential_refill
                 ? preview_session_->decode_next_window(kPreviewWindowFrameCount)
                 : preview_session_->seek_and_decode_window_at_time(
                     request.requested_time_us,
@@ -164,7 +244,14 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
 
             cached_source_path_ = normalized_source_path;
             auto new_preview_frames = std::move(*preview_window_result.video_frames);
-            if (should_decode_next_preview_window(request.requested_time_us) && !cached_preview_frames_.empty()) {
+            const auto new_window_summary = summarize_cached_preview_window(new_preview_frames);
+            qCInfo(previewWorkerLog).noquote()
+                << QString("render_request refill_result method=%1 returned=%2 window=%3")
+                       .arg(use_sequential_refill ? "decode_next_window" : "seek_and_decode_window_at_time")
+                       .arg(static_cast<qulonglong>(new_preview_frames.size()))
+                       .arg(format_cached_preview_window_summary(new_window_summary));
+
+            if (use_sequential_refill && !cached_preview_frames_.empty()) {
                 cached_preview_frames_.insert(
                     cached_preview_frames_.end(),
                     std::make_move_iterator(new_preview_frames.begin()),
@@ -180,10 +267,20 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
             } else {
                 cached_preview_frames_ = std::move(new_preview_frames);
             }
+
+            qCInfo(previewWorkerLog).noquote()
+                << QString("render_request cache_updated mode=%1 cache=%2")
+                       .arg(use_sequential_refill ? "append" : "replace")
+                       .arg(format_cached_preview_window_summary(summarize_cached_preview_window(cached_preview_frames_)));
         }
 
         const auto *cached_preview_frame = select_cached_preview_frame(request.requested_time_us);
         if (cached_preview_frame == nullptr) {
+            qCInfo(previewWorkerLog).noquote()
+                << QString("render_request selection_failed requested=%1 (%2) cache=%3")
+                       .arg(request.requested_time_us)
+                       .arg(format_time_us(request.requested_time_us))
+                       .arg(format_cached_preview_window_summary(summarize_cached_preview_window(cached_preview_frames_)));
             emit preview_failed(
                 request.request_token,
                 request.requested_time_us,
@@ -192,6 +289,14 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
             );
             return;
         }
+
+        qCInfo(previewWorkerLog).noquote()
+            << QString("render_request selection_ready requested=%1 (%2) frame_time=%3 (%4) frame_duration=%5")
+                   .arg(request.requested_time_us)
+                   .arg(format_time_us(request.requested_time_us))
+                   .arg(cached_preview_frame->timestamp.start_microseconds)
+                   .arg(format_time_us(cached_preview_frame->timestamp.start_microseconds))
+                   .arg(cached_preview_frame->timestamp.duration_microseconds.value_or(0));
 
         auto preview_frame = *cached_preview_frame;
 
@@ -246,11 +351,15 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
 }
 
 void PreviewFrameRendererWorker::clear_cache() {
+    qCInfo(previewWorkerLog) << "clear_cache requested";
     invalidate_preview_frame_cache();
     invalidate_subtitle_session();
 }
 
 void PreviewFrameRendererWorker::invalidate_preview_frame_cache() {
+    qCInfo(previewWorkerLog).noquote()
+        << QString("invalidate_preview_frame_cache cache=%1")
+               .arg(format_cached_preview_window_summary(summarize_cached_preview_window(cached_preview_frames_)));
     cached_source_path_.clear();
     cached_preview_frames_.clear();
     preview_session_.reset();
@@ -276,7 +385,7 @@ bool PreviewFrameRendererWorker::cached_preview_window_covers(
     const auto &first_frame = cached_preview_frames_.front();
     const auto &last_frame = cached_preview_frames_.back();
     return requested_time_us >= first_frame.timestamp.start_microseconds &&
-        requested_time_us <= frame_coverage_end_us(last_frame);
+        requested_time_us < frame_coverage_end_us(last_frame);
 }
 
 const utsure::core::media::DecodedVideoFrame *PreviewFrameRendererWorker::select_cached_preview_frame(
@@ -305,7 +414,7 @@ const utsure::core::media::DecodedVideoFrame *PreviewFrameRendererWorker::select
     }
 
     if (upper_bound == cached_preview_frames_.end()) {
-        return &cached_preview_frames_.back();
+        return nullptr;
     }
 
     return &(*upper_bound);
@@ -317,7 +426,7 @@ bool PreviewFrameRendererWorker::should_decode_next_preview_window(const qint64 
     }
 
     const qint64 cached_window_end_us = frame_coverage_end_us(cached_preview_frames_.back());
-    return requested_time_us > cached_window_end_us &&
+    return requested_time_us >= cached_window_end_us &&
         requested_time_us <= (cached_window_end_us + kSequentialPreviewRefillToleranceUs);
 }
 

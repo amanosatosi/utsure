@@ -27,6 +27,7 @@
 #include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLoggingCategory>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPlainTextEdit>
@@ -79,8 +80,14 @@ struct PathFieldWidgets final {
     QPushButton *browse_button{nullptr};
 };
 
+Q_LOGGING_CATEGORY(previewPlaybackLog, "utsure.preview.playback")
+
 QString to_qstring(std::string_view text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+}
+
+QString bool_text(const bool value) {
+    return value ? "true" : "false";
 }
 
 QString video_file_filter() {
@@ -1773,12 +1780,36 @@ void MainWindow::request_preview_frame_for_time(const qint64 requested_time_us) 
         preview_requested_subtitle_path_ != normalized_subtitle_path ||
         preview_requested_subtitle_format_hint_ != subtitle_format_hint;
 
+    qCInfo(previewPlaybackLog).noquote()
+        << QString(
+               "request_preview_frame token=%1 requested=%2 (%3) bounded=%4 (%5) current=%6 (%7) next=%8 (%9) in_flight=%10 playing=%11 context_changed=%12"
+           )
+               .arg(preview_request_token_)
+               .arg(requested_time_us)
+               .arg(format_time_us(requested_time_us))
+               .arg(bounded_requested_time_us)
+               .arg(format_time_us(bounded_requested_time_us))
+               .arg(job.current_time_us)
+               .arg(format_time_us(job.current_time_us))
+               .arg(preview_next_playback_time_us_)
+               .arg(format_time_us(std::max<qint64>(preview_next_playback_time_us_, 0)))
+               .arg(bool_text(preview_request_in_flight_))
+               .arg(bool_text(preview_playing_))
+               .arg(bool_text(preview_context_changed));
+
     if (preview_requested_job_index_ == selected_job_index_ &&
         preview_requested_time_us_ == bounded_requested_time_us &&
         preview_requested_source_path_ == normalized_source_path &&
         preview_requested_subtitle_enabled_ == subtitles_enabled &&
         preview_requested_subtitle_path_ == normalized_subtitle_path &&
         preview_requested_subtitle_format_hint_ == subtitle_format_hint) {
+        qCInfo(previewPlaybackLog).noquote()
+            << QString("request_preview_frame deduped token=%1 requested=%2 (%3) in_flight=%4 playing=%5")
+                   .arg(preview_request_token_)
+                   .arg(bounded_requested_time_us)
+                   .arg(format_time_us(bounded_requested_time_us))
+                   .arg(bool_text(preview_request_in_flight_))
+                   .arg(bool_text(preview_playing_));
         return;
     }
 
@@ -1797,6 +1828,11 @@ void MainWindow::request_preview_frame_for_time(const qint64 requested_time_us) 
     preview_requested_subtitle_path_ = normalized_subtitle_path;
     preview_requested_subtitle_format_hint_ = subtitle_format_hint;
 
+    qCInfo(previewPlaybackLog).noquote()
+        << QString("request_preview_frame dispatch token=%1 requested=%2 (%3)")
+               .arg(preview_request_token_)
+               .arg(bounded_requested_time_us)
+               .arg(format_time_us(bounded_requested_time_us));
     preview_renderer_controller_->request_preview(PreviewFrameRenderRequest{
         .request_token = preview_request_token_,
         .source_path = normalized_source_path,
@@ -1862,10 +1898,24 @@ void MainWindow::start_preview_playback() {
     );
     preview_playback_timer_->start();
     sync_preview_surface_state();
+    qCInfo(previewPlaybackLog).noquote()
+        << QString("start_preview_playback token=%1 current=%2 (%3) next=%4 (%5) timer_interval_ms=%6")
+               .arg(preview_request_token_)
+               .arg(job.current_time_us)
+               .arg(format_time_us(job.current_time_us))
+               .arg(preview_next_playback_time_us_)
+               .arg(format_time_us(preview_next_playback_time_us_))
+               .arg(preview_playback_timer_->interval());
     handle_preview_playback_tick();
 }
 
 void MainWindow::pause_preview_playback() {
+    qCInfo(previewPlaybackLog).noquote()
+        << QString("pause_preview_playback token=%1 requested=%2 next=%3 in_flight=%4")
+               .arg(preview_request_token_)
+               .arg(preview_requested_time_us_)
+               .arg(preview_next_playback_time_us_)
+               .arg(bool_text(preview_request_in_flight_));
     ++preview_request_token_;
     preview_request_in_flight_ = false;
     preview_requested_time_us_ = -1;
@@ -1903,10 +1953,20 @@ void MainWindow::sync_preview_surface_state() {
 
 void MainWindow::handle_preview_loading(const quint64 request_token, const qint64 requested_time_us) {
     if (request_token != preview_request_token_ || !preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_)) {
+        qCInfo(previewPlaybackLog).noquote()
+            << QString("handle_preview_loading ignored token=%1 requested=%2 active_token=%3")
+                   .arg(request_token)
+                   .arg(requested_time_us)
+                   .arg(preview_request_token_);
         return;
     }
 
     preview_request_in_flight_ = true;
+    qCInfo(previewPlaybackLog).noquote()
+        << QString("handle_preview_loading token=%1 requested=%2 (%3) request_in_flight=true")
+               .arg(request_token)
+               .arg(requested_time_us)
+               .arg(format_time_us(requested_time_us));
     if (!preview_surface_widget_->has_frame()) {
         preview_surface_widget_->set_placeholder("LOADING PREVIEW");
         preview_time_badge_->setText(format_time_us(requested_time_us));
@@ -1926,12 +1986,32 @@ void MainWindow::handle_preview_ready(
     const QImage &image
 ) {
     preview_request_in_flight_ = false;
+    qCInfo(previewPlaybackLog).noquote()
+        << QString(
+               "handle_preview_ready token=%1 requested=%2 (%3) frame_time=%4 (%5) frame_duration=%6 request_in_flight=false"
+           )
+               .arg(request_token)
+               .arg(requested_time_us)
+               .arg(format_time_us(requested_time_us))
+               .arg(frame_time_us)
+               .arg(format_time_us(frame_time_us))
+               .arg(frame_duration_us);
 
     if (request_token != preview_request_token_ || !preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_)) {
+        qCInfo(previewPlaybackLog).noquote()
+            << QString("handle_preview_ready ignored token=%1 active_token=%2 preview_enabled=%3 valid_job=%4")
+                   .arg(request_token)
+                   .arg(preview_request_token_)
+                   .arg(bool_text(preview_enabled_check_->isChecked()))
+                   .arg(bool_text(is_valid_job_index(selected_job_index_)));
         return;
     }
 
     if (requested_time_us != preview_requested_time_us_) {
+        qCInfo(previewPlaybackLog).noquote()
+            << QString("handle_preview_ready ignored stale_request requested=%1 active_requested=%2")
+                   .arg(requested_time_us)
+                   .arg(preview_requested_time_us_);
         return;
     }
 
@@ -1963,6 +2043,14 @@ void MainWindow::handle_preview_ready(
     preview_time_badge_->setText(format_time_us(job.current_time_us));
     refresh_trim_controls();
 
+    qCInfo(previewPlaybackLog).noquote()
+        << QString("handle_preview_ready applied current=%1 (%2) next=%3 (%4) timer_interval_ms=%5")
+               .arg(job.current_time_us)
+               .arg(format_time_us(job.current_time_us))
+               .arg(preview_next_playback_time_us_)
+               .arg(format_time_us(std::max<qint64>(preview_next_playback_time_us_, 0)))
+               .arg(preview_playback_timer_ != nullptr ? preview_playback_timer_->interval() : -1);
+
     if (preview_playing_ && job.current_time_us >= trim_out_us) {
         pause_preview_playback();
     }
@@ -1975,12 +2063,28 @@ void MainWindow::handle_preview_failed(
     const QString &detail
 ) {
     preview_request_in_flight_ = false;
+    qCInfo(previewPlaybackLog).noquote()
+        << QString("handle_preview_failed token=%1 requested=%2 (%3) title='%4' detail='%5' request_in_flight=false")
+               .arg(request_token)
+               .arg(requested_time_us)
+               .arg(format_time_us(requested_time_us))
+               .arg(title, detail);
 
     if (request_token != preview_request_token_ || !preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_)) {
+        qCInfo(previewPlaybackLog).noquote()
+            << QString("handle_preview_failed ignored token=%1 active_token=%2 preview_enabled=%3 valid_job=%4")
+                   .arg(request_token)
+                   .arg(preview_request_token_)
+                   .arg(bool_text(preview_enabled_check_->isChecked()))
+                   .arg(bool_text(is_valid_job_index(selected_job_index_)));
         return;
     }
 
     if (requested_time_us != preview_requested_time_us_) {
+        qCInfo(previewPlaybackLog).noquote()
+            << QString("handle_preview_failed ignored stale_request requested=%1 active_requested=%2")
+                   .arg(requested_time_us)
+                   .arg(preview_requested_time_us_);
         return;
     }
 
@@ -2012,11 +2116,21 @@ void MainWindow::handle_preview_stop_requested() {
 
 void MainWindow::handle_preview_playback_tick() {
     if (!preview_playing_ || preview_playback_timer_ == nullptr || !preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_)) {
+        qCInfo(previewPlaybackLog).noquote()
+            << QString("handle_preview_playback_tick stopping playing=%1 timer=%2 preview_enabled=%3 valid_job=%4")
+                   .arg(bool_text(preview_playing_))
+                   .arg(bool_text(preview_playback_timer_ != nullptr))
+                   .arg(bool_text(preview_enabled_check_->isChecked()))
+                   .arg(bool_text(is_valid_job_index(selected_job_index_)));
         pause_preview_playback();
         return;
     }
 
     if (preview_request_in_flight_) {
+        qCInfo(previewPlaybackLog).noquote()
+            << QString("handle_preview_playback_tick skipped request_in_flight=true token=%1 requested=%2")
+                   .arg(preview_request_token_)
+                   .arg(preview_requested_time_us_);
         return;
     }
 
@@ -2034,6 +2148,14 @@ void MainWindow::handle_preview_playback_tick() {
     }
 
     requested_time_us = std::clamp<qint64>(requested_time_us, trim_in_us, trim_out_us);
+    qCInfo(previewPlaybackLog).noquote()
+        << QString("handle_preview_playback_tick advancing current=%1 (%2) next=%3 (%4) requested=%5 (%6)")
+               .arg(job.current_time_us)
+               .arg(format_time_us(job.current_time_us))
+               .arg(preview_next_playback_time_us_)
+               .arg(format_time_us(std::max<qint64>(preview_next_playback_time_us_, 0)))
+               .arg(requested_time_us)
+               .arg(format_time_us(requested_time_us));
     if (requested_time_us >= trim_out_us) {
         job.current_time_us = trim_out_us;
         pause_preview_playback();
