@@ -142,8 +142,15 @@ private:
     void pause_preview_playback();
     void stop_preview_playback();
     void sync_preview_surface_state();
+    void request_preview_frame_for_time(qint64 requested_time_us);
     void handle_preview_loading(quint64 request_token, qint64 requested_time_us);
-    void handle_preview_ready(quint64 request_token, qint64 requested_time_us, qint64 frame_time_us, const QImage &image);
+    void handle_preview_ready(
+        quint64 request_token,
+        qint64 requested_time_us,
+        qint64 frame_time_us,
+        qint64 frame_duration_us,
+        const QImage &image
+    );
     void handle_preview_failed(quint64 request_token, qint64 requested_time_us, const QString &title, const QString &detail);
     void handle_preview_surface_clicked();
     void handle_preview_play_pause_requested();
@@ -192,15 +199,16 @@ private:
     QElapsedTimer active_job_elapsed_timer_{};
     bool active_job_elapsed_valid_{false};
     bool preview_playing_{false};
-    QElapsedTimer preview_playback_elapsed_timer_{};
     QStringList session_log_lines_{};
     quint64 preview_request_token_{0};
     int preview_requested_job_index_{-1};
     qint64 preview_requested_time_us_{-1};
+    qint64 preview_next_playback_time_us_{-1};
     QString preview_requested_source_path_{};
     QString preview_requested_subtitle_path_{};
     QString preview_requested_subtitle_format_hint_{"auto"};
     bool preview_requested_subtitle_enabled_{false};
+    bool preview_request_in_flight_{false};
 
     QCheckBox *top_window_check_{nullptr};
     QTableWidget *queue_table_{nullptr};

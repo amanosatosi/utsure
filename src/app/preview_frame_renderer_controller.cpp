@@ -66,9 +66,10 @@ void PreviewFrameRendererController::handle_preview_ready(
     const quint64 request_token,
     const qint64 requested_time_us,
     const qint64 frame_time_us,
+    const qint64 frame_duration_us,
     const QImage &image
 ) {
-    emit preview_ready(request_token, requested_time_us, frame_time_us, image);
+    emit preview_ready(request_token, requested_time_us, frame_time_us, frame_duration_us, image);
     finish_request();
 }
 

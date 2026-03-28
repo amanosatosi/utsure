@@ -1742,14 +1742,27 @@ void MainWindow::request_selected_job_preview_frame() {
     }
 
     const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    request_preview_frame_for_time(std::clamp<qint64>(
+        job.current_time_us,
+        0,
+        std::max<qint64>(job.duration_us, 0)
+    ));
+}
+
+void MainWindow::request_preview_frame_for_time(const qint64 requested_time_us) {
+    if (!preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_) || preview_renderer_controller_ == nullptr) {
+        return;
+    }
+
+    const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     const QString normalized_source_path = job.source_path.trimmed();
     const QString normalized_subtitle_path = job.subtitle_path.trimmed();
     const bool subtitles_enabled = job.subtitle_enabled && !normalized_subtitle_path.isEmpty();
     const QString subtitle_format_hint = subtitles_enabled
         ? subtitle_format_hint_for_path(normalized_subtitle_path)
         : QString("auto");
-    const qint64 requested_time_us = std::clamp<qint64>(
-        job.current_time_us,
+    const qint64 bounded_requested_time_us = std::clamp<qint64>(
+        requested_time_us,
         0,
         std::max<qint64>(job.duration_us, 0)
     );
@@ -1761,7 +1774,7 @@ void MainWindow::request_selected_job_preview_frame() {
         preview_requested_subtitle_format_hint_ != subtitle_format_hint;
 
     if (preview_requested_job_index_ == selected_job_index_ &&
-        preview_requested_time_us_ == requested_time_us &&
+        preview_requested_time_us_ == bounded_requested_time_us &&
         preview_requested_source_path_ == normalized_source_path &&
         preview_requested_subtitle_enabled_ == subtitles_enabled &&
         preview_requested_subtitle_path_ == normalized_subtitle_path &&
@@ -1778,7 +1791,7 @@ void MainWindow::request_selected_job_preview_frame() {
     }
 
     preview_requested_job_index_ = selected_job_index_;
-    preview_requested_time_us_ = requested_time_us;
+    preview_requested_time_us_ = bounded_requested_time_us;
     preview_requested_source_path_ = normalized_source_path;
     preview_requested_subtitle_enabled_ = subtitles_enabled;
     preview_requested_subtitle_path_ = normalized_subtitle_path;
@@ -1787,7 +1800,7 @@ void MainWindow::request_selected_job_preview_frame() {
     preview_renderer_controller_->request_preview(PreviewFrameRenderRequest{
         .request_token = preview_request_token_,
         .source_path = normalized_source_path,
-        .requested_time_us = requested_time_us,
+        .requested_time_us = bounded_requested_time_us,
         .subtitle_enabled = subtitles_enabled,
         .subtitle_path = normalized_subtitle_path,
         .subtitle_format_hint = subtitle_format_hint
@@ -1806,8 +1819,10 @@ void MainWindow::clear_preview_surface() {
     }
 
     ++preview_request_token_;
+    preview_request_in_flight_ = false;
     preview_requested_job_index_ = -1;
     preview_requested_time_us_ = -1;
+    preview_next_playback_time_us_ = -1;
     preview_requested_source_path_.clear();
     preview_requested_subtitle_enabled_ = false;
     preview_requested_subtitle_path_.clear();
@@ -1831,21 +1846,30 @@ void MainWindow::start_preview_playback() {
     if (job.current_time_us < trim_in_us || job.current_time_us >= trim_out_us) {
         job.current_time_us = trim_in_us;
         refresh_trim_controls();
-        refresh_selected_job_preview();
     }
 
+    const bool resume_from_displayed_frame =
+        preview_surface_widget_ != nullptr &&
+        preview_surface_widget_->has_frame() &&
+        job.current_time_us >= trim_in_us &&
+        job.current_time_us < trim_out_us;
+    preview_next_playback_time_us_ = resume_from_displayed_frame
+        ? std::clamp<qint64>(job.current_time_us + selected_job_frame_step_us(), trim_in_us, trim_out_us)
+        : std::clamp<qint64>(job.current_time_us, trim_in_us, trim_out_us);
     preview_playing_ = true;
     preview_playback_timer_->setInterval(
         std::clamp<int>(static_cast<int>(selected_job_frame_step_us() / 1000), 16, 67)
     );
-    preview_playback_elapsed_timer_.restart();
     preview_playback_timer_->start();
     sync_preview_surface_state();
+    handle_preview_playback_tick();
 }
 
 void MainWindow::pause_preview_playback() {
     ++preview_request_token_;
+    preview_request_in_flight_ = false;
     preview_requested_time_us_ = -1;
+    preview_next_playback_time_us_ = -1;
     preview_playing_ = false;
     if (preview_playback_timer_ != nullptr) {
         preview_playback_timer_->stop();
@@ -1882,29 +1906,66 @@ void MainWindow::handle_preview_loading(const quint64 request_token, const qint6
         return;
     }
 
+    preview_request_in_flight_ = true;
     if (!preview_surface_widget_->has_frame()) {
         preview_surface_widget_->set_placeholder("LOADING PREVIEW");
+        preview_time_badge_->setText(format_time_us(requested_time_us));
+        return;
     }
-    preview_time_badge_->setText(format_time_us(requested_time_us));
+
+    if (!preview_playing_) {
+        preview_time_badge_->setText(format_time_us(requested_time_us));
+    }
 }
 
 void MainWindow::handle_preview_ready(
     const quint64 request_token,
     const qint64 requested_time_us,
     const qint64 frame_time_us,
+    const qint64 frame_duration_us,
     const QImage &image
 ) {
-    Q_UNUSED(requested_time_us);
+    preview_request_in_flight_ = false;
 
     if (request_token != preview_request_token_ || !preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_)) {
         return;
     }
 
+    if (requested_time_us != preview_requested_time_us_) {
+        return;
+    }
+
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
-    job.current_time_us = std::clamp<qint64>(frame_time_us, 0, std::max<qint64>(job.duration_us, 0));
+    const qint64 bounded_duration_us = std::max<qint64>(job.duration_us, 0);
+    const qint64 trim_in_us = std::clamp<qint64>(job.trim_in_us, 0, bounded_duration_us);
+    const qint64 trim_out_us = std::clamp<qint64>(std::max(job.trim_out_us, trim_in_us), trim_in_us, bounded_duration_us);
+    const qint64 normalized_frame_time_us = std::clamp<qint64>(frame_time_us, trim_in_us, trim_out_us);
+    const qint64 normalized_requested_time_us = std::clamp<qint64>(requested_time_us, trim_in_us, trim_out_us);
+    const qint64 effective_frame_step_us = std::max<qint64>(
+        frame_duration_us,
+        selected_job_frame_step_us()
+    );
+
+    if (preview_playing_) {
+        job.current_time_us = normalized_frame_time_us;
+        preview_next_playback_time_us_ = std::min(trim_out_us, normalized_frame_time_us + effective_frame_step_us);
+        if (preview_playback_timer_ != nullptr) {
+            preview_playback_timer_->setInterval(
+                std::clamp<int>(static_cast<int>(effective_frame_step_us / 1000), 16, 67)
+            );
+        }
+    } else {
+        job.current_time_us = normalized_requested_time_us;
+        preview_next_playback_time_us_ = -1;
+    }
+
     preview_surface_widget_->set_frame_image(image);
     preview_time_badge_->setText(format_time_us(job.current_time_us));
     refresh_trim_controls();
+
+    if (preview_playing_ && job.current_time_us >= trim_out_us) {
+        pause_preview_playback();
+    }
 }
 
 void MainWindow::handle_preview_failed(
@@ -1913,7 +1974,13 @@ void MainWindow::handle_preview_failed(
     const QString &title,
     const QString &detail
 ) {
+    preview_request_in_flight_ = false;
+
     if (request_token != preview_request_token_ || !preview_enabled_check_->isChecked() || !is_valid_job_index(selected_job_index_)) {
+        return;
+    }
+
+    if (requested_time_us != preview_requested_time_us_) {
         return;
     }
 
@@ -1949,34 +2016,32 @@ void MainWindow::handle_preview_playback_tick() {
         return;
     }
 
+    if (preview_request_in_flight_) {
+        return;
+    }
+
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     const qint64 bounded_duration_us = std::max<qint64>(job.duration_us, 0);
     const qint64 trim_in_us = std::clamp<qint64>(job.trim_in_us, 0, bounded_duration_us);
     const qint64 trim_out_us = std::clamp<qint64>(std::max(job.trim_out_us, trim_in_us), trim_in_us, bounded_duration_us);
-    const qint64 elapsed_us = std::max<qint64>(
-        preview_playback_elapsed_timer_.restart() * 1000,
-        selected_job_frame_step_us()
-    );
+    qint64 requested_time_us = preview_next_playback_time_us_;
 
-    if (job.current_time_us < trim_in_us) {
-        job.current_time_us = trim_in_us;
+    if (requested_time_us < 0) {
+        requested_time_us =
+            preview_surface_widget_ != nullptr && preview_surface_widget_->has_frame()
+                ? job.current_time_us + selected_job_frame_step_us()
+                : job.current_time_us;
     }
 
-    if (job.current_time_us >= trim_out_us) {
+    requested_time_us = std::clamp<qint64>(requested_time_us, trim_in_us, trim_out_us);
+    if (requested_time_us >= trim_out_us) {
         job.current_time_us = trim_out_us;
         pause_preview_playback();
         refresh_trim_controls();
-        refresh_selected_job_preview();
         return;
     }
 
-    job.current_time_us = std::min(trim_out_us, job.current_time_us + elapsed_us);
-    refresh_trim_controls();
-    refresh_selected_job_preview();
-
-    if (job.current_time_us >= trim_out_us) {
-        pause_preview_playback();
-    }
+    request_preview_frame_for_time(requested_time_us);
 }
 
 void MainWindow::step_selected_job_frame(const int direction) {

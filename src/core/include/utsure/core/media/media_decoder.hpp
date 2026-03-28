@@ -28,6 +28,13 @@ struct VideoFrameDecodeResult final {
     [[nodiscard]] bool succeeded() const noexcept;
 };
 
+struct VideoFrameWindowDecodeResult final {
+    std::optional<std::vector<DecodedVideoFrame>> video_frames{};
+    std::optional<MediaDecodeError> error{};
+
+    [[nodiscard]] bool succeeded() const noexcept;
+};
+
 struct DecodeStreamSelection final {
     bool decode_video{true};
     bool decode_audio{true};
@@ -44,6 +51,13 @@ public:
     [[nodiscard]] static VideoFrameDecodeResult decode_video_frame_at_time(
         const std::filesystem::path &input_path,
         std::int64_t requested_time_microseconds,
+        const DecodeNormalizationPolicy &normalization_policy = {}
+    ) noexcept;
+
+    [[nodiscard]] static VideoFrameWindowDecodeResult decode_video_frame_window_at_time(
+        const std::filesystem::path &input_path,
+        std::int64_t requested_time_microseconds,
+        std::size_t maximum_frame_count,
         const DecodeNormalizationPolicy &normalization_policy = {}
     ) noexcept;
 };

@@ -65,6 +65,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M17 preview slice now also includes replacing the temporary full-clip preview decode with a bounded frame-at-time decode path so Preview remains opt-in, usable on long sources, and shares subtitle composition without buffering an entire video into memory.
 - The current M17 preview slice now also includes upgrading the right-side Preview tab from still-frame inspection to an opt-in transport-controlled preview player with a larger default 16:9 surface, hover-only playback controls, and icon-first trim navigation.
 - The current M17 preview playback slice now also includes fixing request-generation handling so continuous visual playback can present intermediate frames while paused/offline state changes still invalidate delayed in-flight renders correctly.
+- The current M17 preview playback slice now also includes replacing per-frame reopen/seek preview decode with a small cached frame-window path so initial seek/index work can be reused across nearby playback frames.
 
 ## Architecture direction
 
@@ -606,8 +607,10 @@ Current slice status:
   * Completed: reduced desktop-shell height pressure by lowering the default/minimum window height, shrinking the preview surface minimum, and relaxing the initial splitter allocations.
   * Completed: fixed the second-source queue crash by blocking queue-table rebuild signals, avoiding row selection against stale pre-refresh row counts, and removing the redundant post-add full refresh that re-entered the editor/selection path.
   * Completed: removed the extra trim-note text from the Preview tab and replaced the placeholder label stack with a dedicated preview surface widget.
-  * Completed: added an opt-in preview renderer worker/controller that decodes only the main-source video path on demand, caches the decoded source while Preview is active, and renders the current playhead frame without running while Preview is off.
+  * Completed: added an opt-in preview renderer worker/controller that decodes only the main-source video path on demand, keeps Preview fully idle while disabled, and renders the current playhead frame without coupling to the encode pipeline.
   * Completed: shared subtitle preview composition with the existing libassmod-backed burn-in path by adding a one-frame subtitle composition helper in core and reusing the same subtitle renderer/session plus RGBA bitmap compositor for Preview overlays.
+  * Completed: replaced the old per-frame reopen/seek preview path with a bounded cached frame-window decoder so Preview can reuse nearby decoded frames instead of reopening the source for every visual step.
+  * Completed: changed preview playback to advance from delivered frame timestamps and frame durations, instead of wall-clock drift, so delayed decode responses no longer make the picture stall and then jump backward.
 
 Likely files/modules:
   * `src/app/`

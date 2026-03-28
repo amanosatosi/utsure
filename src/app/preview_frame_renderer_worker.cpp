@@ -9,12 +9,13 @@
 
 #include <algorithm>
 #include <cstring>
-#include <cstdlib>
 #include <filesystem>
 #include <stdexcept>
 #include <string_view>
 
 namespace {
+
+constexpr std::size_t kPreviewWindowFrameCount = 24;
 
 QString to_qstring(std::string_view text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -77,6 +78,12 @@ bool rationals_match(
     return left.numerator == right.numerator && left.denominator == right.denominator;
 }
 
+qint64 frame_coverage_end_us(const utsure::core::media::DecodedVideoFrame &frame) {
+    return frame.timestamp.duration_microseconds.has_value()
+        ? frame.timestamp.start_microseconds + *frame.timestamp.duration_microseconds
+        : frame.timestamp.start_microseconds;
+}
+
 }  // namespace
 
 PreviewFrameRendererWorker::PreviewFrameRendererWorker(QObject *parent) : QObject(parent) {}
@@ -95,24 +102,47 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
             return;
         }
 
-        const auto preview_frame_result = utsure::core::media::MediaDecoder::decode_video_frame_at_time(
-            qstring_to_path(request.source_path.trimmed()),
-            request.requested_time_us
-        );
-        if (!preview_frame_result.succeeded()) {
+        const QString normalized_source_path = request.source_path.trimmed();
+        if (!cached_preview_window_covers(normalized_source_path, request.requested_time_us)) {
+            if (cached_source_path_ != normalized_source_path) {
+                invalidate_preview_frame_cache();
+                invalidate_subtitle_session();
+            }
+
+            const auto preview_window_result = utsure::core::media::MediaDecoder::decode_video_frame_window_at_time(
+                qstring_to_path(normalized_source_path),
+                request.requested_time_us,
+                kPreviewWindowFrameCount
+            );
+            if (!preview_window_result.succeeded()) {
+                emit preview_failed(
+                    request.request_token,
+                    request.requested_time_us,
+                    "PREVIEW UNAVAILABLE",
+                    format_error_detail(
+                        preview_window_result.error->message,
+                        preview_window_result.error->actionable_hint
+                    )
+                );
+                return;
+            }
+
+            cached_source_path_ = normalized_source_path;
+            cached_preview_frames_ = std::move(*preview_window_result.video_frames);
+        }
+
+        const auto *cached_preview_frame = select_cached_preview_frame(request.requested_time_us);
+        if (cached_preview_frame == nullptr) {
             emit preview_failed(
                 request.request_token,
                 request.requested_time_us,
                 "PREVIEW UNAVAILABLE",
-                format_error_detail(
-                    preview_frame_result.error->message,
-                    preview_frame_result.error->actionable_hint
-                )
+                "The preview cache did not contain a frame for the requested time."
             );
             return;
         }
 
-        auto preview_frame = std::move(*preview_frame_result.video_frame);
+        auto preview_frame = *cached_preview_frame;
 
         if (request.subtitle_enabled && !request.subtitle_path.trimmed().isEmpty()) {
             ensure_subtitle_session(request, preview_frame);
@@ -129,7 +159,7 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
             const auto compose_result = utsure::core::subtitles::compose_subtitles_into_frame(
                 preview_frame,
                 *subtitle_session_,
-                request.requested_time_us
+                preview_frame.timestamp.start_microseconds
             );
             if (!compose_result.succeeded()) {
                 emit preview_failed(
@@ -151,6 +181,7 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
             request.request_token,
             request.requested_time_us,
             preview_frame.timestamp.start_microseconds,
+            preview_frame.timestamp.duration_microseconds.value_or(0),
             image_from_decoded_frame(preview_frame)
         );
     } catch (const std::exception &exception) {
@@ -164,7 +195,13 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
 }
 
 void PreviewFrameRendererWorker::clear_cache() {
+    invalidate_preview_frame_cache();
     invalidate_subtitle_session();
+}
+
+void PreviewFrameRendererWorker::invalidate_preview_frame_cache() {
+    cached_source_path_.clear();
+    cached_preview_frames_.clear();
 }
 
 void PreviewFrameRendererWorker::invalidate_subtitle_session() {
@@ -174,6 +211,52 @@ void PreviewFrameRendererWorker::invalidate_subtitle_session() {
     cached_subtitle_canvas_height_ = 0;
     cached_subtitle_sample_aspect_ratio_.reset();
     subtitle_session_.reset();
+}
+
+bool PreviewFrameRendererWorker::cached_preview_window_covers(
+    const QString &source_path,
+    const qint64 requested_time_us
+) const {
+    if (cached_source_path_ != source_path || cached_preview_frames_.empty()) {
+        return false;
+    }
+
+    const auto &first_frame = cached_preview_frames_.front();
+    const auto &last_frame = cached_preview_frames_.back();
+    return requested_time_us >= first_frame.timestamp.start_microseconds &&
+        requested_time_us <= frame_coverage_end_us(last_frame);
+}
+
+const utsure::core::media::DecodedVideoFrame *PreviewFrameRendererWorker::select_cached_preview_frame(
+    const qint64 requested_time_us
+) const {
+    if (cached_preview_frames_.empty()) {
+        return nullptr;
+    }
+
+    const auto upper_bound = std::upper_bound(
+        cached_preview_frames_.begin(),
+        cached_preview_frames_.end(),
+        requested_time_us,
+        [](const qint64 timestamp_microseconds, const utsure::core::media::DecodedVideoFrame &frame) {
+            return timestamp_microseconds < frame.timestamp.start_microseconds;
+        }
+    );
+
+    if (upper_bound == cached_preview_frames_.begin()) {
+        return &cached_preview_frames_.front();
+    }
+
+    const auto &previous_frame = *(upper_bound - 1);
+    if (requested_time_us < frame_coverage_end_us(previous_frame)) {
+        return &previous_frame;
+    }
+
+    if (upper_bound == cached_preview_frames_.end()) {
+        return &cached_preview_frames_.back();
+    }
+
+    return &(*upper_bound);
 }
 
 void PreviewFrameRendererWorker::ensure_subtitle_session(
