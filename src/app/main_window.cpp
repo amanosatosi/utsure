@@ -2172,7 +2172,7 @@ void MainWindow::handle_preview_playback_tick() {
     if (preview_audio_controller_ != nullptr && preview_audio_controller_->is_audio_playing()) {
         const qint64 audio_playback_time_us = preview_audio_controller_->current_playback_time_us();
         if (audio_playback_time_us >= 0) {
-            requested_time_us = std::max<qint64>(audio_playback_time_us, job.current_time_us);
+            requested_time_us = audio_playback_time_us;
         }
     }
 
