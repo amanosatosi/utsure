@@ -6,6 +6,8 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 third_party_root="${UTSURE_THIRD_PARTY_ROOT:-${project_root}/.deps}"
 ffmpeg_prefix="${UTSURE_FFMPEG_PREFIX:-${third_party_root}/ffmpeg/prefix}"
 ffmpeg_pcdir="${ffmpeg_prefix}/lib/pkgconfig"
+ffms2_prefix="${UTSURE_FFMS2_PREFIX:-${third_party_root}/ffms2/prefix}"
+ffms2_pcdir="${ffms2_prefix}/lib/pkgconfig"
 libassmod_prefix="${UTSURE_LIBASSMOD_PREFIX:-${third_party_root}/libassmod/prefix}"
 libassmod_pcdir="${libassmod_prefix}/lib/pkgconfig"
 
@@ -13,8 +15,8 @@ normalize_path() {
   cygpath -m "$1" | tr '[:upper:]' '[:lower:]'
 }
 
-export PATH="${ffmpeg_prefix}/bin:${libassmod_prefix}/bin:/ucrt64/bin:${PATH}"
-export PKG_CONFIG_PATH="${ffmpeg_pcdir}:${libassmod_pcdir}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+export PATH="${ffmpeg_prefix}/bin:${ffms2_prefix}/bin:${libassmod_prefix}/bin:/ucrt64/bin:${PATH}"
+export PKG_CONFIG_PATH="${ffmpeg_pcdir}:${ffms2_pcdir}:${libassmod_pcdir}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 test -f /ucrt64/lib/cmake/Qt6/Qt6Config.cmake
 
@@ -28,7 +30,7 @@ case "${ffmpeg_release_line}" in
     ;;
 esac
 
-pkg-config --modversion libavcodec libavformat libavutil libswresample libswscale x264 x265 libass
+pkg-config --modversion libavcodec libavformat libavutil libswresample libswscale ffms2 x264 x265 libass
 
 assert_pcdir_under_prefix() {
   local module_name="$1"
@@ -55,6 +57,7 @@ assert_pcdir_under_prefix libavformat "${ffmpeg_prefix}"
 assert_pcdir_under_prefix libavutil "${ffmpeg_prefix}"
 assert_pcdir_under_prefix libswresample "${ffmpeg_prefix}"
 assert_pcdir_under_prefix libswscale "${ffmpeg_prefix}"
+assert_pcdir_under_prefix ffms2 "${ffms2_prefix}"
 assert_pcdir_under_prefix libass "${libassmod_prefix}"
 
 echo "Dependency audit passed."

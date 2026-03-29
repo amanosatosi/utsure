@@ -5,7 +5,7 @@ Dependency wiring is centralized, but third-party APIs must stay out of the core
 ## Rules
 
 - `src/app/` may depend on Qt 6 Widgets.
-- `src/core/` public headers must not expose Qt, FFmpeg, `libx264`, `libx265`, or `libassmod` types.
+- `src/core/` public headers must not expose Qt, FFmpeg, FFMS2, `libx264`, `libx265`, or `libassmod` types.
 - Future adapter implementations are the only places that should link the media and subtitle dependency targets.
 
 ## Planned adapter targets
@@ -16,6 +16,10 @@ Dependency wiring is centralized, but third-party APIs must stay out of the core
 - `src/core/adapters/ffmpeg/`
   - Links `utsure::ffmpeg`.
   - Owns probing, decode, filter, and encode API integration.
+- `src/core/src/adapters/ffms2/`
+  - Links `utsure::ffms2` through `utsure_encoder_core`.
+  - Owns preview-only indexed source access, preview frame retrieval, preview audio retrieval, and preview-index persistence.
+  - Must stay behind the existing preview session seam so the main encode/transcode path remains FFmpeg-based.
 - `src/core/adapters/ffmpeg/encoders/`
   - Links `utsure::x264` and `utsure::x265` where codec-specific wiring is needed.
 - `src/core/src/adapters/libassmod/`

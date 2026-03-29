@@ -1,4 +1,5 @@
 add_library(utsure_encoder_core STATIC
+    src/adapters/ffms2/ffms2_preview_backend.cpp
     src/adapters/libassmod/libassmod_subtitle_renderer.cpp
     src/build_info.cpp
     src/job/encode_job.cpp
@@ -32,6 +33,7 @@ target_include_directories(utsure_encoder_core
 target_link_libraries(utsure_encoder_core
     PRIVATE
         utsure::ffmpeg
+        utsure::ffms2
         utsure::subtitle_renderer_dependency
         utsure::x264
         utsure::x265

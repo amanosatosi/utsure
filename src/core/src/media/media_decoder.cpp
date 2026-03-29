@@ -1,5 +1,6 @@
 #include "utsure/core/media/media_decoder.hpp"
 
+#include "../adapters/ffms2/ffms2_preview_backend.hpp"
 #include "ffmpeg_media_support.hpp"
 
 extern "C" {
@@ -96,6 +97,7 @@ struct VideoPreviewSession::Impl final {
     std::filesystem::path input_path{};
     std::string input_path_string{};
     DecodeNormalizationPolicy normalization_policy{};
+    std::unique_ptr<ffms2_preview::VideoPreviewBackend> backend{};
     VideoStreamInfo video_stream_info{};
     OpenStreamResources resources{};
     PacketHandle packet{};
@@ -115,6 +117,7 @@ struct AudioPreviewSession::Impl final {
     std::filesystem::path input_path{};
     std::string input_path_string{};
     DecodeNormalizationPolicy normalization_policy{};
+    std::unique_ptr<ffms2_preview::AudioPreviewBackend> backend{};
     AudioStreamInfo source_audio_stream_info{};
     AudioStreamInfo output_audio_stream_info{};
     OpenStreamResources resources{};
@@ -2181,79 +2184,22 @@ VideoPreviewSessionCreateResult MediaDecoder::create_video_preview_session(
         const auto normalized_input_path = input_path.lexically_normal();
         const auto input_path_string = normalized_input_path.string();
 
-        if (input_path_string.empty()) {
-            return make_video_preview_session_error(
-                input_path_string,
-                "Cannot create a preview session because no file path was provided.",
-                "Provide a path to a readable media file before requesting preview."
-            );
-        }
-
-        std::error_code filesystem_error;
-        const bool input_exists = std::filesystem::exists(normalized_input_path, filesystem_error);
-        if (filesystem_error) {
-            return make_video_preview_session_error(
-                input_path_string,
-                "Cannot create preview media input '" + input_path_string + "': the file system could not be queried.",
-                "The operating system reported: " + filesystem_error.message()
-            );
-        }
-
-        if (!input_exists) {
-            return make_video_preview_session_error(
-                input_path_string,
-                "Cannot create preview media input '" + input_path_string + "': the file does not exist.",
-                "Check that the path is correct and that the file has been created before requesting preview."
-            );
-        }
-
-        auto format_context = open_format_context(input_path_string);
-        const auto primary_video_stream_index = av_find_best_stream(
-            format_context.get(),
-            AVMEDIA_TYPE_VIDEO,
-            -1,
-            -1,
-            nullptr,
-            0
-        );
-        if (primary_video_stream_index < 0) {
-            return make_video_preview_session_error(
-                input_path_string,
-                "No previewable video stream was found in '" + input_path_string + "'.",
-                primary_video_stream_index == AVERROR_STREAM_NOT_FOUND
-                    ? "Provide a media file that contains a decodable video stream before enabling Preview."
-                    : "FFmpeg reported: " + ffmpeg_support::ffmpeg_error_to_string(primary_video_stream_index)
-            );
-        }
-
-        const auto source_info = ffmpeg_support::build_media_source_info(
+        auto backend_result = ffms2_preview::create_video_preview_backend(
             normalized_input_path,
-            *format_context,
-            primary_video_stream_index,
-            -1
+            normalization_policy
         );
-        if (!source_info.primary_video_stream.has_value()) {
-            return make_video_preview_session_error(
-                input_path_string,
-                "The selected source does not expose a primary video stream for preview.",
-                "Choose a source file with a decodable video stream before enabling Preview."
-            );
+        if (!backend_result.succeeded()) {
+            return VideoPreviewSessionCreateResult{
+                .session = nullptr,
+                .error = std::move(backend_result.error)
+            };
         }
 
         auto impl = std::make_unique<VideoPreviewSession::Impl>();
         impl->input_path = normalized_input_path;
         impl->input_path_string = input_path_string;
         impl->normalization_policy = normalization_policy;
-        impl->video_stream_info = *source_info.primary_video_stream;
-        impl->resources = open_stream_resources(
-            input_path_string,
-            impl->video_stream_info.stream_index,
-            AVMEDIA_TYPE_VIDEO
-        );
-        impl->packet = allocate_packet();
-        impl->decoded_frame = allocate_frame();
-        impl->fallback_duration_pts = infer_video_frame_duration_pts(impl->video_stream_info).value_or(1);
-        impl->next_fallback_source_pts = impl->video_stream_info.timestamps.start_pts.value_or(0);
+        impl->backend = std::move(backend_result.backend);
 
         return VideoPreviewSessionCreateResult{
             .session = std::unique_ptr<VideoPreviewSession>(new VideoPreviewSession(std::move(impl))),
@@ -2277,106 +2223,23 @@ AudioPreviewSessionCreateResult MediaDecoder::create_audio_preview_session(
         const auto normalized_input_path = input_path.lexically_normal();
         const auto input_path_string = normalized_input_path.string();
 
-        if (input_path_string.empty()) {
-            return make_audio_preview_session_error(
-                input_path_string,
-                "Cannot create a preview audio session because no file path was provided.",
-                "Provide a path to a readable media file before requesting preview audio."
-            );
-        }
-
-        std::error_code filesystem_error;
-        const bool input_exists = std::filesystem::exists(normalized_input_path, filesystem_error);
-        if (filesystem_error) {
-            return make_audio_preview_session_error(
-                input_path_string,
-                "Cannot create preview media input '" + input_path_string + "': the file system could not be queried.",
-                "The operating system reported: " + filesystem_error.message()
-            );
-        }
-
-        if (!input_exists) {
-            return make_audio_preview_session_error(
-                input_path_string,
-                "Cannot create preview media input '" + input_path_string + "': the file does not exist.",
-                "Check that the path is correct and that the file has been created before requesting preview audio."
-            );
-        }
-
-        auto format_context = open_format_context(input_path_string);
-        const auto primary_audio_stream_index = av_find_best_stream(
-            format_context.get(),
-            AVMEDIA_TYPE_AUDIO,
-            -1,
-            -1,
-            nullptr,
-            0
-        );
-        if (primary_audio_stream_index < 0) {
-            return make_audio_preview_session_error(
-                input_path_string,
-                "No previewable audio stream was found in '" + input_path_string + "'.",
-                primary_audio_stream_index == AVERROR_STREAM_NOT_FOUND
-                    ? "Choose a source file with a decodable audio stream before expecting preview audio."
-                    : "FFmpeg reported: " + ffmpeg_support::ffmpeg_error_to_string(primary_audio_stream_index)
-            );
-        }
-
-        const auto source_info = ffmpeg_support::build_media_source_info(
+        auto backend_result = ffms2_preview::create_audio_preview_backend(
             normalized_input_path,
-            *format_context,
-            -1,
-            primary_audio_stream_index
+            output_config,
+            normalization_policy
         );
-        if (!source_info.primary_audio_stream.has_value()) {
-            return make_audio_preview_session_error(
-                input_path_string,
-                "The selected source does not expose a primary audio stream for preview.",
-                "Choose a source file with a decodable audio stream before expecting preview audio."
-            );
-        }
-
-        const auto &source_audio_stream_info = *source_info.primary_audio_stream;
-        const int output_sample_rate = output_config.sample_rate_hz > 0
-            ? output_config.sample_rate_hz
-            : source_audio_stream_info.sample_rate;
-        const int output_channel_count = output_config.channel_count > 0
-            ? output_config.channel_count
-            : source_audio_stream_info.channel_count;
-        if (output_sample_rate <= 0 || output_channel_count <= 0) {
-            return make_audio_preview_session_error(
-                input_path_string,
-                "The selected source does not expose a usable preview audio sample rate and channel count.",
-                "Choose a source clip with readable audio stream metadata before expecting preview audio."
-            );
+        if (!backend_result.succeeded()) {
+            return AudioPreviewSessionCreateResult{
+                .session = nullptr,
+                .error = std::move(backend_result.error)
+            };
         }
 
         auto impl = std::make_unique<AudioPreviewSession::Impl>();
         impl->input_path = normalized_input_path;
         impl->input_path_string = input_path_string;
         impl->normalization_policy = normalization_policy;
-        impl->source_audio_stream_info = source_audio_stream_info;
-        impl->output_audio_stream_info = build_preview_audio_stream_info(
-            source_audio_stream_info,
-            output_sample_rate,
-            output_channel_count
-        );
-        impl->resources = open_stream_resources(
-            input_path_string,
-            source_audio_stream_info.stream_index,
-            AVMEDIA_TYPE_AUDIO
-        );
-        if (impl->resources.codec_context->sample_rate <= 0) {
-            return make_audio_preview_session_error(
-                input_path_string,
-                "The selected source audio decoder did not expose a usable sample rate for preview audio.",
-                "Choose a source clip with a decodable primary audio stream before expecting preview audio."
-            );
-        }
-
-        impl->packet = allocate_packet();
-        impl->decoded_frame = allocate_frame();
-        reset_audio_preview_session_state(*impl);
+        impl->backend = std::move(backend_result.backend);
 
         return AudioPreviewSessionCreateResult{
             .session = std::unique_ptr<AudioPreviewSession>(new AudioPreviewSession(std::move(impl))),
@@ -2412,6 +2275,10 @@ VideoFrameWindowDecodeResult VideoPreviewSession::seek_and_decode_window_at_time
             );
         }
 
+        if (impl_->backend != nullptr) {
+            return impl_->backend->seek_and_decode_window_at_time(requested_time_microseconds, maximum_frame_count);
+        }
+
         return VideoFrameWindowDecodeResult{
             .video_frames = seek_and_decode_video_frame_window(*impl_, requested_time_microseconds, maximum_frame_count),
             .error = std::nullopt
@@ -2433,6 +2300,10 @@ VideoFrameWindowDecodeResult VideoPreviewSession::decode_next_window(const std::
                 "The preview session is not initialized.",
                 "Create a preview session before requesting preview frames."
             );
+        }
+
+        if (impl_->backend != nullptr) {
+            return impl_->backend->decode_next_window(maximum_frame_count);
         }
 
         const auto preview_frames = decode_video_frame_window_from_current_position(*impl_, maximum_frame_count);
@@ -2478,6 +2349,13 @@ AudioBlockWindowDecodeResult AudioPreviewSession::seek_and_decode_window_at_time
             );
         }
 
+        if (impl_->backend != nullptr) {
+            return impl_->backend->seek_and_decode_window_at_time(
+                requested_time_microseconds,
+                minimum_duration_microseconds
+            );
+        }
+
         return seek_and_decode_preview_audio_window(
             *impl_,
             requested_time_microseconds,
@@ -2502,6 +2380,10 @@ AudioBlockWindowDecodeResult AudioPreviewSession::decode_next_window(
                 "The preview audio session is not initialized.",
                 "Create a preview audio session before requesting preview audio blocks."
             );
+        }
+
+        if (impl_->backend != nullptr) {
+            return impl_->backend->decode_next_window(minimum_duration_microseconds);
         }
 
         return decode_preview_audio_window_from_current_position(

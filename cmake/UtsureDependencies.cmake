@@ -5,12 +5,19 @@ set(UTSURE_FFMPEG_REQUIRED_SERIES "7.1" CACHE STRING "Required FFmpeg major.mino
 set(UTSURE_FFMPEG_NEXT_UNTESTED_SERIES "7.2" CACHE STRING "First FFmpeg series outside the currently supported range.")
 option(UTSURE_ENABLE_DEPENDENCY_AUDIT "Verify the planned external dependency stack at configure time." ON)
 option(UTSURE_REQUIRE_FFMPEG "Require FFmpeg to be available from an explicit isolated prefix." ON)
+option(UTSURE_REQUIRE_FFMS2 "Require FFMS2 to be available from an explicit isolated prefix." ON)
 option(UTSURE_REQUIRE_LIBASSMOD "Require libassmod to be available during dependency audit." ON)
 set(
     UTSURE_FFMPEG_ROOT
     ""
     CACHE PATH
     "Installed FFmpeg prefix pinned to the supported release series."
+)
+set(
+    UTSURE_FFMS2_ROOT
+    ""
+    CACHE PATH
+    "Installed FFMS2 prefix used by the preview-only media backend."
 )
 set(
     UTSURE_LIBASSMOD_ROOT
@@ -110,6 +117,7 @@ macro(utsure_configure_dependencies)
         pkg_check_modules(UTSURE_LIBAVUTIL REQUIRED IMPORTED_TARGET GLOBAL libavutil)
         pkg_check_modules(UTSURE_LIBSWRESAMPLE REQUIRED IMPORTED_TARGET GLOBAL libswresample)
         pkg_check_modules(UTSURE_LIBSWSCALE REQUIRED IMPORTED_TARGET GLOBAL libswscale)
+        pkg_check_modules(UTSURE_FFMS2 REQUIRED IMPORTED_TARGET GLOBAL ffms2)
         pkg_check_modules(UTSURE_X264 REQUIRED IMPORTED_TARGET GLOBAL x264)
         pkg_check_modules(UTSURE_X265 REQUIRED IMPORTED_TARGET GLOBAL x265)
 
@@ -192,6 +200,72 @@ macro(utsure_configure_dependencies)
                     PkgConfig::UTSURE_LIBSWRESAMPLE
                     PkgConfig::UTSURE_LIBSWSCALE
             )
+        endif()
+
+        set(_ffms2_status "not validated")
+        set(_ffms2_pcfiledir "")
+        if(UTSURE_REQUIRE_FFMS2 OR NOT "${UTSURE_FFMS2_ROOT}" STREQUAL "")
+            if("${UTSURE_FFMS2_ROOT}" STREQUAL "")
+                message(FATAL_ERROR
+                    "UTSURE_REQUIRE_FFMS2 is ON, but UTSURE_FFMS2_ROOT is empty. "
+                    "Build FFMS2 into an isolated prefix and point UTSURE_FFMS2_ROOT at that prefix."
+                )
+            endif()
+
+            utsure_normalize_path(_ffms2_root "${UTSURE_FFMS2_ROOT}")
+
+            set(_ffms2_header_path "${_ffms2_root}/include/ffms.h")
+            set(_ffms2_pc_candidates
+                "${_ffms2_root}/lib/pkgconfig/ffms2.pc"
+                "${_ffms2_root}/lib64/pkgconfig/ffms2.pc"
+            )
+            set(_ffms2_pc_expected "")
+            foreach(_candidate IN LISTS _ffms2_pc_candidates)
+                if(EXISTS "${_candidate}")
+                    set(_ffms2_pc_expected "${_candidate}")
+                    break()
+                endif()
+            endforeach()
+
+            if(NOT EXISTS "${_ffms2_header_path}")
+                message(FATAL_ERROR
+                    "FFMS2 was expected under '${_ffms2_root}', but '${_ffms2_header_path}' was not found."
+                )
+            endif()
+
+            if("${_ffms2_pc_expected}" STREQUAL "")
+                message(FATAL_ERROR
+                    "FFMS2 was expected under '${_ffms2_root}', but no ffms2 pkg-config file was found."
+                )
+            endif()
+
+            pkg_get_variable(UTSURE_FFMS2_PCFILEDIR ffms2 pcfiledir)
+            utsure_normalize_path(_ffms2_pcfiledir "${UTSURE_FFMS2_PCFILEDIR}")
+            set(_ffms2_actual_pcfile "${_ffms2_pcfiledir}/ffms2.pc")
+
+            if(NOT EXISTS "${_ffms2_actual_pcfile}")
+                message(FATAL_ERROR
+                    "pkg-config resolved ffms2 from '${_ffms2_pcfiledir}', but '${_ffms2_actual_pcfile}' does not exist."
+                )
+            endif()
+
+            utsure_resolve_existing_path(_ffms2_expected_pcfile_resolved "${_ffms2_pc_expected}")
+            utsure_resolve_existing_path(_ffms2_actual_pcfile_resolved "${_ffms2_actual_pcfile}")
+
+            if(NOT _ffms2_expected_pcfile_resolved STREQUAL _ffms2_actual_pcfile_resolved)
+                message(FATAL_ERROR
+                    "pkg-config resolved 'ffms2' from '${_ffms2_actual_pcfile_resolved}', but the preview-only FFMS2 build was expected at "
+                    "'${_ffms2_expected_pcfile_resolved}'. Ensure the FFMS2 pkg-config prefix is ahead of any system entry."
+                )
+            endif()
+
+            set(_ffms2_status "validated from ${_ffms2_pcfiledir}")
+        endif()
+
+        if(NOT TARGET utsure_ffms2)
+            add_library(utsure_ffms2 INTERFACE)
+            add_library(utsure::ffms2 ALIAS utsure_ffms2)
+            target_link_libraries(utsure_ffms2 INTERFACE PkgConfig::UTSURE_FFMS2)
         endif()
 
         if(NOT TARGET utsure_x264)
@@ -286,6 +360,8 @@ macro(utsure_configure_dependencies)
         message(STATUS "  FFmpeg libavutil: ${UTSURE_LIBAVUTIL_VERSION}")
         message(STATUS "  FFmpeg libswresample: ${UTSURE_LIBSWRESAMPLE_VERSION}")
         message(STATUS "  FFmpeg libswscale: ${UTSURE_LIBSWSCALE_VERSION}")
+        message(STATUS "  FFMS2 preview backend: ${_ffms2_status}")
+        message(STATUS "  FFMS2: ${UTSURE_FFMS2_VERSION}")
         message(STATUS "  x264: ${UTSURE_X264_VERSION}")
         message(STATUS "  x265: ${UTSURE_X265_VERSION}")
         message(STATUS "  libassmod: ${_libassmod_status}")

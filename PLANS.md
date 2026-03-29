@@ -22,6 +22,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M15 Hardening and handoff completed.
 - [x] M16 Streaming transcoding pipeline completed.
   * M17 Desktop GUI quality and usability in progress.
+  * M17 FFMS2 preview-backend integration implemented; awaiting CI validation.
   * M18 Automatic output naming planned.
   * M19 Automatic subtitle selection planned.
   * M20 FontCollector-based subtitle font recovery and fallback planned.
@@ -71,6 +72,8 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M17 preview slice now also includes restoring opt-in main-source preview audio so Preview can play synchronized source audio alongside the existing subtitle-rendered video preview without turning the preview path into a full media-player rewrite.
 - The current M17 preview-audio hardening slice now also includes correcting the preview audio master-clock path so buffered `QAudioSink` progress is not mistaken for already-audible playback time.
 - The current M17 preview-audio hardening slice now also includes rebuilding the Qt audio output path on each preview run so pause/seek/preview-off transitions cannot reuse stale sink or pull-device state.
+- The current M17 preview-backend slice now also includes replacing the custom FFmpeg preview session path with an FFMS2-indexed preview-only backend for selected-job main-source video, audio, and seek behavior while leaving the main encode/transcode pipeline on the existing FFmpeg/core path.
+- The current M17 preview-backend slice now also includes isolated FFMS2 dependency/build wiring and preview-index file reuse rules, but excludes any FFMS2 adoption in final encode behavior.
 
 ## Architecture direction
 
@@ -624,6 +627,7 @@ Current slice status:
   * Completed: restored opt-in Preview audio for the selected job's main source through a separate Qt-audio-backed preview path that reuses encoder-core FFmpeg decode/resample helpers, follows seek/pause/preview-off/selection resets, and keeps the existing subtitle-rendered video preview flow intact.
   * Completed: tightened preview-audio timing so the audio device remains the effective master clock by subtracting queued `QAudioSink` buffer latency from Qt's processed-output time and letting preview video follow that corrected audio clock directly during playback.
   * Completed: hardened preview-audio lifecycle resets so each preview run recreates a fresh `QAudioSink` pull path, discards any queued sink buffers with `reset()`, and refuses to reuse stale stopped-state clocks between pause/seek/selection changes.
+  * In progress: swap preview video/audio/seek sessions to an FFMS2-backed indexed adapter behind the existing preview session seam, keep Preview opt-in and limited to the selected job's main source, and preserve subtitle overlay reuse through the shared libassmod-based compositor path.
 
 Likely files/modules:
   * `src/app/`
