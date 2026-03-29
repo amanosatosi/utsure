@@ -7,12 +7,17 @@
 #include <QImage>
 #include <QFile>
 #include <QLoggingCategory>
+#include <QMetaObject>
+#include <QPointer>
+#include <QRunnable>
+#include <QThreadPool>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
 #include <iterator>
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 
@@ -23,6 +28,7 @@ constexpr std::size_t kRetainedPreviewFrameCount = 192;
 constexpr int kPreviewDecodeMaxWidth = 960;
 constexpr int kPreviewDecodeMaxHeight = 540;
 constexpr qint64 kSequentialPreviewRefillToleranceUs = 1000000;
+constexpr std::size_t kSequentialPreviewPrefetchLeadFrames = kPreviewWindowFrameCount;
 
 Q_LOGGING_CATEGORY(previewWorkerLog, "utsure.preview.worker")
 
@@ -31,6 +37,15 @@ struct CachedPreviewWindowSummary final {
     std::size_t frame_count{0};
     qint64 start_us{0};
     qint64 end_us{0};
+};
+
+struct PrefetchTaskResult final {
+    quint64 generation{0};
+    QString source_path{};
+    qint64 window_start_us{-1};
+    std::vector<utsure::core::media::DecodedVideoFrame> frames{};
+    std::unique_ptr<utsure::core::media::VideoPreviewSession> session{};
+    QString error_message{};
 };
 
 QString to_qstring(std::string_view text) {
@@ -154,6 +169,27 @@ QString format_cached_preview_window_summary(const CachedPreviewWindowSummary &s
         .arg(format_time_us(summary.end_us));
 }
 
+void append_preview_frames_with_retention(
+    std::vector<utsure::core::media::DecodedVideoFrame> &cached_frames,
+    std::vector<utsure::core::media::DecodedVideoFrame> new_frames
+) {
+    cached_frames.insert(
+        cached_frames.end(),
+        std::make_move_iterator(new_frames.begin()),
+        std::make_move_iterator(new_frames.end())
+    );
+
+    if (cached_frames.size() <= kRetainedPreviewFrameCount) {
+        return;
+    }
+
+    const auto frames_to_discard = cached_frames.size() - kRetainedPreviewFrameCount;
+    cached_frames.erase(
+        cached_frames.begin(),
+        cached_frames.begin() + static_cast<std::ptrdiff_t>(frames_to_discard)
+    );
+}
+
 }  // namespace
 
 PreviewFrameRendererWorker::PreviewFrameRendererWorker(QObject *parent) : QObject(parent) {}
@@ -176,10 +212,11 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
         const auto cache_summary_before = summarize_cached_preview_window(cached_preview_frames_);
         const bool cache_covers_request = cached_preview_window_covers(normalized_source_path, request.requested_time_us);
         qCInfo(previewWorkerLog).noquote()
-            << QString("render_request token=%1 requested=%2 (%3) cache=%4 covers=%5")
+            << QString("render_request token=%1 requested=%2 (%3) playback_active=%4 cache=%5 covers=%6")
                    .arg(request.request_token)
                    .arg(request.requested_time_us)
                    .arg(format_time_us(request.requested_time_us))
+                   .arg(bool_text(request.playback_active))
                    .arg(format_cached_preview_window_summary(cache_summary_before))
                    .arg(bool_text(cache_covers_request));
 
@@ -216,6 +253,7 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
             }
 
             const bool use_sequential_refill = should_decode_next_preview_window(request.requested_time_us);
+            invalidate_prefetch_state();
             qCInfo(previewWorkerLog).noquote()
                 << QString("render_request refill_strategy requested=%1 (%2) sequential=%3 method=%4")
                        .arg(request.requested_time_us)
@@ -252,18 +290,7 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
                        .arg(format_cached_preview_window_summary(new_window_summary));
 
             if (use_sequential_refill && !cached_preview_frames_.empty()) {
-                cached_preview_frames_.insert(
-                    cached_preview_frames_.end(),
-                    std::make_move_iterator(new_preview_frames.begin()),
-                    std::make_move_iterator(new_preview_frames.end())
-                );
-                if (cached_preview_frames_.size() > kRetainedPreviewFrameCount) {
-                    const auto frames_to_discard = cached_preview_frames_.size() - kRetainedPreviewFrameCount;
-                    cached_preview_frames_.erase(
-                        cached_preview_frames_.begin(),
-                        cached_preview_frames_.begin() + static_cast<std::ptrdiff_t>(frames_to_discard)
-                    );
-                }
+                append_preview_frames_with_retention(cached_preview_frames_, std::move(new_preview_frames));
             } else {
                 cached_preview_frames_ = std::move(new_preview_frames);
             }
@@ -273,6 +300,8 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
                        .arg(use_sequential_refill ? "append" : "replace")
                        .arg(format_cached_preview_window_summary(summarize_cached_preview_window(cached_preview_frames_)));
         }
+
+        maybe_start_sequential_prefetch(request);
 
         const auto *cached_preview_frame = select_cached_preview_frame(request.requested_time_us);
         if (cached_preview_frame == nullptr) {
@@ -356,7 +385,25 @@ void PreviewFrameRendererWorker::clear_cache() {
     invalidate_subtitle_session();
 }
 
+void PreviewFrameRendererWorker::invalidate_prefetch_state(const bool advance_generation) {
+    if (advance_generation) {
+        ++preview_cache_generation_;
+    }
+
+    qCInfo(previewWorkerLog).noquote()
+        << QString("invalidate_prefetch_state generation=%1 in_progress=%2 window_start=%3 source='%4'")
+               .arg(preview_cache_generation_)
+               .arg(bool_text(prefetch_in_progress_))
+               .arg(prefetch_window_start_us_)
+               .arg(prefetch_source_path_);
+    prefetch_in_progress_ = false;
+    prefetch_window_start_us_ = -1;
+    blocked_prefetch_window_start_us_ = -1;
+    prefetch_source_path_.clear();
+}
+
 void PreviewFrameRendererWorker::invalidate_preview_frame_cache() {
+    invalidate_prefetch_state();
     qCInfo(previewWorkerLog).noquote()
         << QString("invalidate_preview_frame_cache cache=%1")
                .arg(format_cached_preview_window_summary(summarize_cached_preview_window(cached_preview_frames_)));
@@ -372,6 +419,152 @@ void PreviewFrameRendererWorker::invalidate_subtitle_session() {
     cached_subtitle_canvas_height_ = 0;
     cached_subtitle_sample_aspect_ratio_.reset();
     subtitle_session_.reset();
+}
+
+bool PreviewFrameRendererWorker::should_start_sequential_prefetch(const PreviewFrameRenderRequest &request) const {
+    if (!request.playback_active || !preview_session_ || cached_preview_frames_.empty()) {
+        return false;
+    }
+
+    const QString normalized_source_path = request.source_path.trimmed();
+    if (cached_source_path_ != normalized_source_path) {
+        return false;
+    }
+
+    const qint64 current_cache_end_us = frame_coverage_end_us(cached_preview_frames_.back());
+    if (prefetch_in_progress_ ||
+        prefetch_window_start_us_ == current_cache_end_us ||
+        blocked_prefetch_window_start_us_ == current_cache_end_us) {
+        return false;
+    }
+
+    if (cached_preview_frames_.size() < kRetainedPreviewFrameCount) {
+        return true;
+    }
+
+    const std::size_t lead_index = cached_preview_frames_.size() > kSequentialPreviewPrefetchLeadFrames
+        ? cached_preview_frames_.size() - kSequentialPreviewPrefetchLeadFrames
+        : 0;
+    return request.requested_time_us >= cached_preview_frames_[lead_index].timestamp.start_microseconds;
+}
+
+void PreviewFrameRendererWorker::maybe_start_sequential_prefetch(const PreviewFrameRenderRequest &request) {
+    if (!should_start_sequential_prefetch(request)) {
+        return;
+    }
+
+    const QString normalized_source_path = request.source_path.trimmed();
+    const qint64 prefetch_window_start_us = frame_coverage_end_us(cached_preview_frames_.back());
+    const quint64 generation = preview_cache_generation_;
+
+    prefetch_in_progress_ = true;
+    prefetch_window_start_us_ = prefetch_window_start_us;
+    prefetch_source_path_ = normalized_source_path;
+
+    qCInfo(previewWorkerLog).noquote()
+        << QString("prefetch_start generation=%1 requested=%2 (%3) window_start=%4 (%5) cache=%6")
+               .arg(generation)
+               .arg(request.requested_time_us)
+               .arg(format_time_us(request.requested_time_us))
+               .arg(prefetch_window_start_us)
+               .arg(format_time_us(prefetch_window_start_us))
+               .arg(format_cached_preview_window_summary(summarize_cached_preview_window(cached_preview_frames_)));
+
+    const QPointer<PreviewFrameRendererWorker> worker(this);
+    QThreadPool::globalInstance()->start(QRunnable::create(
+        [worker, generation, normalized_source_path, prefetch_window_start_us]() {
+            auto result = std::make_shared<PrefetchTaskResult>();
+            result->generation = generation;
+            result->source_path = normalized_source_path;
+            result->window_start_us = prefetch_window_start_us;
+
+            auto session_result = utsure::core::media::MediaDecoder::create_video_preview_session(
+                qstring_to_path(normalized_source_path),
+                preview_decode_normalization_policy()
+            );
+            if (!session_result.succeeded()) {
+                result->error_message = format_error_detail(
+                    session_result.error->message,
+                    session_result.error->actionable_hint
+                );
+            } else {
+                result->session = std::move(session_result.session);
+                auto window_result = result->session->seek_and_decode_window_at_time(
+                    prefetch_window_start_us,
+                    kPreviewWindowFrameCount
+                );
+                if (!window_result.succeeded()) {
+                    result->error_message = format_error_detail(
+                        window_result.error->message,
+                        window_result.error->actionable_hint
+                    );
+                    result->session.reset();
+                } else {
+                    result->frames = std::move(*window_result.video_frames);
+                }
+            }
+
+            if (worker == nullptr) {
+                return;
+            }
+
+            QMetaObject::invokeMethod(
+                worker.data(),
+                [worker, result]() mutable {
+                    if (worker == nullptr) {
+                        return;
+                    }
+
+                    if (result->generation != worker->preview_cache_generation_ ||
+                        worker->cached_source_path_ != result->source_path ||
+                        worker->prefetch_window_start_us_ != result->window_start_us) {
+                        qCInfo(previewWorkerLog).noquote()
+                            << QString("prefetch_ignored_stale generation=%1 active_generation=%2 result_window_start=%3 active_window_start=%4")
+                                   .arg(result->generation)
+                                   .arg(worker->preview_cache_generation_)
+                                   .arg(result->window_start_us)
+                                   .arg(worker->prefetch_window_start_us_);
+                        return;
+                    }
+
+                    worker->prefetch_in_progress_ = false;
+                    worker->prefetch_window_start_us_ = -1;
+                    worker->prefetch_source_path_.clear();
+
+                    if (!result->error_message.isEmpty()) {
+                        worker->blocked_prefetch_window_start_us_ = result->window_start_us;
+                        qCInfo(previewWorkerLog).noquote()
+                            << QString("prefetch_failed window_start=%1 (%2) detail=%3")
+                                   .arg(result->window_start_us)
+                                   .arg(format_time_us(result->window_start_us))
+                                   .arg(result->error_message);
+                        return;
+                    }
+
+                    const qint64 active_cache_end_us = worker->cached_preview_frames_.empty()
+                        ? -1
+                        : frame_coverage_end_us(worker->cached_preview_frames_.back());
+                    if (active_cache_end_us != result->window_start_us) {
+                        qCInfo(previewWorkerLog).noquote()
+                            << QString("prefetch_ignored_misaligned window_start=%1 active_cache_end=%2")
+                                   .arg(result->window_start_us)
+                                   .arg(active_cache_end_us);
+                        return;
+                    }
+
+                    worker->blocked_prefetch_window_start_us_ = -1;
+                    append_preview_frames_with_retention(worker->cached_preview_frames_, std::move(result->frames));
+                    worker->preview_session_ = std::move(result->session);
+                    qCInfo(previewWorkerLog).noquote()
+                        << QString("prefetch_ready_applied window_start=%1 (%2) cache=%3")
+                               .arg(result->window_start_us)
+                               .arg(format_time_us(result->window_start_us))
+                               .arg(format_cached_preview_window_summary(summarize_cached_preview_window(worker->cached_preview_frames_)));
+                },
+                Qt::QueuedConnection
+            );
+        }
+    ));
 }
 
 bool PreviewFrameRendererWorker::cached_preview_window_covers(

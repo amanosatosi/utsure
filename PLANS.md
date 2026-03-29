@@ -617,6 +617,7 @@ Current slice status:
   * Completed: added a persistent preview decode session in core so sequential playback can decode the next preview window from the already-open source instead of reopening and reseeking every few seconds.
   * Completed: fixed the persistent preview decode session so normal sequential window refills no longer send the decoder into drain/EOF mode before the input stream actually reaches EOF, and added focused core regression coverage for seek-plus-sequential preview windows across the first 96-frame cache boundary.
   * Completed: fixed the remaining preview playback freeze at the first 96-frame boundary inside the app-side request/cache/playback handoff by correcting the cache-end boundary semantics and adding targeted logging around request state, cache coverage, refill selection, and frame delivery.
+  * Completed: smoothed preview playback across repeated 96-frame window boundaries by starting one-window-ahead background video prefetch during playback, appending prefetched frames into the existing cache before the current buffered range is exhausted, and ignoring stale prefetch results after seeks or cache resets.
 
 Likely files/modules:
   * `src/app/`

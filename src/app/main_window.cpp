@@ -1837,6 +1837,7 @@ void MainWindow::request_preview_frame_for_time(const qint64 requested_time_us) 
         .request_token = preview_request_token_,
         .source_path = normalized_source_path,
         .requested_time_us = bounded_requested_time_us,
+        .playback_active = preview_playing_,
         .subtitle_enabled = subtitles_enabled,
         .subtitle_path = normalized_subtitle_path,
         .subtitle_format_hint = subtitle_format_hint
