@@ -49,6 +49,7 @@ private:
     [[nodiscard]] std::optional<ResolvedOutputFormat> resolve_output_format(
         const utsure::core::media::AudioStreamInfo &source_audio_stream_info
     ) const;
+    void destroy_audio_output_path();
     void recreate_audio_sink();
     void request_audio_chunk(bool reset_session);
     void reset_playback_state(bool clear_worker_session);

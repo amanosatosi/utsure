@@ -141,7 +141,6 @@ PreviewAudioController::PreviewAudioController(QObject *parent) : QObject(parent
     worker_ = new PreviewAudioWorker();
     worker_->moveToThread(&worker_thread_);
 
-    audio_buffer_device_ = new PreviewAudioBufferDevice(this);
     refill_timer_ = new QTimer(this);
     refill_timer_->setInterval(30);
 
@@ -210,7 +209,12 @@ void PreviewAudioController::clear() {
 }
 
 bool PreviewAudioController::is_audio_playing() const noexcept {
-    return playback_active_ && audio_sink_ != nullptr && audio_sink_started_;
+    if (!(playback_active_ && audio_sink_ != nullptr && audio_sink_started_)) {
+        return false;
+    }
+
+    const auto state = audio_sink_->state();
+    return state == QtAudio::ActiveState || state == QtAudio::IdleState;
 }
 
 qint64 PreviewAudioController::current_playback_time_us() const noexcept {
@@ -219,6 +223,11 @@ qint64 PreviewAudioController::current_playback_time_us() const noexcept {
     }
 
     if (audio_sink_ == nullptr || !audio_sink_started_) {
+        return playback_anchor_time_us_;
+    }
+
+    const auto sink_state = audio_sink_->state();
+    if (sink_state != QtAudio::ActiveState && sink_state != QtAudio::IdleState) {
         return playback_anchor_time_us_;
     }
 
@@ -298,12 +307,22 @@ std::optional<PreviewAudioController::ResolvedOutputFormat> PreviewAudioControll
     return std::nullopt;
 }
 
-void PreviewAudioController::recreate_audio_sink() {
+void PreviewAudioController::destroy_audio_output_path() {
     if (audio_sink_ != nullptr) {
-        audio_sink_->stop();
+        audio_sink_->reset();
         delete audio_sink_;
         audio_sink_ = nullptr;
     }
+
+    if (audio_buffer_device_ != nullptr) {
+        audio_buffer_device_->close();
+        delete audio_buffer_device_;
+        audio_buffer_device_ = nullptr;
+    }
+}
+
+void PreviewAudioController::recreate_audio_sink() {
+    destroy_audio_output_path();
 
     if (audio_format_.sampleRate() <= 0 ||
         audio_format_.channelCount() <= 0 ||
@@ -311,6 +330,7 @@ void PreviewAudioController::recreate_audio_sink() {
         return;
     }
 
+    audio_buffer_device_ = new PreviewAudioBufferDevice(this);
     audio_sink_ = new QAudioSink(audio_device_, audio_format_, this);
     audio_sink_->setBufferSize(static_cast<qsizetype>(
         std::clamp<qint64>(target_buffer_bytes_, 4096, std::numeric_limits<int>::max())
@@ -386,14 +406,7 @@ void PreviewAudioController::reset_playback_state(const bool clear_worker_sessio
     if (refill_timer_ != nullptr) {
         refill_timer_->stop();
     }
-    if (audio_sink_ != nullptr) {
-        audio_sink_->stop();
-        delete audio_sink_;
-        audio_sink_ = nullptr;
-    }
-    if (audio_buffer_device_ != nullptr) {
-        static_cast<PreviewAudioBufferDevice *>(audio_buffer_device_)->clear_buffer();
-    }
+    destroy_audio_output_path();
     if (clear_worker_session && worker_ != nullptr) {
         QMetaObject::invokeMethod(
             worker_,
@@ -464,17 +477,11 @@ void PreviewAudioController::handle_audio_chunk_failed(const quint64 request_tok
         << QString("handle_audio_chunk_failed token=%1 detail=%2").arg(request_token).arg(detail);
     emit preview_audio_failed(detail);
 
-    if (audio_sink_ != nullptr) {
-        audio_sink_->stop();
-    }
-    if (audio_buffer_device_ != nullptr) {
-        static_cast<PreviewAudioBufferDevice *>(audio_buffer_device_)->clear_buffer();
-    }
-
     playback_active_ = false;
     audio_sink_started_ = false;
     end_of_stream_ = false;
     refill_timer_->stop();
+    destroy_audio_output_path();
 }
 
 void PreviewAudioController::handle_refill_tick() {

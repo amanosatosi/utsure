@@ -70,6 +70,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M17 preview playback slice now also includes a persistent core preview decode session so playback can keep reading forward across cache boundaries instead of stalling on repeated reopen/seek window refills.
 - The current M17 preview slice now also includes restoring opt-in main-source preview audio so Preview can play synchronized source audio alongside the existing subtitle-rendered video preview without turning the preview path into a full media-player rewrite.
 - The current M17 preview-audio hardening slice now also includes correcting the preview audio master-clock path so buffered `QAudioSink` progress is not mistaken for already-audible playback time.
+- The current M17 preview-audio hardening slice now also includes rebuilding the Qt audio output path on each preview run so pause/seek/preview-off transitions cannot reuse stale sink or pull-device state.
 
 ## Architecture direction
 
@@ -622,6 +623,7 @@ Current slice status:
   * Completed: smoothed preview playback across repeated 96-frame window boundaries by starting one-window-ahead background video prefetch during playback, appending prefetched frames into the existing cache before the current buffered range is exhausted, and ignoring stale prefetch results after seeks or cache resets.
   * Completed: restored opt-in Preview audio for the selected job's main source through a separate Qt-audio-backed preview path that reuses encoder-core FFmpeg decode/resample helpers, follows seek/pause/preview-off/selection resets, and keeps the existing subtitle-rendered video preview flow intact.
   * Completed: tightened preview-audio timing so the audio device remains the effective master clock by subtracting queued `QAudioSink` buffer latency from Qt's processed-output time and letting preview video follow that corrected audio clock directly during playback.
+  * Completed: hardened preview-audio lifecycle resets so each preview run recreates a fresh `QAudioSink` pull path, discards any queued sink buffers with `reset()`, and refuses to reuse stale stopped-state clocks between pause/seek/selection changes.
 
 Likely files/modules:
   * `src/app/`
