@@ -441,7 +441,7 @@ void PreviewAudioController::handle_audio_chunk_failed(const quint64 request_tok
     }
 
     qCWarning(previewAudioControllerLog).noquote()
-        << QString("handle_audio_chunk_failed token=%1 detail=%2").arg(request_token, detail);
+        << QString("handle_audio_chunk_failed token=%1 detail=%2").arg(request_token).arg(detail);
     emit preview_audio_failed(detail);
 
     if (audio_sink_ != nullptr) {

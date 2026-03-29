@@ -1906,11 +1906,14 @@ void MainWindow::start_preview_playback() {
 
     if (preview_audio_controller_ != nullptr) {
         if (job.inspected_source_info.has_value() && job.inspected_source_info->primary_audio_stream.has_value()) {
-            preview_audio_controller_->start_preview(PreviewAudioPlaybackRequest{
+            const bool preview_audio_started = preview_audio_controller_->start_preview(PreviewAudioPlaybackRequest{
                 .source_path = job.source_path.trimmed(),
                 .requested_time_us = job.current_time_us,
                 .source_audio_stream_info = *job.inspected_source_info->primary_audio_stream
             });
+            if (!preview_audio_started) {
+                qCInfo(previewPlaybackLog) << "start_preview_playback audio path unavailable for the selected source";
+            }
         } else {
             preview_audio_controller_->stop_preview();
         }
