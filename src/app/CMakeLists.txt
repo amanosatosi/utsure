@@ -14,6 +14,10 @@ qt_add_executable(utsure_encoder_app WIN32
     main.cpp
     main_window.cpp
     main_window.hpp
+    preview_audio_controller.cpp
+    preview_audio_controller.hpp
+    preview_audio_worker.cpp
+    preview_audio_worker.hpp
     preview_frame_renderer_controller.cpp
     preview_frame_renderer_controller.hpp
     preview_frame_renderer_worker.cpp
@@ -29,6 +33,7 @@ set_target_properties(utsure_encoder_app PROPERTIES AUTORCC ON)
 
 target_link_libraries(utsure_encoder_app
     PRIVATE
+        Qt6::Multimedia
         Qt6::Widgets
         Qt6::Svg
         utsure::encoder_core

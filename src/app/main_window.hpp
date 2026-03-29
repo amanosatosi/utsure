@@ -18,6 +18,7 @@ class QLabel;
 class QCheckBox;
 class QComboBox;
 class QLineEdit;
+class PreviewAudioController;
 class PreviewFrameRendererController;
 class PreviewSurfaceWidget;
 class QPlainTextEdit;
@@ -275,6 +276,7 @@ private:
     QToolButton *stop_button_{nullptr};
     QTimer *busy_spinner_timer_{nullptr};
     QTimer *preview_playback_timer_{nullptr};
+    PreviewAudioController *preview_audio_controller_{nullptr};
     EncodeJobRunnerController *runner_controller_{nullptr};
     PreviewFrameRendererController *preview_renderer_controller_{nullptr};
 };

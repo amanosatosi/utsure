@@ -111,12 +111,42 @@ struct VideoPreviewSession::Impl final {
     bool exhausted{false};
 };
 
+struct AudioPreviewSession::Impl final {
+    std::filesystem::path input_path{};
+    std::string input_path_string{};
+    DecodeNormalizationPolicy normalization_policy{};
+    AudioStreamInfo source_audio_stream_info{};
+    AudioStreamInfo output_audio_stream_info{};
+    OpenStreamResources resources{};
+    PacketHandle packet{};
+    FrameHandle decoded_frame{};
+    SwrContextHandle resample_context{};
+    std::vector<std::vector<float>> pending_channels{};
+    std::int64_t next_fallback_source_pts{0};
+    std::int64_t output_timeline_start_us{0};
+    std::int64_t emitted_output_samples{0};
+    std::int64_t next_block_index{0};
+    bool output_timeline_initialized{false};
+    bool drain_sent{false};
+    bool exhausted{false};
+};
+
 namespace {
 
 struct TimestampSeed final {
     std::int64_t source_pts{0};
     TimestampOrigin origin{TimestampOrigin::stream_cursor};
 };
+
+std::vector<std::vector<float>> resample_audio_frame(
+    SwrContext &resample_context,
+    const AVFrame *decoded_frame,
+    int channel_count
+);
+void append_channel_samples(
+    std::vector<std::vector<float>> &pending_channels,
+    const std::vector<std::vector<float>> &converted_channels
+);
 
 MediaDecodeResult make_error(
     std::string input_path,
@@ -169,6 +199,37 @@ VideoPreviewSessionCreateResult make_video_preview_session_error(
     std::string actionable_hint
 ) {
     return VideoPreviewSessionCreateResult{
+        .session = nullptr,
+        .error = MediaDecodeError{
+            .input_path = std::move(input_path),
+            .message = std::move(message),
+            .actionable_hint = std::move(actionable_hint)
+        }
+    };
+}
+
+AudioBlockWindowDecodeResult make_audio_block_window_error(
+    std::string input_path,
+    std::string message,
+    std::string actionable_hint
+) {
+    return AudioBlockWindowDecodeResult{
+        .audio_blocks = std::nullopt,
+        .exhausted = false,
+        .error = MediaDecodeError{
+            .input_path = std::move(input_path),
+            .message = std::move(message),
+            .actionable_hint = std::move(actionable_hint)
+        }
+    };
+}
+
+AudioPreviewSessionCreateResult make_audio_preview_session_error(
+    std::string input_path,
+    std::string message,
+    std::string actionable_hint
+) {
+    return AudioPreviewSessionCreateResult{
         .session = nullptr,
         .error = MediaDecodeError{
             .input_path = std::move(input_path),
@@ -1023,6 +1084,484 @@ std::vector<DecodedVideoFrame> seek_and_decode_video_frame_window(
     return preview_frames;
 }
 
+AVChannelLayout make_default_audio_channel_layout(const int channel_count) {
+    if (channel_count <= 0) {
+        throw std::runtime_error("The preview audio output channel count must be positive.");
+    }
+
+    AVChannelLayout channel_layout{};
+    av_channel_layout_default(&channel_layout, channel_count);
+    if (channel_layout.nb_channels != channel_count) {
+        av_channel_layout_uninit(&channel_layout);
+        throw std::runtime_error(
+            "FFmpeg could not build a default preview audio channel layout for " +
+            std::to_string(channel_count) +
+            " channels."
+        );
+    }
+
+    return channel_layout;
+}
+
+AudioStreamInfo build_preview_audio_stream_info(
+    const AudioStreamInfo &source_audio_stream_info,
+    const int output_sample_rate,
+    const int output_channel_count
+) {
+    AVChannelLayout output_channel_layout = make_default_audio_channel_layout(output_channel_count);
+    const std::string channel_layout_name = ffmpeg_support::channel_layout_name_from_layout(output_channel_layout);
+    av_channel_layout_uninit(&output_channel_layout);
+
+    AudioStreamInfo output_audio_stream_info = source_audio_stream_info;
+    output_audio_stream_info.sample_format_name = "f32_planar";
+    output_audio_stream_info.sample_rate = output_sample_rate;
+    output_audio_stream_info.channel_count = output_channel_count;
+    output_audio_stream_info.channel_layout_name = channel_layout_name;
+    output_audio_stream_info.timestamps.time_base = Rational{
+        .numerator = 1,
+        .denominator = output_sample_rate
+    };
+    output_audio_stream_info.timestamps.start_pts = 0;
+    output_audio_stream_info.timestamps.duration_pts = std::nullopt;
+    return output_audio_stream_info;
+}
+
+SwrContextHandle make_audio_preview_resample_context(
+    const OpenStreamResources &resources,
+    const AudioStreamInfo &output_audio_stream_info
+) {
+    AVChannelLayout output_channel_layout = make_default_audio_channel_layout(output_audio_stream_info.channel_count);
+    SwrContext *raw_resample_context = nullptr;
+    const auto resample_setup_result = swr_alloc_set_opts2(
+        &raw_resample_context,
+        &output_channel_layout,
+        AV_SAMPLE_FMT_FLTP,
+        output_audio_stream_info.sample_rate,
+        &resources.codec_context->ch_layout,
+        resources.codec_context->sample_fmt,
+        resources.codec_context->sample_rate,
+        0,
+        nullptr
+    );
+    av_channel_layout_uninit(&output_channel_layout);
+    if (resample_setup_result < 0 || raw_resample_context == nullptr) {
+        throw std::runtime_error(
+            "Failed to configure the preview audio normalization context. FFmpeg reported: " +
+            ffmpeg_support::ffmpeg_error_to_string(resample_setup_result)
+        );
+    }
+
+    SwrContextHandle resample_context(raw_resample_context);
+    const auto resample_init_result = swr_init(resample_context.get());
+    if (resample_init_result < 0) {
+        throw std::runtime_error(
+            "Failed to initialize the preview audio normalization context. FFmpeg reported: " +
+            ffmpeg_support::ffmpeg_error_to_string(resample_init_result)
+        );
+    }
+
+    return resample_context;
+}
+
+std::int64_t audio_frame_duration_pts(
+    const AVFrame &decoded_frame,
+    const AudioStreamInfo &audio_stream_info
+) {
+    if (!audio_stream_info.timestamps.time_base.is_valid() || audio_stream_info.sample_rate <= 0) {
+        return 1;
+    }
+
+    const AVRational sample_time_base{
+        .num = 1,
+        .den = audio_stream_info.sample_rate
+    };
+    const auto duration_pts = av_rescale_q(
+        std::max(decoded_frame.nb_samples, 1),
+        sample_time_base,
+        to_av_rational(audio_stream_info.timestamps.time_base)
+    );
+    return std::max<std::int64_t>(duration_pts, 1);
+}
+
+DecodedAudioSamples build_preview_audio_block(
+    const AudioStreamInfo &output_audio_stream_info,
+    const std::int64_t block_index,
+    const std::int64_t output_timeline_start_us,
+    const std::int64_t samples_written_before_block,
+    const int block_sample_count,
+    const std::vector<std::vector<float>> &block_channels
+) {
+    const Rational output_time_base{
+        .numerator = 1,
+        .denominator = output_audio_stream_info.sample_rate
+    };
+    const AVRational output_sample_time_base{
+        .num = 1,
+        .den = output_audio_stream_info.sample_rate
+    };
+
+    return DecodedAudioSamples{
+        .stream_index = output_audio_stream_info.stream_index,
+        .block_index = block_index,
+        .timestamp = MediaTimestamp{
+            .source_time_base = output_time_base,
+            .source_pts = samples_written_before_block,
+            .source_duration = block_sample_count,
+            .origin = TimestampOrigin::stream_cursor,
+            .start_microseconds = output_timeline_start_us +
+                av_rescale_q(samples_written_before_block, output_sample_time_base, AV_TIME_BASE_Q),
+            .duration_microseconds = av_rescale_q(block_sample_count, output_sample_time_base, AV_TIME_BASE_Q)
+        },
+        .sample_rate = output_audio_stream_info.sample_rate,
+        .channel_count = output_audio_stream_info.channel_count,
+        .channel_layout_name = output_audio_stream_info.channel_layout_name,
+        .sample_format = NormalizedAudioSampleFormat::f32_planar,
+        .samples_per_channel = block_sample_count,
+        .channel_samples = block_channels
+    };
+}
+
+void emit_ready_preview_audio_blocks(
+    std::vector<DecodedAudioSamples> &audio_blocks,
+    std::vector<std::vector<float>> &pending_channels,
+    const AudioStreamInfo &output_audio_stream_info,
+    const int block_sample_count,
+    const std::int64_t output_timeline_start_us,
+    std::int64_t &emitted_output_samples,
+    std::int64_t &next_block_index
+) {
+    if (pending_channels.empty()) {
+        return;
+    }
+
+    while (static_cast<int>(pending_channels.front().size()) >= block_sample_count) {
+        std::vector<std::vector<float>> block_channels(
+            pending_channels.size(),
+            std::vector<float>(static_cast<std::size_t>(block_sample_count))
+        );
+
+        for (std::size_t channel_index = 0; channel_index < pending_channels.size(); ++channel_index) {
+            auto &pending = pending_channels[channel_index];
+            auto &block = block_channels[channel_index];
+            std::copy_n(pending.begin(), block_sample_count, block.begin());
+            pending.erase(pending.begin(), pending.begin() + block_sample_count);
+        }
+
+        audio_blocks.push_back(build_preview_audio_block(
+            output_audio_stream_info,
+            next_block_index,
+            output_timeline_start_us,
+            emitted_output_samples,
+            block_sample_count,
+            block_channels
+        ));
+
+        ++next_block_index;
+        emitted_output_samples += block_sample_count;
+    }
+}
+
+void reset_audio_preview_session_state(AudioPreviewSession::Impl &session) {
+    session.pending_channels.clear();
+    session.next_fallback_source_pts = session.source_audio_stream_info.timestamps.start_pts.value_or(0);
+    session.output_timeline_start_us = 0;
+    session.emitted_output_samples = 0;
+    session.next_block_index = 0;
+    session.output_timeline_initialized = false;
+    session.drain_sent = false;
+    session.exhausted = false;
+    av_frame_unref(session.decoded_frame.get());
+    av_packet_unref(session.packet.get());
+    session.resample_context = make_audio_preview_resample_context(session.resources, session.output_audio_stream_info);
+}
+
+std::int64_t minimum_audio_window_samples(
+    const AudioPreviewSession::Impl &session,
+    const std::int64_t minimum_duration_us
+) {
+    if (minimum_duration_us <= 0) {
+        throw std::runtime_error("Preview audio window decode requires a positive duration.");
+    }
+    if (session.normalization_policy.audio_block_samples <= 0) {
+        throw std::runtime_error("Preview audio window decode requires a positive normalized audio block size.");
+    }
+
+    const AVRational output_sample_time_base{
+        .num = 1,
+        .den = session.output_audio_stream_info.sample_rate
+    };
+    const auto duration_samples = av_rescale_q(
+        minimum_duration_us,
+        AV_TIME_BASE_Q,
+        output_sample_time_base
+    );
+    return std::max<std::int64_t>(
+        duration_samples,
+        std::max(session.normalization_policy.audio_block_samples, 1)
+    );
+}
+
+void discard_preview_audio_prefix(
+    std::vector<std::vector<float>> &converted_channels,
+    const int discard_samples
+) {
+    if (discard_samples <= 0 || converted_channels.empty()) {
+        return;
+    }
+
+    for (auto &channel_samples : converted_channels) {
+        const auto bounded_discard = std::min<int>(discard_samples, static_cast<int>(channel_samples.size()));
+        channel_samples.erase(channel_samples.begin(), channel_samples.begin() + bounded_discard);
+    }
+}
+
+void process_preview_audio_frame(
+    AudioPreviewSession::Impl &session,
+    const AVFrame &decoded_frame,
+    const std::int64_t requested_time_us
+) {
+    const auto timestamp_seed = choose_timestamp_seed(decoded_frame, session.next_fallback_source_pts);
+    session.next_fallback_source_pts = timestamp_seed.source_pts +
+        audio_frame_duration_pts(decoded_frame, session.source_audio_stream_info);
+
+    auto converted_channels = resample_audio_frame(
+        *session.resample_context,
+        &decoded_frame,
+        session.output_audio_stream_info.channel_count
+    );
+    if (converted_channels.empty() || converted_channels.front().empty()) {
+        return;
+    }
+
+    const auto source_frame_start_us = rescale_to_microseconds(
+        timestamp_seed.source_pts,
+        session.source_audio_stream_info.timestamps.time_base
+    );
+
+    if (!session.output_timeline_initialized) {
+        const AVRational output_sample_time_base{
+            .num = 1,
+            .den = session.output_audio_stream_info.sample_rate
+        };
+        const auto converted_sample_count = static_cast<int>(converted_channels.front().size());
+        const auto converted_duration_us = av_rescale_q(
+            converted_sample_count,
+            output_sample_time_base,
+            AV_TIME_BASE_Q
+        );
+        const auto converted_end_us = source_frame_start_us + converted_duration_us;
+        if (requested_time_us >= converted_end_us) {
+            return;
+        }
+
+        int discard_samples = 0;
+        if (requested_time_us > source_frame_start_us) {
+            discard_samples = static_cast<int>(av_rescale_q(
+                requested_time_us - source_frame_start_us,
+                AV_TIME_BASE_Q,
+                output_sample_time_base
+            ));
+        }
+        discard_samples = std::clamp(discard_samples, 0, converted_sample_count);
+        discard_preview_audio_prefix(converted_channels, discard_samples);
+        if (converted_channels.front().empty()) {
+            return;
+        }
+
+        session.output_timeline_start_us = source_frame_start_us + av_rescale_q(
+            discard_samples,
+            output_sample_time_base,
+            AV_TIME_BASE_Q
+        );
+        session.output_timeline_initialized = true;
+    }
+
+    append_channel_samples(session.pending_channels, converted_channels);
+}
+
+AudioBlockWindowDecodeResult decode_preview_audio_window_from_current_position(
+    AudioPreviewSession::Impl &session,
+    const std::int64_t requested_time_us,
+    const std::int64_t minimum_duration_us
+) {
+    if (session.exhausted) {
+        return AudioBlockWindowDecodeResult{
+            .audio_blocks = std::vector<DecodedAudioSamples>{},
+            .exhausted = true,
+            .error = std::nullopt
+        };
+    }
+
+    const auto required_output_samples = minimum_audio_window_samples(session, minimum_duration_us);
+    const auto window_samples_before_decode = session.emitted_output_samples;
+    std::vector<DecodedAudioSamples> audio_blocks{};
+    bool decoder_reached_eof = false;
+
+    const auto emitted_window_sample_count = [&]() {
+        return session.emitted_output_samples - window_samples_before_decode;
+    };
+
+    const auto receive_frames = [&]() {
+        while (emitted_window_sample_count() < required_output_samples) {
+            const auto receive_result = avcodec_receive_frame(
+                session.resources.codec_context.get(),
+                session.decoded_frame.get()
+            );
+            if (receive_result == AVERROR(EAGAIN)) {
+                return;
+            }
+            if (receive_result == AVERROR_EOF) {
+                decoder_reached_eof = true;
+                return;
+            }
+            if (receive_result < 0) {
+                throw std::runtime_error(
+                    "Failed to receive decoded preview audio samples. FFmpeg reported: " +
+                    ffmpeg_support::ffmpeg_error_to_string(receive_result)
+                );
+            }
+
+            process_preview_audio_frame(session, *session.decoded_frame, requested_time_us);
+            emit_ready_preview_audio_blocks(
+                audio_blocks,
+                session.pending_channels,
+                session.output_audio_stream_info,
+                session.normalization_policy.audio_block_samples,
+                session.output_timeline_start_us,
+                session.emitted_output_samples,
+                session.next_block_index
+            );
+            av_frame_unref(session.decoded_frame.get());
+        }
+    };
+
+    receive_frames();
+    bool reached_input_eof = false;
+    while (emitted_window_sample_count() < required_output_samples) {
+        const auto read_result = av_read_frame(session.resources.format_context.get(), session.packet.get());
+        if (read_result == AVERROR_EOF) {
+            reached_input_eof = true;
+            break;
+        }
+        if (read_result < 0) {
+            throw std::runtime_error(
+                "Failed to read the next preview audio packet from '" + session.input_path_string + "'. FFmpeg reported: " +
+                ffmpeg_support::ffmpeg_error_to_string(read_result)
+            );
+        }
+
+        if (session.packet->stream_index == session.source_audio_stream_info.stream_index) {
+            send_packet_or_throw(*session.resources.codec_context, session.packet.get());
+            receive_frames();
+        }
+
+        av_packet_unref(session.packet.get());
+    }
+
+    if (reached_input_eof && !session.drain_sent) {
+        send_packet_or_throw(*session.resources.codec_context, nullptr);
+        session.drain_sent = true;
+        receive_frames();
+    }
+
+    if (session.drain_sent) {
+        while (true) {
+            const auto flushed_channels = resample_audio_frame(
+                *session.resample_context,
+                nullptr,
+                session.output_audio_stream_info.channel_count
+            );
+            if (flushed_channels.empty() || flushed_channels.front().empty()) {
+                break;
+            }
+
+            append_channel_samples(session.pending_channels, flushed_channels);
+            emit_ready_preview_audio_blocks(
+                audio_blocks,
+                session.pending_channels,
+                session.output_audio_stream_info,
+                session.normalization_policy.audio_block_samples,
+                session.output_timeline_start_us,
+                session.emitted_output_samples,
+                session.next_block_index
+            );
+        }
+
+        if (!session.pending_channels.empty() && !session.pending_channels.front().empty()) {
+            const int tail_sample_count = static_cast<int>(session.pending_channels.front().size());
+            audio_blocks.push_back(build_preview_audio_block(
+                session.output_audio_stream_info,
+                session.next_block_index,
+                session.output_timeline_start_us,
+                session.emitted_output_samples,
+                tail_sample_count,
+                session.pending_channels
+            ));
+            ++session.next_block_index;
+            session.emitted_output_samples += tail_sample_count;
+            session.pending_channels.clear();
+        }
+    }
+
+    if (session.drain_sent && decoder_reached_eof) {
+        session.exhausted = true;
+    }
+
+    if (!session.output_timeline_initialized && session.exhausted) {
+        return AudioBlockWindowDecodeResult{
+            .audio_blocks = std::vector<DecodedAudioSamples>{},
+            .exhausted = true,
+            .error = std::nullopt
+        };
+    }
+
+    return AudioBlockWindowDecodeResult{
+        .audio_blocks = std::move(audio_blocks),
+        .exhausted = session.exhausted && session.pending_channels.empty(),
+        .error = std::nullopt
+    };
+}
+
+AudioBlockWindowDecodeResult seek_and_decode_preview_audio_window(
+    AudioPreviewSession::Impl &session,
+    const std::int64_t requested_time_us,
+    const std::int64_t minimum_duration_us
+) {
+    const auto normalized_requested_time_us = std::max<std::int64_t>(requested_time_us, 0);
+    if (session.source_audio_stream_info.timestamps.time_base.is_valid()) {
+        const auto requested_pts = normalized_requested_time_us > 0
+            ? av_rescale_q(
+                normalized_requested_time_us,
+                AV_TIME_BASE_Q,
+                to_av_rational(session.source_audio_stream_info.timestamps.time_base)
+            )
+            : session.source_audio_stream_info.timestamps.start_pts.value_or(0);
+        const auto seek_result = av_seek_frame(
+            session.resources.format_context.get(),
+            session.source_audio_stream_info.stream_index,
+            requested_pts,
+            AVSEEK_FLAG_BACKWARD
+        );
+        if (seek_result < 0) {
+            throw std::runtime_error(
+                "Failed to seek preview media input '" + session.input_path_string + "'. FFmpeg reported: " +
+                ffmpeg_support::ffmpeg_error_to_string(seek_result)
+            );
+        }
+
+        avcodec_flush_buffers(session.resources.codec_context.get());
+        reset_audio_preview_session_state(session);
+        session.next_fallback_source_pts = requested_pts;
+    } else {
+        reset_audio_preview_session_state(session);
+    }
+    return decode_preview_audio_window_from_current_position(
+        session,
+        normalized_requested_time_us,
+        minimum_duration_us
+    );
+}
+
 std::vector<std::vector<float>> resample_audio_frame(
     SwrContext &resample_context,
     const AVFrame *decoded_frame,
@@ -1326,7 +1865,15 @@ bool VideoFrameWindowDecodeResult::succeeded() const noexcept {
     return video_frames.has_value() && !error.has_value();
 }
 
+bool AudioBlockWindowDecodeResult::succeeded() const noexcept {
+    return audio_blocks.has_value() && !error.has_value();
+}
+
 bool VideoPreviewSessionCreateResult::succeeded() const noexcept {
+    return session != nullptr && !error.has_value();
+}
+
+bool AudioPreviewSessionCreateResult::succeeded() const noexcept {
     return session != nullptr && !error.has_value();
 }
 
@@ -1721,6 +2268,129 @@ VideoPreviewSessionCreateResult MediaDecoder::create_video_preview_session(
     }
 }
 
+AudioPreviewSessionCreateResult MediaDecoder::create_audio_preview_session(
+    const std::filesystem::path &input_path,
+    const AudioPreviewOutputConfig &output_config,
+    const DecodeNormalizationPolicy &normalization_policy
+) noexcept {
+    try {
+        const auto normalized_input_path = input_path.lexically_normal();
+        const auto input_path_string = normalized_input_path.string();
+
+        if (input_path_string.empty()) {
+            return make_audio_preview_session_error(
+                input_path_string,
+                "Cannot create a preview audio session because no file path was provided.",
+                "Provide a path to a readable media file before requesting preview audio."
+            );
+        }
+
+        std::error_code filesystem_error;
+        const bool input_exists = std::filesystem::exists(normalized_input_path, filesystem_error);
+        if (filesystem_error) {
+            return make_audio_preview_session_error(
+                input_path_string,
+                "Cannot create preview media input '" + input_path_string + "': the file system could not be queried.",
+                "The operating system reported: " + filesystem_error.message()
+            );
+        }
+
+        if (!input_exists) {
+            return make_audio_preview_session_error(
+                input_path_string,
+                "Cannot create preview media input '" + input_path_string + "': the file does not exist.",
+                "Check that the path is correct and that the file has been created before requesting preview audio."
+            );
+        }
+
+        auto format_context = open_format_context(input_path_string);
+        const auto primary_audio_stream_index = av_find_best_stream(
+            format_context.get(),
+            AVMEDIA_TYPE_AUDIO,
+            -1,
+            -1,
+            nullptr,
+            0
+        );
+        if (primary_audio_stream_index < 0) {
+            return make_audio_preview_session_error(
+                input_path_string,
+                "No previewable audio stream was found in '" + input_path_string + "'.",
+                primary_audio_stream_index == AVERROR_STREAM_NOT_FOUND
+                    ? "Choose a source file with a decodable audio stream before expecting preview audio."
+                    : "FFmpeg reported: " + ffmpeg_support::ffmpeg_error_to_string(primary_audio_stream_index)
+            );
+        }
+
+        const auto source_info = ffmpeg_support::build_media_source_info(
+            normalized_input_path,
+            *format_context,
+            -1,
+            primary_audio_stream_index
+        );
+        if (!source_info.primary_audio_stream.has_value()) {
+            return make_audio_preview_session_error(
+                input_path_string,
+                "The selected source does not expose a primary audio stream for preview.",
+                "Choose a source file with a decodable audio stream before expecting preview audio."
+            );
+        }
+
+        const auto &source_audio_stream_info = *source_info.primary_audio_stream;
+        const int output_sample_rate = output_config.sample_rate_hz > 0
+            ? output_config.sample_rate_hz
+            : source_audio_stream_info.sample_rate;
+        const int output_channel_count = output_config.channel_count > 0
+            ? output_config.channel_count
+            : source_audio_stream_info.channel_count;
+        if (output_sample_rate <= 0 || output_channel_count <= 0) {
+            return make_audio_preview_session_error(
+                input_path_string,
+                "The selected source does not expose a usable preview audio sample rate and channel count.",
+                "Choose a source clip with readable audio stream metadata before expecting preview audio."
+            );
+        }
+
+        auto impl = std::make_unique<AudioPreviewSession::Impl>();
+        impl->input_path = normalized_input_path;
+        impl->input_path_string = input_path_string;
+        impl->normalization_policy = normalization_policy;
+        impl->source_audio_stream_info = source_audio_stream_info;
+        impl->output_audio_stream_info = build_preview_audio_stream_info(
+            source_audio_stream_info,
+            output_sample_rate,
+            output_channel_count
+        );
+        impl->resources = open_stream_resources(
+            input_path_string,
+            source_audio_stream_info.stream_index,
+            AVMEDIA_TYPE_AUDIO
+        );
+        if (impl->resources.codec_context->sample_rate <= 0) {
+            return make_audio_preview_session_error(
+                input_path_string,
+                "The selected source audio decoder did not expose a usable sample rate for preview audio.",
+                "Choose a source clip with a decodable primary audio stream before expecting preview audio."
+            );
+        }
+
+        impl->packet = allocate_packet();
+        impl->decoded_frame = allocate_frame();
+        reset_audio_preview_session_state(*impl);
+
+        return AudioPreviewSessionCreateResult{
+            .session = std::unique_ptr<AudioPreviewSession>(new AudioPreviewSession(std::move(impl))),
+            .error = std::nullopt
+        };
+    } catch (const std::exception &exception) {
+        return make_audio_preview_session_error(
+            input_path.string(),
+            "Preview audio session creation aborted because an unexpected exception was raised.",
+            exception.what()
+        );
+    }
+}
+
 VideoPreviewSession::VideoPreviewSession(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
 VideoPreviewSession::VideoPreviewSession(VideoPreviewSession &&) noexcept = default;
@@ -1782,6 +2452,67 @@ VideoFrameWindowDecodeResult VideoPreviewSession::decode_next_window(const std::
         return make_video_frame_window_error(
             impl_ != nullptr ? impl_->input_path_string : std::string{},
             "Preview frame window decode aborted because an unexpected exception was raised.",
+            exception.what()
+        );
+    }
+}
+
+AudioPreviewSession::AudioPreviewSession(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+
+AudioPreviewSession::AudioPreviewSession(AudioPreviewSession &&) noexcept = default;
+
+AudioPreviewSession &AudioPreviewSession::operator=(AudioPreviewSession &&) noexcept = default;
+
+AudioPreviewSession::~AudioPreviewSession() = default;
+
+AudioBlockWindowDecodeResult AudioPreviewSession::seek_and_decode_window_at_time(
+    const std::int64_t requested_time_microseconds,
+    const std::int64_t minimum_duration_microseconds
+) noexcept {
+    try {
+        if (!impl_) {
+            return make_audio_block_window_error(
+                "",
+                "The preview audio session is not initialized.",
+                "Create a preview audio session before requesting preview audio blocks."
+            );
+        }
+
+        return seek_and_decode_preview_audio_window(
+            *impl_,
+            requested_time_microseconds,
+            minimum_duration_microseconds
+        );
+    } catch (const std::exception &exception) {
+        return make_audio_block_window_error(
+            impl_ != nullptr ? impl_->input_path_string : std::string{},
+            "Preview audio window decode aborted because an unexpected exception was raised.",
+            exception.what()
+        );
+    }
+}
+
+AudioBlockWindowDecodeResult AudioPreviewSession::decode_next_window(
+    const std::int64_t minimum_duration_microseconds
+) noexcept {
+    try {
+        if (!impl_) {
+            return make_audio_block_window_error(
+                "",
+                "The preview audio session is not initialized.",
+                "Create a preview audio session before requesting preview audio blocks."
+            );
+        }
+
+        return decode_preview_audio_window_from_current_position(
+            *impl_,
+            std::max<std::int64_t>(impl_->output_timeline_start_us, 0),
+            minimum_duration_microseconds
+        );
+    } catch (const std::exception &exception) {
+        return make_audio_block_window_error(
+            impl_ != nullptr ? impl_->input_path_string : std::string{},
+            "Preview audio window decode aborted because an unexpected exception was raised.",
             exception.what()
         );
     }

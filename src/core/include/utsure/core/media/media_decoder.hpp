@@ -36,7 +36,16 @@ struct VideoFrameWindowDecodeResult final {
     [[nodiscard]] bool succeeded() const noexcept;
 };
 
+struct AudioBlockWindowDecodeResult final {
+    std::optional<std::vector<DecodedAudioSamples>> audio_blocks{};
+    bool exhausted{false};
+    std::optional<MediaDecodeError> error{};
+
+    [[nodiscard]] bool succeeded() const noexcept;
+};
+
 class VideoPreviewSession;
+class AudioPreviewSession;
 
 struct VideoPreviewSessionCreateResult final {
     std::unique_ptr<VideoPreviewSession> session{};
@@ -45,9 +54,21 @@ struct VideoPreviewSessionCreateResult final {
     [[nodiscard]] bool succeeded() const noexcept;
 };
 
+struct AudioPreviewSessionCreateResult final {
+    std::unique_ptr<AudioPreviewSession> session{};
+    std::optional<MediaDecodeError> error{};
+
+    [[nodiscard]] bool succeeded() const noexcept;
+};
+
 struct DecodeStreamSelection final {
     bool decode_video{true};
     bool decode_audio{true};
+};
+
+struct AudioPreviewOutputConfig final {
+    int sample_rate_hz{0};
+    int channel_count{0};
 };
 
 class VideoPreviewSession final {
@@ -70,6 +91,34 @@ public:
 
 private:
     explicit VideoPreviewSession(std::unique_ptr<Impl> impl) noexcept;
+
+    std::unique_ptr<Impl> impl_{};
+
+    friend class MediaDecoder;
+};
+
+class AudioPreviewSession final {
+public:
+    struct Impl;
+
+    AudioPreviewSession(AudioPreviewSession &&) noexcept;
+    AudioPreviewSession &operator=(AudioPreviewSession &&) noexcept;
+    ~AudioPreviewSession();
+
+    AudioPreviewSession(const AudioPreviewSession &) = delete;
+    AudioPreviewSession &operator=(const AudioPreviewSession &) = delete;
+
+    [[nodiscard]] AudioBlockWindowDecodeResult seek_and_decode_window_at_time(
+        std::int64_t requested_time_microseconds,
+        std::int64_t minimum_duration_microseconds
+    ) noexcept;
+
+    [[nodiscard]] AudioBlockWindowDecodeResult decode_next_window(
+        std::int64_t minimum_duration_microseconds
+    ) noexcept;
+
+private:
+    explicit AudioPreviewSession(std::unique_ptr<Impl> impl) noexcept;
 
     std::unique_ptr<Impl> impl_{};
 
@@ -99,6 +148,12 @@ public:
 
     [[nodiscard]] static VideoPreviewSessionCreateResult create_video_preview_session(
         const std::filesystem::path &input_path,
+        const DecodeNormalizationPolicy &normalization_policy = {}
+    ) noexcept;
+
+    [[nodiscard]] static AudioPreviewSessionCreateResult create_audio_preview_session(
+        const std::filesystem::path &input_path,
+        const AudioPreviewOutputConfig &output_config = {},
         const DecodeNormalizationPolicy &normalization_policy = {}
     ) noexcept;
 };

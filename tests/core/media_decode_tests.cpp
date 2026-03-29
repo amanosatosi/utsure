@@ -1,6 +1,7 @@
 #include "utsure/core/media/media_decode_report.hpp"
 #include "utsure/core/media/media_decoder.hpp"
 
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -9,6 +10,7 @@
 namespace {
 
 using utsure::core::media::DecodedMediaSource;
+using utsure::core::media::AudioPreviewOutputConfig;
 using utsure::core::media::DecodeNormalizationPolicy;
 using utsure::core::media::MediaDecodeResult;
 using utsure::core::media::MediaDecoder;
@@ -265,11 +267,115 @@ int run_preview_session_sequential_assertion(const std::filesystem::path &sample
     return 0;
 }
 
+int run_preview_audio_session_assertion(const std::filesystem::path &sample_path) {
+    DecodeNormalizationPolicy normalization_policy{};
+    normalization_policy.audio_block_samples = 1024;
+
+    auto session_result = MediaDecoder::create_audio_preview_session(
+        sample_path,
+        AudioPreviewOutputConfig{
+            .sample_rate_hz = 44100,
+            .channel_count = 2
+        },
+        normalization_policy
+    );
+    if (!session_result.succeeded()) {
+        const std::string error_message =
+            "Preview audio session creation failed unexpectedly: " +
+            session_result.error->message +
+            " Hint: " +
+            session_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    constexpr std::int64_t kPreviewAudioChunkDurationUs = 250000;
+    auto first_chunk_result = session_result.session->seek_and_decode_window_at_time(0, kPreviewAudioChunkDurationUs);
+    if (!first_chunk_result.succeeded()) {
+        const std::string error_message =
+            "The initial preview audio seek window failed unexpectedly: " +
+            first_chunk_result.error->message +
+            " Hint: " +
+            first_chunk_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    if (first_chunk_result.audio_blocks->empty()) {
+        return fail("The initial preview audio seek window returned no audio blocks.");
+    }
+
+    const auto &first_chunk = *first_chunk_result.audio_blocks;
+    const auto &first_audio_block = first_chunk.front();
+    if (first_audio_block.sample_rate != 44100 ||
+        first_audio_block.channel_count != 2 ||
+        first_audio_block.sample_format != NormalizedAudioSampleFormat::f32_planar) {
+        return fail("The preview audio seek window did not expose the requested resampled block format.");
+    }
+
+    const auto first_chunk_end_us =
+        first_chunk.back().timestamp.start_microseconds +
+        first_chunk.back().timestamp.duration_microseconds.value_or(0);
+    if ((first_chunk_end_us - first_audio_block.timestamp.start_microseconds) < 200000) {
+        return fail("The initial preview audio seek window did not cover enough media time.");
+    }
+
+    auto second_chunk_result = session_result.session->decode_next_window(kPreviewAudioChunkDurationUs);
+    if (!second_chunk_result.succeeded()) {
+        const std::string error_message =
+            "The sequential preview audio window failed unexpectedly after the first chunk: " +
+            second_chunk_result.error->message +
+            " Hint: " +
+            second_chunk_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    if (second_chunk_result.audio_blocks->empty()) {
+        return fail("The sequential preview audio window unexpectedly returned no audio blocks.");
+    }
+
+    const auto &second_chunk = *second_chunk_result.audio_blocks;
+    const auto second_chunk_start_us = second_chunk.front().timestamp.start_microseconds;
+    if (second_chunk_start_us < (first_chunk_end_us - 1000)) {
+        return fail("The sequential preview audio window overlapped the previously emitted preview audio chunk.");
+    }
+
+    auto seek_after_sequential_result =
+        session_result.session->seek_and_decode_window_at_time(1500000, kPreviewAudioChunkDurationUs);
+    if (!seek_after_sequential_result.succeeded()) {
+        const std::string error_message =
+            "Preview audio seek failed unexpectedly after sequential playback: " +
+            seek_after_sequential_result.error->message +
+            " Hint: " +
+            seek_after_sequential_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    if (seek_after_sequential_result.audio_blocks->empty()) {
+        return fail("Preview audio seek after sequential playback returned no audio blocks.");
+    }
+
+    const auto seek_after_start_us = seek_after_sequential_result.audio_blocks->front().timestamp.start_microseconds;
+    if (std::llabs(seek_after_start_us - 1500000) > 50000) {
+        return fail("Preview audio seek after sequential playback did not restart near the requested timeline position.");
+    }
+
+    std::cout << "first_audio_chunk.blocks=" << first_chunk.size() << '\n';
+    std::cout << "first_audio_chunk.start_us=" << first_audio_block.timestamp.start_microseconds << '\n';
+    std::cout << "first_audio_chunk.end_us=" << first_chunk_end_us << '\n';
+    std::cout << "second_audio_chunk.blocks=" << second_chunk.size() << '\n';
+    std::cout << "second_audio_chunk.start_us=" << second_chunk_start_us << '\n';
+    std::cout << "seek_after_audio_chunk.blocks=" << seek_after_sequential_result.audio_blocks->size() << '\n';
+    std::cout << "seek_after_audio_chunk.start_us=" << seek_after_start_us << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
-        return fail("Usage: utsure_core_media_decode_tests [--sample|--missing|--preview-session-sequential] <path>");
+        return fail(
+            "Usage: utsure_core_media_decode_tests "
+            "[--sample|--missing|--preview-session-sequential|--preview-audio-session] <path>"
+        );
     }
 
     const std::string_view mode(argv[1]);
@@ -287,5 +393,9 @@ int main(int argc, char *argv[]) {
         return run_preview_session_sequential_assertion(path);
     }
 
-    return fail("Unknown mode. Use --sample, --missing, or --preview-session-sequential.");
+    if (mode == "--preview-audio-session") {
+        return run_preview_audio_session_assertion(path);
+    }
+
+    return fail("Unknown mode. Use --sample, --missing, --preview-session-sequential, or --preview-audio-session.");
 }

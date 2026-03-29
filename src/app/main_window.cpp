@@ -1,6 +1,7 @@
 #include "main_window.hpp"
 
 #include "encode_job_runner_controller.hpp"
+#include "preview_audio_controller.hpp"
 #include "preview_frame_renderer_controller.hpp"
 #include "preview_surface_widget.hpp"
 #include "trim_timeline_widget.hpp"
@@ -685,6 +686,7 @@ QLabel#PreviewTimeBadge {
 )");
 
     runner_controller_ = new EncodeJobRunnerController(this);
+    preview_audio_controller_ = new PreviewAudioController(this);
     preview_renderer_controller_ = new PreviewFrameRendererController(this);
     busy_spinner_timer_ = new QTimer(this);
     busy_spinner_timer_->setInterval(90);
@@ -1265,6 +1267,9 @@ QLabel#PreviewTimeBadge {
         this,
         &MainWindow::handle_preview_failed
     );
+    connect(preview_audio_controller_, &PreviewAudioController::preview_audio_failed, this, [this](const QString &detail) {
+        append_session_log(QString("[warning] Preview audio: %1").arg(detail));
+    });
     connect(preview_surface_widget_, &PreviewSurfaceWidget::surface_clicked, this, &MainWindow::handle_preview_surface_clicked);
     connect(
         preview_surface_widget_,
@@ -1845,6 +1850,10 @@ void MainWindow::request_preview_frame_for_time(const qint64 requested_time_us) 
 }
 
 void MainWindow::clear_preview_surface() {
+    if (preview_audio_controller_ != nullptr) {
+        preview_audio_controller_->clear();
+    }
+
     const bool preview_state_already_cleared =
         preview_requested_job_index_ == -1 &&
         preview_requested_time_us_ == -1 &&
@@ -1894,6 +1903,19 @@ void MainWindow::start_preview_playback() {
         ? std::clamp<qint64>(job.current_time_us + selected_job_frame_step_us(), trim_in_us, trim_out_us)
         : std::clamp<qint64>(job.current_time_us, trim_in_us, trim_out_us);
     preview_playing_ = true;
+
+    if (preview_audio_controller_ != nullptr) {
+        if (job.inspected_source_info.has_value() && job.inspected_source_info->primary_audio_stream.has_value()) {
+            preview_audio_controller_->start_preview(PreviewAudioPlaybackRequest{
+                .source_path = job.source_path.trimmed(),
+                .requested_time_us = job.current_time_us,
+                .source_audio_stream_info = *job.inspected_source_info->primary_audio_stream
+            });
+        } else {
+            preview_audio_controller_->stop_preview();
+        }
+    }
+
     preview_playback_timer_->setInterval(
         std::clamp<int>(static_cast<int>(selected_job_frame_step_us() / 1000), 16, 67)
     );
@@ -1924,6 +1946,9 @@ void MainWindow::pause_preview_playback() {
     preview_playing_ = false;
     if (preview_playback_timer_ != nullptr) {
         preview_playback_timer_->stop();
+    }
+    if (preview_audio_controller_ != nullptr) {
+        preview_audio_controller_->stop_preview();
     }
     sync_preview_surface_state();
 }
@@ -2140,6 +2165,13 @@ void MainWindow::handle_preview_playback_tick() {
     const qint64 trim_in_us = std::clamp<qint64>(job.trim_in_us, 0, bounded_duration_us);
     const qint64 trim_out_us = std::clamp<qint64>(std::max(job.trim_out_us, trim_in_us), trim_in_us, bounded_duration_us);
     qint64 requested_time_us = preview_next_playback_time_us_;
+
+    if (preview_audio_controller_ != nullptr && preview_audio_controller_->is_audio_playing()) {
+        const qint64 audio_playback_time_us = preview_audio_controller_->current_playback_time_us();
+        if (audio_playback_time_us >= 0) {
+            requested_time_us = std::max<qint64>(audio_playback_time_us, job.current_time_us);
+        }
+    }
 
     if (requested_time_us < 0) {
         requested_time_us =

@@ -97,7 +97,7 @@ endfunction()
 
 macro(utsure_configure_dependencies)
     if(UTSURE_BUILD_APP)
-        find_package(Qt6 ${UTSURE_QT_MIN_VERSION} REQUIRED COMPONENTS Widgets Svg)
+        find_package(Qt6 ${UTSURE_QT_MIN_VERSION} REQUIRED COMPONENTS Multimedia Widgets Svg)
     endif()
 
     if(NOT UTSURE_ENABLE_DEPENDENCY_AUDIT)

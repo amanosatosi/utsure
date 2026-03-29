@@ -47,11 +47,14 @@ add_custom_command(
     OUTPUT "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
     COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
         -f lavfi -i "testsrc=size=320x180:rate=24"
+        -f lavfi -i "sine=frequency=660:sample_rate=48000:duration=6"
         -frames:v 144
         -c:v libx264
         -preset ultrafast
         -pix_fmt yuv420p
-        -an
+        -c:a aac
+        -b:a 128k
+        -shortest
         "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
     VERBATIM
 )
@@ -207,6 +210,11 @@ add_test(
 add_test(
     NAME utsure.core.media.preview_session.sequential
     COMMAND utsure_core_media_decode_tests --preview-session-sequential "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
+)
+
+add_test(
+    NAME utsure.core.media.preview_audio_session.sequential
+    COMMAND utsure_core_media_decode_tests --preview-audio-session "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
 )
 
 add_executable(utsure_core_media_encode_tests

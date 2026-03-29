@@ -68,6 +68,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M17 preview playback slice now also includes replacing per-frame reopen/seek preview decode with a small cached frame-window path so initial seek/index work can be reused across nearby playback frames.
 - The current M17 preview playback slice now also includes preview-resolution frame normalization so the cache window can span several seconds instead of only about one second of full-resolution RGBA frames.
 - The current M17 preview playback slice now also includes a persistent core preview decode session so playback can keep reading forward across cache boundaries instead of stalling on repeated reopen/seek window refills.
+- The current M17 preview slice now also includes restoring opt-in main-source preview audio so Preview can play synchronized source audio alongside the existing subtitle-rendered video preview without turning the preview path into a full media-player rewrite.
 
 ## Architecture direction
 
@@ -618,6 +619,7 @@ Current slice status:
   * Completed: fixed the persistent preview decode session so normal sequential window refills no longer send the decoder into drain/EOF mode before the input stream actually reaches EOF, and added focused core regression coverage for seek-plus-sequential preview windows across the first 96-frame cache boundary.
   * Completed: fixed the remaining preview playback freeze at the first 96-frame boundary inside the app-side request/cache/playback handoff by correcting the cache-end boundary semantics and adding targeted logging around request state, cache coverage, refill selection, and frame delivery.
   * Completed: smoothed preview playback across repeated 96-frame window boundaries by starting one-window-ahead background video prefetch during playback, appending prefetched frames into the existing cache before the current buffered range is exhausted, and ignoring stale prefetch results after seeks or cache resets.
+  * Completed: restored opt-in Preview audio for the selected job's main source through a separate Qt-audio-backed preview path that reuses encoder-core FFmpeg decode/resample helpers, follows seek/pause/preview-off/selection resets, and keeps the existing subtitle-rendered video preview flow intact.
 
 Likely files/modules:
   * `src/app/`
