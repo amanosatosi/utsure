@@ -52,15 +52,18 @@ pushd "${ffms2_source_dir}" >/dev/null
 # source tree.
 # Re-run only the bootstrap steps here so the actual configure step stays in
 # the separate build directory below.
+# This snapshot also wires AC_ARG_ENABLE([avisynth], ...) incorrectly and
+# ignores the provided option value, so patch configure.ac before autoreconf so
+# --enable-avisynth=no actually disables the plugin.
+sed -i 's/\[enable_avisynth=yes\],/[enable_avisynth=$enableval],/' configure.ac
 mkdir -p src/config
 echo "Running autoreconf..."
 autoreconf -ivf
 popd >/dev/null
 
 pushd "${ffms2_build_dir}" >/dev/null
-# The pinned upstream FFMS2 snapshot's AC_ARG_ENABLE handler treats
-# --disable-avisynth as "yes", so keep the explicit "=no" spelling here to
-# stop it from trying to build the Avisynth plugin on the Windows CI image.
+# configure.ac is patched above so the explicit "=no" spelling here cleanly
+# disables Avisynth on the Windows CI image.
 "${ffms2_source_dir}/configure" \
   --prefix="${ffms2_prefix}" \
   --enable-shared \
