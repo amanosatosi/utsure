@@ -256,11 +256,14 @@ private:
     QLabel *task_log_summary_label_{nullptr};
     QCheckBox *preview_enabled_check_{nullptr};
     PreviewSurfaceWidget *preview_surface_widget_{nullptr};
+    QWidget *preview_controls_panel_{nullptr};
     QLabel *preview_time_badge_{nullptr};
     TrimTimelineWidget *trim_timeline_widget_{nullptr};
     QLabel *current_time_value_{nullptr};
     QLabel *trim_in_value_{nullptr};
     QLabel *trim_out_value_{nullptr};
+    QPushButton *preview_play_pause_button_{nullptr};
+    QPushButton *preview_stop_button_{nullptr};
     QPushButton *frame_back_button_{nullptr};
     QPushButton *frame_forward_button_{nullptr};
     QPushButton *set_in_button_{nullptr};

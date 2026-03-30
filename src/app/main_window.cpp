@@ -510,14 +510,10 @@ QFrame#PreviewSurface {
     border: 1px solid #1f1f1f;
     border-radius: 6px;
 }
-QWidget#PreviewBottomOverlay {
-    background: qlineargradient(
-        x1:0, y1:0, x2:0, y2:1,
-        stop:0 rgba(24, 24, 24, 170),
-        stop:1 rgba(8, 8, 8, 225)
-    );
-    border: 1px solid rgba(255, 255, 255, 32);
-    border-radius: 10px;
+QFrame#PreviewTransportBar {
+    background: #ffffff;
+    border: 1px solid #cfcfcf;
+    border-radius: 6px;
 }
 QWidget#PreviewTabCorner {
     background: transparent;
@@ -558,18 +554,8 @@ QToolButton[toolbarButton="true"][iconFallback="true"] {
 }
 QToolButton[toolbarButton="true"]:hover,
 QPushButton[browseButton="true"]:hover,
-QToolButton#PreviewOverlayButton:hover,
 QPushButton#TimelineButton:hover {
     background: #f7f7f7;
-}
-QToolButton#PreviewOverlayButton {
-    background: rgba(255, 255, 255, 220);
-    border: 1px solid rgba(255, 255, 255, 120);
-    border-radius: 15px;
-    padding: 0;
-}
-QToolButton#PreviewOverlayButton[iconFallback="true"] {
-    padding: 0 10px;
 }
 QPushButton[browseButton="true"] {
     background: #19b7ff;
@@ -692,8 +678,8 @@ QLabel#PreviewTimeBadge {
     font-family: Consolas, "Courier New", monospace;
 }
 QLabel#PreviewTrimBadge {
-    background: rgba(255, 62, 165, 36);
-    border: 1px solid rgba(255, 62, 165, 170);
+    background: #fff1f8;
+    border: 1px solid #ff5cb2;
     color: #ff6dbd;
     font-weight: 700;
 }
@@ -1130,8 +1116,8 @@ QLabel#PreviewTimeBadge {
 
     auto *preview_surface = new QFrame(preview_tab);
     preview_surface->setObjectName("PreviewSurface");
-    preview_surface->setMinimumHeight(220);
-    preview_surface->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    preview_surface->setMinimumHeight(240);
+    preview_surface->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *preview_surface_layout = new QVBoxLayout(preview_surface);
     preview_surface_layout->setContentsMargins(0, 0, 0, 0);
     preview_surface_layout->setSpacing(0);
@@ -1150,15 +1136,36 @@ QLabel#PreviewTimeBadge {
     trim_out_value_ = new QLabel("OUT=00:00:00.000", preview_surface_widget_);
     trim_out_value_->setObjectName("PreviewTrimBadge");
 
-    auto *timeline_controls_container = new QWidget(preview_surface_widget_);
+    preview_controls_panel_ = new QFrame(preview_tab);
+    preview_controls_panel_->setObjectName("PreviewTransportBar");
+    preview_controls_panel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    preview_controls_panel_->setVisible(false);
+    auto *preview_controls_layout = new QVBoxLayout(preview_controls_panel_);
+    preview_controls_layout->setContentsMargins(8, 6, 8, 6);
+    preview_controls_layout->setSpacing(6);
+
+    trim_timeline_widget_ = new TrimTimelineWidget(preview_controls_panel_);
+    trim_timeline_widget_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    preview_controls_layout->addWidget(trim_timeline_widget_);
+
+    auto *timeline_controls_container = new QWidget(preview_controls_panel_);
     auto *timeline_controls = new QHBoxLayout(timeline_controls_container);
     timeline_controls->setContentsMargins(0, 0, 0, 0);
     timeline_controls->setSpacing(4);
 
-    if (auto *transport_controls = preview_surface_widget_->transport_controls_widget()) {
-        timeline_controls->addWidget(transport_controls);
-        timeline_controls->addSpacing(4);
-    }
+    preview_play_pause_button_ = new QPushButton(timeline_controls_container);
+    preview_play_pause_button_->setObjectName("TimelineButton");
+    preview_play_pause_button_->setCursor(Qt::PointingHandCursor);
+    preview_play_pause_button_->setFocusPolicy(Qt::NoFocus);
+    preview_play_pause_button_->setToolTip("Play preview");
+    apply_icon_or_text(preview_play_pause_button_, ":/icons/play.svg", "Play", QSize(15, 15), 30, 24, false);
+
+    preview_stop_button_ = new QPushButton(timeline_controls_container);
+    preview_stop_button_->setObjectName("TimelineButton");
+    preview_stop_button_->setCursor(Qt::PointingHandCursor);
+    preview_stop_button_->setFocusPolicy(Qt::NoFocus);
+    preview_stop_button_->setToolTip("Stop preview and return to trim in");
+    apply_icon_or_text(preview_stop_button_, ":/icons/stop.svg", "Stop", QSize(15, 15), 30, 24, false);
 
     frame_back_button_ = new QPushButton(timeline_controls_container);
     frame_back_button_->setObjectName("TimelineButton");
@@ -1196,6 +1203,9 @@ QLabel#PreviewTimeBadge {
     jump_out_button_->setFocusPolicy(Qt::NoFocus);
     jump_out_button_->setToolTip("Jump preview to trim out");
     apply_icon_or_text(jump_out_button_, ":/icons/jump-out.svg", "To OUT", QSize(15, 15), 36, 24, true);
+    timeline_controls->addWidget(preview_play_pause_button_);
+    timeline_controls->addWidget(preview_stop_button_);
+    timeline_controls->addSpacing(4);
     timeline_controls->addWidget(frame_back_button_);
     timeline_controls->addWidget(frame_forward_button_);
     timeline_controls->addWidget(set_in_button_);
@@ -1205,16 +1215,10 @@ QLabel#PreviewTimeBadge {
     timeline_controls->addStretch(1);
     timeline_controls->addWidget(trim_in_value_);
     timeline_controls->addWidget(trim_out_value_);
+    preview_controls_layout->addWidget(timeline_controls_container);
 
-    trim_timeline_widget_ = new TrimTimelineWidget(preview_surface_widget_);
-    trim_timeline_widget_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    if (auto *overlay_content = preview_surface_widget_->overlay_content_layout()) {
-        overlay_content->addWidget(trim_timeline_widget_);
-        overlay_content->addWidget(timeline_controls_container);
-    }
-
-    preview_tab_layout->addWidget(preview_surface);
-    preview_tab_layout->addStretch(1);
+    preview_tab_layout->addWidget(preview_surface, 1);
+    preview_tab_layout->addWidget(preview_controls_panel_);
     right_tabs->addTab(preview_tab, "Preview");
 
     auto *task_log_tab = new QWidget(right_tabs);
@@ -1288,14 +1292,9 @@ QLabel#PreviewTimeBadge {
         append_session_log(QString("[warning] Preview audio: %1").arg(detail));
     });
     connect(preview_surface_widget_, &PreviewSurfaceWidget::surface_clicked, this, &MainWindow::handle_preview_surface_clicked);
-    connect(
-        preview_surface_widget_,
-        &PreviewSurfaceWidget::play_pause_requested,
-        this,
-        &MainWindow::handle_preview_play_pause_requested
-    );
-    connect(preview_surface_widget_, &PreviewSurfaceWidget::stop_requested, this, &MainWindow::handle_preview_stop_requested);
     connect(preview_surface_widget_, &PreviewSurfaceWidget::frame_step_requested, this, &MainWindow::step_selected_job_frame);
+    connect(preview_play_pause_button_, &QPushButton::clicked, this, &MainWindow::handle_preview_play_pause_requested);
+    connect(preview_stop_button_, &QPushButton::clicked, this, &MainWindow::handle_preview_stop_requested);
     connect(busy_spinner_timer_, &QTimer::timeout, this, &MainWindow::advance_busy_spinner);
     connect(preview_playback_timer_, &QTimer::timeout, this, &MainWindow::handle_preview_playback_tick);
 
@@ -1994,11 +1993,36 @@ void MainWindow::sync_preview_surface_state() {
         return;
     }
 
+    const bool preview_panel_visible = preview_enabled_check_->isChecked() && is_valid_job_index(selected_job_index_);
     const bool controls_enabled = preview_enabled_check_->isChecked() &&
         is_valid_job_index(selected_job_index_) &&
         jobs_[static_cast<std::size_t>(selected_job_index_)].source_inspection_error.trimmed().isEmpty();
     preview_surface_widget_->set_controls_enabled(controls_enabled);
     preview_surface_widget_->set_playing(preview_playing_);
+
+    if (preview_controls_panel_ != nullptr) {
+        preview_controls_panel_->setVisible(preview_panel_visible);
+        preview_controls_panel_->setEnabled(controls_enabled);
+    }
+
+    if (preview_play_pause_button_ != nullptr) {
+        const QString tooltip = preview_playing_ ? "Pause preview" : "Play preview";
+        preview_play_pause_button_->setToolTip(tooltip);
+        apply_icon_or_text(
+            preview_play_pause_button_,
+            preview_playing_ ? ":/icons/pause.svg" : ":/icons/play.svg",
+            preview_playing_ ? "Pause" : "Play",
+            QSize(15, 15),
+            30,
+            24,
+            false
+        );
+        preview_play_pause_button_->setEnabled(controls_enabled);
+    }
+
+    if (preview_stop_button_ != nullptr) {
+        preview_stop_button_->setEnabled(controls_enabled);
+    }
 }
 
 void MainWindow::handle_preview_loading(const quint64 request_token, const qint64 requested_time_us) {
@@ -2622,6 +2646,12 @@ void MainWindow::refresh_editor_state() {
         pause_preview_playback();
     }
     sync_preview_surface_state();
+    if (preview_play_pause_button_ != nullptr) {
+        preview_play_pause_button_->setEnabled(has_job);
+    }
+    if (preview_stop_button_ != nullptr) {
+        preview_stop_button_->setEnabled(has_job);
+    }
     trim_timeline_widget_->setEnabled(has_job);
     frame_back_button_->setEnabled(has_job);
     frame_forward_button_->setEnabled(has_job);
