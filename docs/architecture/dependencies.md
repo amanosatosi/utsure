@@ -42,7 +42,7 @@ Preview now uses FFMS2 for indexed source access, but the main transcode and fin
 To keep this explicit:
 
 - FFMS2 is built from source in CI and the documented MSYS2 workflow.
-- The current pin is tag `5.0`.
+- The current pin is upstream FFMS2 commit `25cef14386fcaaa58ee547065deee8f6e82c56a2`.
 - The build installs FFMS2 into `.deps/ffms2/prefix`.
 - CMake requires `UTSURE_FFMS2_ROOT` when preview dependency validation is enabled.
 - The dependency audit fails if `pkg-config ffms2` resolves outside that prefix.
@@ -81,7 +81,7 @@ The active transcode path does not depend on `libavfilter`.
 
 - Install Qt 6 Widgets, the FFmpeg build prerequisites, `libx264`, `libx265`, and the `libassmod` build prerequisites from MSYS2 UCRT64.
 - Download and build FFmpeg `7.1.2` from the official release tarball into `.deps/ffmpeg/prefix`.
-- Clone and build FFMS2 from the upstream repository, pinned to tag `5.0`, against that FFmpeg prefix.
+- Clone and build FFMS2 from the upstream repository, pinned to commit `25cef14386fcaaa58ee547065deee8f6e82c56a2`, against that FFmpeg prefix.
 - Clone and build `libassmod` from the upstream repository, pinned to tag `1.0`.
 - Put the FFmpeg, FFMS2, and `libassmod` prefixes ahead of the default pkg-config search path.
 - Run configure-time dependency audit.

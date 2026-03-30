@@ -13,7 +13,7 @@ jobs:
       UTSURE_CMAKE_BUILD_TYPE: Release
       UTSURE_FFMPEG_SERIES: "7.1"
       UTSURE_FFMPEG_VERSION: "7.1.2"
-      UTSURE_FFMS2_REF: "5.0"
+      UTSURE_FFMS2_REF: "25cef14386fcaaa58ee547065deee8f6e82c56a2"
       UTSURE_FFMPEG_CONFIGURE_FLAGS: >-
         --enable-gpl --enable-libx264 --enable-libx265 --enable-shared --disable-static
         --disable-debug --disable-doc --disable-ffplay --disable-programs --enable-ffmpeg --enable-ffprobe

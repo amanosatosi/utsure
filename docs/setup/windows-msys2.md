@@ -39,7 +39,7 @@ From a clean repository checkout:
 ```bash
 export UTSURE_LIBASSMOD_REF=1.0
 export UTSURE_FFMPEG_VERSION=7.1.2
-export UTSURE_FFMS2_REF=5.0
+export UTSURE_FFMS2_REF=25cef14386fcaaa58ee547065deee8f6e82c56a2
 ./scripts/ci/windows-msys2-build-ffmpeg.sh
 ./scripts/ci/windows-msys2-build-ffms2.sh
 ./scripts/ci/windows-msys2-build-libassmod.sh
