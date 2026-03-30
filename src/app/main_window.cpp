@@ -720,14 +720,21 @@ QLabel#PreviewTimeBadge {
 
     auto *toolbar_frame = new QFrame(content_widget);
     toolbar_frame->setObjectName("ToolbarFrame");
-    auto *toolbar_layout = new QHBoxLayout(toolbar_frame);
+    auto *toolbar_layout = new QGridLayout(toolbar_frame);
     toolbar_layout->setContentsMargins(10, 8, 10, 8);
     toolbar_layout->setSpacing(6);
+    toolbar_layout->setColumnStretch(0, 1);
+    toolbar_layout->setColumnStretch(2, 1);
 
     add_button_ = create_toolbar_button(":/icons/add.svg", "Add", "Add source jobs", toolbar_frame);
     remove_button_ = create_toolbar_button(":/icons/remove.svg", "Remove", "Remove selected job", toolbar_frame);
     settings_button_ = create_toolbar_button(":/icons/settings.svg", "Settings", "Settings", toolbar_frame);
     info_button_ = create_toolbar_button(":/icons/info.svg", "Info", "Info", toolbar_frame);
+
+    auto *toolbar_left_widget = new QWidget(toolbar_frame);
+    auto *toolbar_left_layout = new QHBoxLayout(toolbar_left_widget);
+    toolbar_left_layout->setContentsMargins(0, 0, 0, 0);
+    toolbar_left_layout->setSpacing(6);
 
     auto *toolbar_brand_widget = new QWidget(toolbar_frame);
     auto *brand_layout = new QHBoxLayout(toolbar_brand_widget);
@@ -742,12 +749,10 @@ QLabel#PreviewTimeBadge {
     brand_name->setObjectName("BrandName");
     brand_layout->addWidget(brand_mark);
     brand_layout->addWidget(brand_name);
-    toolbar_layout->addWidget(add_button_);
-    toolbar_layout->addWidget(remove_button_);
-    toolbar_layout->addWidget(toolbar_brand_widget);
-    toolbar_layout->addWidget(settings_button_);
-    toolbar_layout->addWidget(info_button_);
-    toolbar_layout->addStretch(1);
+    toolbar_left_layout->addWidget(add_button_);
+    toolbar_left_layout->addWidget(remove_button_);
+    toolbar_left_layout->addWidget(settings_button_);
+    toolbar_left_layout->addWidget(info_button_);
 
     priority_combo_ = new QComboBox(toolbar_frame);
     priority_combo_->addItem("Low", static_cast<int>(utsure::core::job::EncodeJobProcessPriority::low));
@@ -768,9 +773,18 @@ QLabel#PreviewTimeBadge {
 
     start_button_ = create_toolbar_button(":/icons/play.svg", "Start", "Start checked jobs", toolbar_frame);
     stop_button_ = create_toolbar_button(":/icons/stop.svg", "Stop", "Stop current job", toolbar_frame);
-    toolbar_layout->addWidget(priority_combo_);
-    toolbar_layout->addWidget(start_button_);
-    toolbar_layout->addWidget(stop_button_);
+    auto *toolbar_right_widget = new QWidget(toolbar_frame);
+    auto *toolbar_right_layout = new QHBoxLayout(toolbar_right_widget);
+    toolbar_right_layout->setContentsMargins(0, 0, 0, 0);
+    toolbar_right_layout->setSpacing(6);
+    toolbar_right_layout->addStretch(1);
+    toolbar_right_layout->addWidget(priority_combo_);
+    toolbar_right_layout->addWidget(start_button_);
+    toolbar_right_layout->addWidget(stop_button_);
+
+    toolbar_layout->addWidget(toolbar_left_widget, 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
+    toolbar_layout->addWidget(toolbar_brand_widget, 0, 1, Qt::AlignCenter);
+    toolbar_layout->addWidget(toolbar_right_widget, 0, 2, Qt::AlignRight | Qt::AlignVCenter);
     content_layout->addWidget(toolbar_frame);
 
     auto *body_splitter = new QSplitter(Qt::Vertical, content_widget);
@@ -901,13 +915,6 @@ QLabel#PreviewTimeBadge {
     output_row->addWidget(same_as_input_check_);
     output_layout->addLayout(output_row);
 
-    auto *output_note = new QLabel(
-        "Same as input keeps the output in the source folder. Filename stays manual in this milestone.",
-        output_frame
-    );
-    output_note->setObjectName("MutedNote");
-    output_note->setWordWrap(true);
-    output_layout->addWidget(output_note);
     top_section_layout->addWidget(output_frame);
 
     auto *content_splitter = new QSplitter(Qt::Horizontal, body_splitter);
@@ -1357,7 +1364,7 @@ QLabel#PreviewTimeBadge {
 QString MainWindow::window_structure_summary() const {
     return QString(
         "Main window structure:\n"
-        "- Toolbar: add/remove, inline branding, settings/info, worker priority, start, stop\n"
+        "- Toolbar: left controls, centered branding, right-side priority/start/stop\n"
         "- Queue row: batch queue table plus selected-job details summary\n"
         "- Output strip: selected-job output path plus Same as input toggle\n"
         "- Left tabs: Main, Encode, Special, and global Logs\n"
