@@ -8,6 +8,7 @@
 class QEnterEvent;
 class QEvent;
 class QHBoxLayout;
+class QKeyEvent;
 class QPaintEvent;
 class QMouseEvent;
 class QResizeEvent;
@@ -33,17 +34,19 @@ public:
     [[nodiscard]] bool hasHeightForWidth() const override;
     [[nodiscard]] int heightForWidth(int width) const override;
     [[nodiscard]] QHBoxLayout *top_right_overlay_layout() const noexcept;
-    [[nodiscard]] QHBoxLayout *overlay_header_layout() const noexcept;
     [[nodiscard]] QVBoxLayout *overlay_content_layout() const noexcept;
+    [[nodiscard]] QWidget *transport_controls_widget() const noexcept;
 
 signals:
     void surface_clicked();
     void play_pause_requested();
     void stop_requested();
+    void frame_step_requested(int direction);
 
 protected:
     void paintEvent(QPaintEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
     void enterEvent(QEnterEvent *event) override;
     void leaveEvent(QEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
@@ -60,11 +63,9 @@ private:
     QWidget *top_right_overlay_container_{nullptr};
     QHBoxLayout *top_right_overlay_layout_{nullptr};
     QWidget *bottom_overlay_container_{nullptr};
-    QWidget *overlay_header_container_{nullptr};
-    QWidget *overlay_header_content_container_{nullptr};
-    QHBoxLayout *overlay_header_layout_{nullptr};
     QWidget *overlay_content_container_{nullptr};
     QVBoxLayout *overlay_content_layout_{nullptr};
+    QWidget *transport_controls_widget_{nullptr};
     QToolButton *play_pause_button_{nullptr};
     QToolButton *stop_button_{nullptr};
     bool controls_enabled_{false};

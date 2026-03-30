@@ -8,8 +8,8 @@
 
 namespace {
 
-constexpr auto kTrackHeight = 30.0;
-constexpr auto kTrackMargin = 8.0;
+constexpr auto kTrackHeight = 16.0;
+constexpr auto kTrackMargin = 6.0;
 constexpr auto kHandleWidth = 3.0;
 constexpr auto kTickSpacing = 50.0;
 
@@ -20,8 +20,9 @@ qint64 clamp_time(const qint64 value, const qint64 duration_us) {
 }  // namespace
 
 TrimTimelineWidget::TrimTimelineWidget(QWidget *parent) : QWidget(parent) {
-    setMinimumHeight(46);
+    setMinimumHeight(28);
     setMouseTracking(true);
+    setFocusPolicy(Qt::NoFocus);
 }
 
 qint64 TrimTimelineWidget::duration_us() const noexcept {
@@ -67,11 +68,11 @@ void TrimTimelineWidget::set_trim_range_us(qint64 trim_in_us, qint64 trim_out_us
 }
 
 QSize TrimTimelineWidget::sizeHint() const {
-    return QSize(480, 46);
+    return QSize(400, 28);
 }
 
 QSize TrimTimelineWidget::minimumSizeHint() const {
-    return QSize(220, 46);
+    return QSize(220, 28);
 }
 
 void TrimTimelineWidget::paintEvent(QPaintEvent *event) {
@@ -111,7 +112,7 @@ void TrimTimelineWidget::paintEvent(QPaintEvent *event) {
     painter.drawRect(QRectF(current_x - 1.0, rect.top(), 2.0, rect.height()));
 
     QPolygonF head{};
-    head << QPointF(current_x, rect.top() - 6.0)
+    head << QPointF(current_x, rect.top() - 5.0)
          << QPointF(current_x - 6.0, rect.top())
          << QPointF(current_x + 6.0, rect.top());
     painter.drawPolygon(head);
@@ -120,6 +121,8 @@ void TrimTimelineWidget::paintEvent(QPaintEvent *event) {
 void TrimTimelineWidget::mousePressEvent(QMouseEvent *event) {
     if (event->button() == Qt::LeftButton) {
         emit_seek_for_position(event->position().x());
+        event->accept();
+        return;
     }
 
     QWidget::mousePressEvent(event);
@@ -128,6 +131,8 @@ void TrimTimelineWidget::mousePressEvent(QMouseEvent *event) {
 void TrimTimelineWidget::mouseMoveEvent(QMouseEvent *event) {
     if (event->buttons().testFlag(Qt::LeftButton)) {
         emit_seek_for_position(event->position().x());
+        event->accept();
+        return;
     }
 
     QWidget::mouseMoveEvent(event);

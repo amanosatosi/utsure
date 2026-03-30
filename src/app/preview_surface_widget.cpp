@@ -3,6 +3,7 @@
 #include <QEnterEvent>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QKeyEvent>
 #include <QPainter>
 #include <QPaintEvent>
 #include <QRect>
@@ -14,16 +15,19 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 
+#include <algorithm>
+#include <cmath>
+
 namespace {
 
 constexpr int kSurfaceMargin = 10;
 constexpr int kOverlayMargin = 14;
-constexpr int kOverlaySpacing = 8;
-constexpr int kOverlayButtonSize = 34;
-constexpr int kDefaultPreviewWidth = 640;
-constexpr int kDefaultPreviewHeight = 360;
-constexpr int kMinimumPreviewWidth = 320;
-constexpr int kMinimumPreviewHeight = 180;
+constexpr int kOverlaySpacing = 6;
+constexpr int kOverlayButtonSize = 30;
+constexpr int kDefaultPreviewWidth = 568;
+constexpr int kDefaultPreviewHeight = 320;
+constexpr int kMinimumPreviewWidth = 288;
+constexpr int kMinimumPreviewHeight = 162;
 
 }  // namespace
 
@@ -31,6 +35,7 @@ PreviewSurfaceWidget::PreviewSurfaceWidget(QWidget *parent) : QWidget(parent) {
     setAttribute(Qt::WA_OpaquePaintEvent, true);
     setMouseTracking(true);
     setCursor(Qt::PointingHandCursor);
+    setFocusPolicy(Qt::StrongFocus);
     QSizePolicy size_policy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     size_policy.setHeightForWidth(true);
     setSizePolicy(size_policy);
@@ -45,43 +50,36 @@ PreviewSurfaceWidget::PreviewSurfaceWidget(QWidget *parent) : QWidget(parent) {
     bottom_overlay_container_->setObjectName("PreviewBottomOverlay");
     bottom_overlay_container_->setAttribute(Qt::WA_StyledBackground, true);
     auto *bottom_overlay_layout = new QVBoxLayout(bottom_overlay_container_);
-    bottom_overlay_layout->setContentsMargins(12, 10, 12, 10);
-    bottom_overlay_layout->setSpacing(8);
-
-    overlay_header_container_ = new QWidget(bottom_overlay_container_);
-    auto *header_row_layout = new QHBoxLayout(overlay_header_container_);
-    header_row_layout->setContentsMargins(0, 0, 0, 0);
-    header_row_layout->setSpacing(kOverlaySpacing);
-
-    overlay_header_content_container_ = new QWidget(overlay_header_container_);
-    auto *header_content_layout = new QHBoxLayout(overlay_header_content_container_);
-    header_content_layout->setContentsMargins(0, 0, 0, 0);
-    header_content_layout->setSpacing(kOverlaySpacing);
-    overlay_header_layout_ = header_content_layout;
-
-    play_pause_button_ = new QToolButton(overlay_header_container_);
-    play_pause_button_->setObjectName("PreviewOverlayButton");
-    play_pause_button_->setCursor(Qt::PointingHandCursor);
-    play_pause_button_->setFixedSize(kOverlayButtonSize, kOverlayButtonSize);
-    play_pause_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
-
-    stop_button_ = new QToolButton(overlay_header_container_);
-    stop_button_->setObjectName("PreviewOverlayButton");
-    stop_button_->setCursor(Qt::PointingHandCursor);
-    stop_button_->setFixedSize(kOverlayButtonSize, kOverlayButtonSize);
-    stop_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
-
-    header_row_layout->addWidget(overlay_header_content_container_, 1);
-    header_row_layout->addWidget(play_pause_button_);
-    header_row_layout->addWidget(stop_button_);
+    bottom_overlay_layout->setContentsMargins(10, 8, 10, 8);
+    bottom_overlay_layout->setSpacing(kOverlaySpacing);
 
     overlay_content_container_ = new QWidget(bottom_overlay_container_);
     auto *content_layout = new QVBoxLayout(overlay_content_container_);
     content_layout->setContentsMargins(0, 0, 0, 0);
-    content_layout->setSpacing(8);
+    content_layout->setSpacing(kOverlaySpacing);
     overlay_content_layout_ = content_layout;
 
-    bottom_overlay_layout->addWidget(overlay_header_container_);
+    transport_controls_widget_ = new QWidget(bottom_overlay_container_);
+    auto *transport_controls_layout = new QHBoxLayout(transport_controls_widget_);
+    transport_controls_layout->setContentsMargins(0, 0, 0, 0);
+    transport_controls_layout->setSpacing(4);
+
+    play_pause_button_ = new QToolButton(transport_controls_widget_);
+    play_pause_button_->setObjectName("PreviewOverlayButton");
+    play_pause_button_->setCursor(Qt::PointingHandCursor);
+    play_pause_button_->setFixedSize(kOverlayButtonSize, kOverlayButtonSize);
+    play_pause_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    play_pause_button_->setFocusPolicy(Qt::NoFocus);
+
+    stop_button_ = new QToolButton(transport_controls_widget_);
+    stop_button_->setObjectName("PreviewOverlayButton");
+    stop_button_->setCursor(Qt::PointingHandCursor);
+    stop_button_->setFixedSize(kOverlayButtonSize, kOverlayButtonSize);
+    stop_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    stop_button_->setFocusPolicy(Qt::NoFocus);
+
+    transport_controls_layout->addWidget(play_pause_button_);
+    transport_controls_layout->addWidget(stop_button_);
     bottom_overlay_layout->addWidget(overlay_content_container_);
 
     connect(play_pause_button_, &QToolButton::clicked, this, &PreviewSurfaceWidget::play_pause_requested);
@@ -157,12 +155,12 @@ QHBoxLayout *PreviewSurfaceWidget::top_right_overlay_layout() const noexcept {
     return top_right_overlay_layout_;
 }
 
-QHBoxLayout *PreviewSurfaceWidget::overlay_header_layout() const noexcept {
-    return overlay_header_layout_;
-}
-
 QVBoxLayout *PreviewSurfaceWidget::overlay_content_layout() const noexcept {
     return overlay_content_layout_;
+}
+
+QWidget *PreviewSurfaceWidget::transport_controls_widget() const noexcept {
+    return transport_controls_widget_;
 }
 
 void PreviewSurfaceWidget::paintEvent(QPaintEvent *event) {
@@ -211,11 +209,36 @@ void PreviewSurfaceWidget::paintEvent(QPaintEvent *event) {
 }
 
 void PreviewSurfaceWidget::mousePressEvent(QMouseEvent *event) {
+    setFocus(Qt::MouseFocusReason);
+
     if (event->button() == Qt::LeftButton) {
-        emit surface_clicked();
+        const QWidget *clicked_child = childAt(event->position().toPoint());
+        if (clicked_child == nullptr || clicked_child == this) {
+            emit surface_clicked();
+        }
+        event->accept();
+        return;
     }
 
     QWidget::mousePressEvent(event);
+}
+
+void PreviewSurfaceWidget::keyPressEvent(QKeyEvent *event) {
+    if (controls_enabled_ && event != nullptr) {
+        if (event->key() == Qt::Key_Left) {
+            emit frame_step_requested(-1);
+            event->accept();
+            return;
+        }
+
+        if (event->key() == Qt::Key_Right) {
+            emit frame_step_requested(1);
+            event->accept();
+            return;
+        }
+    }
+
+    QWidget::keyPressEvent(event);
 }
 
 void PreviewSurfaceWidget::enterEvent(QEnterEvent *event) {
@@ -267,7 +290,13 @@ void PreviewSurfaceWidget::layout_overlay_controls() {
     const int top_right_y = preview_rect.top() + kOverlayMargin;
     top_right_overlay_container_->setGeometry(top_right_x, top_right_y, top_right_size.width(), top_right_size.height());
 
-    const int overlay_width = std::max(0, preview_rect.width() - (kOverlayMargin * 2));
+    const int available_width = std::max(0, preview_rect.width() - (kOverlayMargin * 2));
+    const int preferred_width = std::clamp(
+        static_cast<int>(std::lround(static_cast<double>(preview_rect.width()) * 0.72)),
+        300,
+        560
+    );
+    const int overlay_width = std::min(available_width, preferred_width);
     bottom_overlay_container_->setFixedWidth(overlay_width);
     bottom_overlay_container_->adjustSize();
     const QSize bottom_overlay_size = bottom_overlay_container_->sizeHint();
