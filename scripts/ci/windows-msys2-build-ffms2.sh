@@ -45,7 +45,10 @@ export PATH="${ffmpeg_prefix}/bin:/ucrt64/bin:${PATH}"
 export PKG_CONFIG_PATH="${ffmpeg_pcdir}:/ucrt64/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 pushd "${ffms2_source_dir}" >/dev/null
-./autogen.sh
+# Keep FFMS2 in out-of-source build mode. Upstream autogen.sh runs configure
+# unless NOCONFIGURE is set, which would dirty the source tree and break the
+# separate build directory below.
+NOCONFIGURE=1 ./autogen.sh
 popd >/dev/null
 
 pushd "${ffms2_build_dir}" >/dev/null
