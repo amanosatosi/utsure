@@ -125,16 +125,6 @@ qint64 bytes_for_duration_or_default(const QAudioFormat &audio_format, const qin
     return (static_cast<qint64>(bytes_per_frame) * static_cast<qint64>(sample_rate) * duration_us) / 1000000;
 }
 
-qint64 duration_for_bytes_or_default(const QAudioFormat &audio_format, const qint64 byte_count) {
-    const int bytes_per_frame = audio_format.bytesPerFrame();
-    const int sample_rate = audio_format.sampleRate();
-    if (bytes_per_frame <= 0 || sample_rate <= 0 || byte_count <= 0) {
-        return 0;
-    }
-
-    return (byte_count * 1000000) / (static_cast<qint64>(bytes_per_frame) * static_cast<qint64>(sample_rate));
-}
-
 }  // namespace
 
 PreviewAudioController::PreviewAudioController(QObject *parent) : QObject(parent) {
@@ -231,17 +221,11 @@ qint64 PreviewAudioController::current_playback_time_us() const noexcept {
         return playback_anchor_time_us_;
     }
 
+    // QAudioSink::processedUSecs() already reports the amount of audio the sink
+    // has processed since start(). Subtracting bytesFree()-derived queue time
+    // makes the preview video chase an earlier clock and visibly lag audio.
     const qint64 processed_audio_us = std::max<qint64>(audio_sink_->processedUSecs(), 0);
-    const qint64 sink_buffer_bytes = std::max<qint64>(static_cast<qint64>(audio_sink_->bufferSize()), 0);
-    const qint64 sink_bytes_free = std::clamp<qint64>(
-        static_cast<qint64>(audio_sink_->bytesFree()),
-        0,
-        sink_buffer_bytes
-    );
-    const qint64 queued_sink_bytes = std::max<qint64>(sink_buffer_bytes - sink_bytes_free, 0);
-    const qint64 queued_sink_duration_us = duration_for_bytes_or_default(audio_format_, queued_sink_bytes);
-    const qint64 audible_audio_us = std::max<qint64>(processed_audio_us - queued_sink_duration_us, 0);
-    return playback_anchor_time_us_ + audible_audio_us;
+    return playback_anchor_time_us_ + processed_audio_us;
 }
 
 std::optional<PreviewAudioChunkRequest> PreviewAudioController::build_chunk_request(const bool reset_session) const {
