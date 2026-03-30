@@ -1229,10 +1229,14 @@ QLabel#PreviewTimeBadge {
     preview_corner_widget->setObjectName("PreviewTabCorner");
     auto *preview_corner_layout = new QHBoxLayout(preview_corner_widget);
     preview_corner_layout->setContentsMargins(0, 0, 0, 0);
-    preview_corner_layout->setSpacing(0);
+    preview_corner_layout->setSpacing(8);
+    preview_time_badge_ = new QLabel("00:00:00.000", preview_corner_widget);
+    preview_time_badge_->setObjectName("PreviewTimeBadge");
+    current_time_value_ = preview_time_badge_;
     preview_enabled_check_ = new QCheckBox("Preview", preview_corner_widget);
     preview_enabled_check_->setCursor(Qt::PointingHandCursor);
     preview_corner_layout->addStretch(1);
+    preview_corner_layout->addWidget(preview_time_badge_);
     preview_corner_layout->addWidget(preview_enabled_check_);
     right_tabs->setCornerWidget(preview_corner_widget, Qt::TopRightCorner);
 
@@ -1250,13 +1254,6 @@ QLabel#PreviewTimeBadge {
     preview_surface_layout->setSpacing(0);
     preview_surface_widget_ = new PreviewSurfaceWidget(preview_surface);
     preview_surface_layout->addWidget(preview_surface_widget_, 1);
-
-    preview_time_badge_ = new QLabel("00:00:00.000", preview_surface_widget_);
-    preview_time_badge_->setObjectName("PreviewTimeBadge");
-    current_time_value_ = preview_time_badge_;
-    if (auto *top_right_overlay = preview_surface_widget_->top_right_overlay_layout()) {
-        top_right_overlay->addWidget(preview_time_badge_);
-    }
 
     trim_in_value_ = new QLabel("IN=00:00:00.000", preview_surface_widget_);
     trim_in_value_->setObjectName("PreviewTrimBadge");
@@ -1363,6 +1360,12 @@ QLabel#PreviewTimeBadge {
     task_log_layout->addWidget(task_log_summary_label_);
     task_log_layout->addWidget(task_log_view_, 1);
     right_tabs->addTab(task_log_tab, "Task Log");
+    connect(right_tabs, &QTabWidget::currentChanged, this, [this](const int index) {
+        if (preview_time_badge_ != nullptr) {
+            preview_time_badge_->setVisible(index == 0);
+        }
+    });
+    preview_time_badge_->setVisible(right_tabs->currentIndex() == 0);
 
     content_splitter->addWidget(editor_tabs_);
     content_splitter->addWidget(right_tabs);
