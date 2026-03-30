@@ -99,7 +99,7 @@ void PreviewSurfaceWidget::paintEvent(QPaintEvent *event) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    painter.fillRect(rect(), QColor("#111111"));
+    painter.fillRect(rect(), QColor("#050508"));
 
     const QRect target_rect = content_rect();
     if (!frame_image_.isNull()) {
@@ -115,7 +115,7 @@ void PreviewSurfaceWidget::paintEvent(QPaintEvent *event) {
         return;
     }
 
-    painter.setPen(QColor("#eeeeee"));
+    painter.setPen(QColor("#f4f4f8"));
     QFont headline_font = painter.font();
     headline_font.setPointSize(16);
     headline_font.setBold(true);
@@ -128,7 +128,7 @@ void PreviewSurfaceWidget::paintEvent(QPaintEvent *event) {
     painter.drawText(headline_rect, Qt::AlignCenter | Qt::TextWordWrap, placeholder_headline_);
 
     if (!placeholder_message_.trimmed().isEmpty()) {
-        painter.setPen(QColor("#bbbbbb"));
+        painter.setPen(QColor("#8b8b99"));
         QFont message_font = painter.font();
         message_font.setPointSize(11);
         message_font.setBold(false);

@@ -636,6 +636,7 @@ Current slice status:
   * Completed: hardened preview-audio lifecycle resets so each preview run recreates a fresh `QAudioSink` pull path, discards any queued sink buffers with `reset()`, and refuses to reuse stale stopped-state clocks between pause/seek/selection changes.
   * Completed: removed the standalone branding/header row and always-on-top toggle, then reshaped the top bar into left controls, a centered brand mark, and right-side queue controls while rebalancing the queue/editor/preview spacing so the preview surface gets a larger default footprint closer to the Konayuki-inspired reference.
   * Completed: removed the output-strip helper note beneath `Same as input` so the queue/output stack gives a little more height back to the editor and preview area.
+  * Completed: restyled the Qt shell toward the `shin.html` dark-mode reference while keeping the current widget structure, shifting the chrome, fields, tabs, preview, and icons to a black / gold / violet palette.
   * In progress: swap preview video/audio/seek sessions to an FFMS2-backed indexed adapter behind the existing preview session seam, keep Preview opt-in and limited to the selected job's main source, and preserve subtitle overlay reuse through the shared libassmod-based compositor path.
 
 Likely files/modules:
