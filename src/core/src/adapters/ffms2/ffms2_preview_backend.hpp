@@ -31,6 +31,10 @@ private:
 
     std::unique_ptr<Impl> impl_{};
 
+    friend VideoPreviewBackendCreateResult create_video_preview_backend(
+        const std::filesystem::path &input_path,
+        const DecodeNormalizationPolicy &normalization_policy
+    ) noexcept;
     friend struct VideoPreviewBackendCreateResult;
 };
 
@@ -59,6 +63,11 @@ private:
 
     std::unique_ptr<Impl> impl_{};
 
+    friend AudioPreviewBackendCreateResult create_audio_preview_backend(
+        const std::filesystem::path &input_path,
+        const AudioPreviewOutputConfig &output_config,
+        const DecodeNormalizationPolicy &normalization_policy
+    ) noexcept;
     friend struct AudioPreviewBackendCreateResult;
 };
 
