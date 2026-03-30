@@ -8,6 +8,20 @@
 
 namespace utsure::core::media::ffms2_preview {
 
+struct VideoPreviewBackendCreateResult;
+struct AudioPreviewBackendCreateResult;
+
+[[nodiscard]] VideoPreviewBackendCreateResult create_video_preview_backend(
+    const std::filesystem::path &input_path,
+    const DecodeNormalizationPolicy &normalization_policy
+) noexcept;
+
+[[nodiscard]] AudioPreviewBackendCreateResult create_audio_preview_backend(
+    const std::filesystem::path &input_path,
+    const AudioPreviewOutputConfig &output_config,
+    const DecodeNormalizationPolicy &normalization_policy
+) noexcept;
+
 class VideoPreviewBackend final {
 public:
     struct Impl;
@@ -88,17 +102,6 @@ struct AudioPreviewBackendCreateResult final {
         return backend != nullptr && !error.has_value();
     }
 };
-
-[[nodiscard]] VideoPreviewBackendCreateResult create_video_preview_backend(
-    const std::filesystem::path &input_path,
-    const DecodeNormalizationPolicy &normalization_policy
-) noexcept;
-
-[[nodiscard]] AudioPreviewBackendCreateResult create_audio_preview_backend(
-    const std::filesystem::path &input_path,
-    const AudioPreviewOutputConfig &output_config,
-    const DecodeNormalizationPolicy &normalization_policy
-) noexcept;
 
 [[nodiscard]] std::filesystem::path preview_index_path_for_source(const std::filesystem::path &input_path);
 
