@@ -56,6 +56,10 @@ pushd "${ffms2_source_dir}" >/dev/null
 # ignores the provided option value, so patch configure.ac before autoreconf so
 # --enable-avisynth=no actually disables the plugin.
 sed -i 's/\[enable_avisynth=yes\],/[enable_avisynth=$enableval],/' configure.ac
+# We only need the FFMS2 library, headers, and pkg-config metadata for preview
+# integration. Skip the optional ffmsindex utility, which fails to link on the
+# Windows CI image and is not used by this repository.
+sed -i 's/^bin_PROGRAMS = src\\/index\\/ffmsindex$/bin_PROGRAMS =/' Makefile.am
 mkdir -p src/config
 echo "Running autoreconf..."
 autoreconf -ivf
