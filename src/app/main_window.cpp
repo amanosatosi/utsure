@@ -13,6 +13,7 @@
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCursor>
 #include <QDir>
 #include <QDebug>
 #include <QEvent>
@@ -483,6 +484,14 @@ QString status_prefix_for_session(const QString &job_name, const QString &line) 
     return QString("[%1] %2").arg(job_name, line);
 }
 
+bool widget_contains_global_pos(const QWidget *widget, const QPoint &global_pos) {
+    if (widget == nullptr || !widget->isVisible()) {
+        return false;
+    }
+
+    return widget->rect().contains(widget->mapFromGlobal(global_pos));
+}
+
 }  // namespace
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
@@ -523,9 +532,8 @@ QFrame#PreviewSurface {
     border-radius: 6px;
 }
 QFrame#PreviewTransportBar {
-    background: #14141a;
-    border: 1px solid #2a2a35;
-    border-top: 1px solid #4c4120;
+    background: rgba(20, 20, 26, 232);
+    border: 1px solid #4c4120;
     border-radius: 6px;
 }
 QWidget#PreviewTabCorner {
@@ -1255,7 +1263,7 @@ QLabel#PreviewTimeBadge {
     trim_out_value_ = new QLabel("OUT=00:00:00.000", preview_surface_widget_);
     trim_out_value_->setObjectName("PreviewTrimBadge");
 
-    preview_controls_panel_ = new QFrame(preview_tab);
+    preview_controls_panel_ = new QFrame(preview_surface_widget_);
     preview_controls_panel_->setObjectName("PreviewTransportBar");
     preview_controls_panel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto *preview_controls_layout = new QVBoxLayout(preview_controls_panel_);
@@ -1334,9 +1342,9 @@ QLabel#PreviewTimeBadge {
     timeline_controls->addWidget(trim_out_value_);
     preview_controls_layout->addWidget(timeline_controls_container);
     preview_controls_panel_->setFixedHeight(74);
+    preview_controls_panel_->hide();
 
     preview_tab_layout->addWidget(preview_surface, 1);
-    preview_tab_layout->addWidget(preview_controls_panel_);
 
     preview_surface_widget_->installEventFilter(this);
     preview_controls_panel_->installEventFilter(this);
@@ -1497,6 +1505,8 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
         case QEvent::Enter:
         case QEvent::MouseMove:
         case QEvent::Show:
+        case QEvent::Resize:
+            layout_preview_controls_overlay();
             refresh_preview_footer_visibility();
             break;
         case QEvent::Leave:
@@ -2151,7 +2161,26 @@ void MainWindow::sync_preview_surface_state() {
         preview_stop_button_->setEnabled(controls_enabled);
     }
 
+    layout_preview_controls_overlay();
     refresh_preview_footer_visibility();
+}
+
+void MainWindow::layout_preview_controls_overlay() {
+    if (preview_controls_panel_ == nullptr || preview_surface_widget_ == nullptr) {
+        return;
+    }
+
+    constexpr int kOverlayMargin = 10;
+    const QRect host_rect = preview_surface_widget_->rect();
+    const int panel_height = preview_controls_panel_->height();
+    const int panel_width = std::max(220, host_rect.width() - (kOverlayMargin * 2));
+    preview_controls_panel_->setGeometry(
+        kOverlayMargin,
+        std::max(kOverlayMargin, host_rect.height() - panel_height - kOverlayMargin),
+        panel_width,
+        panel_height
+    );
+    preview_controls_panel_->raise();
 }
 
 void MainWindow::refresh_preview_footer_visibility() {
@@ -2162,8 +2191,19 @@ void MainWindow::refresh_preview_footer_visibility() {
     const bool controls_enabled = preview_enabled_check_->isChecked() &&
         is_valid_job_index(selected_job_index_) &&
         jobs_[static_cast<std::size_t>(selected_job_index_)].source_inspection_error.trimmed().isEmpty();
-    preview_controls_panel_->setVisible(true);
+
+    bool hover_active = false;
+    if (controls_enabled) {
+        const QPoint cursor_pos = QCursor::pos();
+        hover_active = widget_contains_global_pos(preview_surface_widget_, cursor_pos) ||
+            widget_contains_global_pos(preview_controls_panel_, cursor_pos);
+    }
+
     preview_controls_panel_->setEnabled(controls_enabled);
+    preview_controls_panel_->setVisible(controls_enabled && hover_active);
+    if (controls_enabled && hover_active) {
+        layout_preview_controls_overlay();
+    }
 }
 
 void MainWindow::handle_preview_loading(const quint64 request_token, const qint64 requested_time_us) {

@@ -144,6 +144,7 @@ private:
     void pause_preview_playback();
     void stop_preview_playback();
     void sync_preview_surface_state();
+    void layout_preview_controls_overlay();
     void refresh_preview_footer_visibility();
     void request_preview_frame_for_time(qint64 requested_time_us);
     void handle_preview_loading(quint64 request_token, qint64 requested_time_us);

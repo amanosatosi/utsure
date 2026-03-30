@@ -637,7 +637,7 @@ Current slice status:
   * Completed: removed the standalone branding/header row and always-on-top toggle, then reshaped the top bar into left controls, a centered brand mark, and right-side queue controls while rebalancing the queue/editor/preview spacing so the preview surface gets a larger default footprint closer to the Konayuki-inspired reference.
   * Completed: removed the output-strip helper note beneath `Same as input` so the queue/output stack gives a little more height back to the editor and preview area.
   * Completed: restyled the Qt shell toward the `shin.html` dark-mode reference while keeping the current widget structure, shifting the chrome, fields, tabs, preview, and icons to a black / gold / violet palette.
-  * Completed: refined that dark-mode pass by restoring a gold native top bar, keeping the preview footer at a stable height so hover controls do not resize the video, unifying the preview/queue stop button treatment, darkening the timeline track, and adding explicit combo-box and spin-box arrow affordances.
+  * Completed: refined that dark-mode pass by restoring a gold native top bar, moving the preview controls back to a hover-only overlay inside the preview surface so they do not resize the video, unifying the preview/queue stop button treatment, darkening the timeline track, and adding explicit combo-box and spin-box arrow affordances.
   * In progress: swap preview video/audio/seek sessions to an FFMS2-backed indexed adapter behind the existing preview session seam, keep Preview opt-in and limited to the selected job's main source, and preserve subtitle overlay reuse through the shared libassmod-based compositor path.
 
 Likely files/modules:
