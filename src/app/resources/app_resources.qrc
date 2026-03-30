@@ -14,5 +14,7 @@
     <file alias="set-out.svg">icons/set-out.svg</file>
     <file alias="jump-in.svg">icons/jump-in.svg</file>
     <file alias="jump-out.svg">icons/jump-out.svg</file>
+    <file alias="chevron-up.svg">icons/chevron-up.svg</file>
+    <file alias="chevron-down.svg">icons/chevron-down.svg</file>
   </qresource>
 </RCC>

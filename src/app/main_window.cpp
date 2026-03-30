@@ -13,7 +13,6 @@
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QCursor>
 #include <QDir>
 #include <QDebug>
 #include <QEvent>
@@ -404,9 +403,9 @@ void apply_native_caption_accent(QWidget *window) {
         return;
     }
 
-    const COLORREF caption_color = RGB(20, 20, 26);
-    const COLORREF text_color = RGB(226, 226, 228);
-    const COLORREF border_color = RGB(255, 206, 46);
+    const COLORREF caption_color = RGB(255, 206, 46);
+    const COLORREF text_color = RGB(17, 17, 17);
+    const COLORREF border_color = RGB(204, 165, 36);
 
     DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &caption_color, sizeof(caption_color));
     DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, &text_color, sizeof(text_color));
@@ -482,14 +481,6 @@ QIcon make_busy_icon(const int phase) {
 
 QString status_prefix_for_session(const QString &job_name, const QString &line) {
     return QString("[%1] %2").arg(job_name, line);
-}
-
-bool widget_contains_global_pos(const QWidget *widget, const QPoint &global_pos) {
-    if (widget == nullptr || !widget->isVisible()) {
-        return false;
-    }
-
-    return widget->rect().contains(widget->mapFromGlobal(global_pos));
 }
 
 }  // namespace
@@ -587,6 +578,11 @@ QPushButton#TimelineButton:pressed,
 QPushButton:pressed {
     background: #31313c;
 }
+QToolButton[toolbarButton="true"]:checked,
+QPushButton#TimelineButton:checked {
+    background: #2b2234;
+    border: 1px solid #5c3e7b;
+}
 QToolButton[toolbarButton="true"]:disabled,
 QPushButton:disabled,
 QLineEdit:disabled,
@@ -622,21 +618,6 @@ QPushButton#TimelineButton {
     min-height: 24px;
     padding: 0 7px;
 }
-QPushButton#TimelinePrimaryButton {
-    background: #b241ff;
-    border: 1px solid #9222de;
-    border-radius: 4px;
-    color: #ffce2e;
-    min-height: 24px;
-    padding: 0 7px;
-}
-QPushButton#TimelinePrimaryButton:hover {
-    background: #c15cff;
-    border: 1px solid #a636f0;
-}
-QPushButton#TimelinePrimaryButton:pressed {
-    background: #9430d8;
-}
 QLineEdit,
 QComboBox,
 QSpinBox,
@@ -654,6 +635,7 @@ QLineEdit,
 QComboBox,
 QSpinBox {
     background: #0b0b0e;
+    padding-right: 28px;
 }
 QLineEdit:focus,
 QComboBox:focus,
@@ -662,8 +644,48 @@ QPlainTextEdit:focus {
     border: 1px solid #b241ff;
 }
 QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 22px;
     border: none;
-    width: 20px;
+    border-left: 1px solid #2a2a35;
+    background: #1a1a22;
+    border-top-right-radius: 4px;
+    border-bottom-right-radius: 4px;
+}
+QComboBox::down-arrow {
+    image: url(:/icons/chevron-down.svg);
+    width: 10px;
+    height: 10px;
+}
+QComboBox::down-arrow:on {
+    top: 1px;
+}
+QSpinBox::up-button,
+QSpinBox::down-button {
+    subcontrol-origin: border;
+    width: 18px;
+    background: #1a1a22;
+    border-left: 1px solid #2a2a35;
+}
+QSpinBox::up-button {
+    subcontrol-position: top right;
+    border-top-right-radius: 4px;
+    border-bottom: 1px solid #2a2a35;
+}
+QSpinBox::down-button {
+    subcontrol-position: bottom right;
+    border-bottom-right-radius: 4px;
+}
+QSpinBox::up-arrow {
+    image: url(:/icons/chevron-up.svg);
+    width: 8px;
+    height: 8px;
+}
+QSpinBox::down-arrow {
+    image: url(:/icons/chevron-down.svg);
+    width: 8px;
+    height: 8px;
 }
 QComboBox QAbstractItemView {
     background: #16161d;
@@ -782,9 +804,9 @@ QLabel#PreviewTimeBadge {
     font-family: Consolas, "Courier New", monospace;
 }
 QLabel#PreviewTrimBadge {
-    background: #1e1e26;
-    border: 1px solid #3a3a48;
-    color: #e2e2e4;
+    background: #1a1a22;
+    border: 1px solid #5d4b15;
+    color: #ffce2e;
     font-weight: 700;
 }
 QLabel#PreviewTimeBadge {
@@ -1236,7 +1258,6 @@ QLabel#PreviewTimeBadge {
     preview_controls_panel_ = new QFrame(preview_tab);
     preview_controls_panel_->setObjectName("PreviewTransportBar");
     preview_controls_panel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    preview_controls_panel_->setVisible(false);
     auto *preview_controls_layout = new QVBoxLayout(preview_controls_panel_);
     preview_controls_layout->setContentsMargins(8, 6, 8, 6);
     preview_controls_layout->setSpacing(6);
@@ -1270,12 +1291,14 @@ QLabel#PreviewTimeBadge {
     frame_back_button_->setFocusPolicy(Qt::NoFocus);
     frame_back_button_->setToolTip("Previous frame");
     apply_icon_or_text(frame_back_button_, ":/icons/frame-back.svg", "<", QSize(14, 14), 30, 24, false);
+    frame_back_button_->hide();
     frame_forward_button_ = new QPushButton(timeline_controls_container);
     frame_forward_button_->setObjectName("TimelineButton");
     frame_forward_button_->setCursor(Qt::PointingHandCursor);
     frame_forward_button_->setFocusPolicy(Qt::NoFocus);
     frame_forward_button_->setToolTip("Next frame");
     apply_icon_or_text(frame_forward_button_, ":/icons/frame-forward.svg", ">", QSize(14, 14), 30, 24, false);
+    frame_forward_button_->hide();
     set_in_button_ = new QPushButton(timeline_controls_container);
     set_in_button_->setObjectName("TimelineButton");
     set_in_button_->setCursor(Qt::PointingHandCursor);
@@ -1289,30 +1312,28 @@ QLabel#PreviewTimeBadge {
     set_out_button_->setToolTip("Set trim out to the current preview time");
     apply_icon_or_text(set_out_button_, ":/icons/set-out.svg", "Set OUT", QSize(15, 15), 34, 24, true);
     jump_in_button_ = new QPushButton(timeline_controls_container);
-    jump_in_button_->setObjectName("TimelinePrimaryButton");
+    jump_in_button_->setObjectName("TimelineButton");
     jump_in_button_->setCursor(Qt::PointingHandCursor);
     jump_in_button_->setFocusPolicy(Qt::NoFocus);
     jump_in_button_->setToolTip("Jump preview to trim in");
     apply_icon_or_text(jump_in_button_, ":/icons/jump-in.svg", "To IN", QSize(15, 15), 36, 24, true);
     jump_out_button_ = new QPushButton(timeline_controls_container);
-    jump_out_button_->setObjectName("TimelinePrimaryButton");
+    jump_out_button_->setObjectName("TimelineButton");
     jump_out_button_->setCursor(Qt::PointingHandCursor);
     jump_out_button_->setFocusPolicy(Qt::NoFocus);
     jump_out_button_->setToolTip("Jump preview to trim out");
     apply_icon_or_text(jump_out_button_, ":/icons/jump-out.svg", "To OUT", QSize(15, 15), 36, 24, true);
     timeline_controls->addWidget(preview_play_pause_button_);
     timeline_controls->addWidget(preview_stop_button_);
-    timeline_controls->addSpacing(4);
-    timeline_controls->addWidget(frame_back_button_);
-    timeline_controls->addWidget(frame_forward_button_);
+    timeline_controls->addWidget(jump_in_button_);
     timeline_controls->addWidget(set_in_button_);
     timeline_controls->addWidget(set_out_button_);
-    timeline_controls->addWidget(jump_in_button_);
     timeline_controls->addWidget(jump_out_button_);
     timeline_controls->addStretch(1);
     timeline_controls->addWidget(trim_in_value_);
     timeline_controls->addWidget(trim_out_value_);
     preview_controls_layout->addWidget(timeline_controls_container);
+    preview_controls_panel_->setFixedHeight(74);
 
     preview_tab_layout->addWidget(preview_surface, 1);
     preview_tab_layout->addWidget(preview_controls_panel_);
@@ -2141,15 +2162,8 @@ void MainWindow::refresh_preview_footer_visibility() {
     const bool controls_enabled = preview_enabled_check_->isChecked() &&
         is_valid_job_index(selected_job_index_) &&
         jobs_[static_cast<std::size_t>(selected_job_index_)].source_inspection_error.trimmed().isEmpty();
-
-    bool hover_active = false;
-    if (controls_enabled) {
-        const QPoint cursor_pos = QCursor::pos();
-        hover_active = widget_contains_global_pos(preview_surface_widget_, cursor_pos) ||
-            widget_contains_global_pos(preview_controls_panel_, cursor_pos);
-    }
-
-    preview_controls_panel_->setVisible(controls_enabled && hover_active);
+    preview_controls_panel_->setVisible(true);
+    preview_controls_panel_->setEnabled(controls_enabled);
 }
 
 void MainWindow::handle_preview_loading(const quint64 request_token, const qint64 requested_time_us) {

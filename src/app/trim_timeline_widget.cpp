@@ -82,13 +82,13 @@ void TrimTimelineWidget::paintEvent(QPaintEvent *event) {
     painter.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF rect = track_rect();
-    painter.setPen(QPen(QColor("#cfcfcf"), 1.0));
-    painter.setBrush(QColor("#ffffff"));
+    painter.setPen(QPen(QColor("#2a2a35"), 1.0));
+    painter.setBrush(QColor("#0d0d12"));
     painter.drawRoundedRect(rect, 6.0, 6.0);
 
     painter.save();
     painter.setClipRect(rect);
-    painter.setPen(QPen(QColor(0, 0, 0, 20), 1.0));
+    painter.setPen(QPen(QColor(255, 255, 255, 18), 1.0));
     for (qreal x = rect.left(); x < rect.right(); x += kTickSpacing) {
         painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()));
     }
@@ -100,21 +100,22 @@ void TrimTimelineWidget::paintEvent(QPaintEvent *event) {
 
     const QRectF range_rect(in_x, rect.top(), std::max<qreal>(out_x - in_x, 0.0), rect.height());
     painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(255, 62, 165, 30));
+    painter.setBrush(QColor(255, 206, 46, 32));
     painter.drawRect(range_rect);
 
-    painter.setBrush(QColor("#ff3ea5"));
+    painter.setBrush(QColor("#ffce2e"));
     painter.drawRect(QRectF(in_x - (kHandleWidth / 2.0), rect.top(), kHandleWidth, rect.height()));
-    painter.setBrush(QColor("#ff3ea5"));
+    painter.setBrush(QColor("#ffce2e"));
     painter.drawRect(QRectF(out_x - (kHandleWidth / 2.0), rect.top(), kHandleWidth, rect.height()));
 
-    painter.setBrush(QColor("#111111"));
+    painter.setBrush(QColor("#e2e2e4"));
     painter.drawRect(QRectF(current_x - 1.0, rect.top(), 2.0, rect.height()));
 
     QPolygonF head{};
     head << QPointF(current_x, rect.top() - 5.0)
          << QPointF(current_x - 6.0, rect.top())
          << QPointF(current_x + 6.0, rect.top());
+    painter.setBrush(QColor("#ffce2e"));
     painter.drawPolygon(head);
 }
 
