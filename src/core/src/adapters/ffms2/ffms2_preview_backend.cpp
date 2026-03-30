@@ -1,6 +1,6 @@
 #include "ffms2_preview_backend.hpp"
 
-#include "../media/ffmpeg_media_support.hpp"
+#include "../../media/ffmpeg_media_support.hpp"
 
 extern "C" {
 #include <ffms.h>
