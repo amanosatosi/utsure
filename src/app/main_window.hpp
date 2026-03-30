@@ -14,6 +14,7 @@
 #include <vector>
 
 class EncodeJobRunnerController;
+class QEvent;
 class QLabel;
 class QCheckBox;
 class QComboBox;
@@ -89,6 +90,7 @@ public:
     };
 
 private:
+    bool eventFilter(QObject *watched, QEvent *event) override;
     [[nodiscard]] std::optional<utsure::core::job::EncodeJob> build_job_from_entry(
         int job_index,
         QString &error_message
@@ -143,6 +145,7 @@ private:
     void pause_preview_playback();
     void stop_preview_playback();
     void sync_preview_surface_state();
+    void refresh_preview_footer_visibility();
     void request_preview_frame_for_time(qint64 requested_time_us);
     void handle_preview_loading(quint64 request_token, qint64 requested_time_us);
     void handle_preview_ready(

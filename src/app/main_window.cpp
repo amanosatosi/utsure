@@ -13,8 +13,10 @@
 #include <QAbstractItemView>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCursor>
 #include <QDir>
 #include <QDebug>
+#include <QEvent>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -480,6 +482,14 @@ QIcon make_busy_icon(const int phase) {
 
 QString status_prefix_for_session(const QString &job_name, const QString &line) {
     return QString("[%1] %2").arg(job_name, line);
+}
+
+bool widget_contains_global_pos(const QWidget *widget, const QPoint &global_pos) {
+    if (widget == nullptr || !widget->isVisible()) {
+        return false;
+    }
+
+    return widget->rect().contains(widget->mapFromGlobal(global_pos));
 }
 
 }  // namespace
@@ -1111,8 +1121,8 @@ QLabel#PreviewTimeBadge {
 
     auto *preview_tab = new QWidget(right_tabs);
     auto *preview_tab_layout = new QVBoxLayout(preview_tab);
-    preview_tab_layout->setContentsMargins(8, 8, 8, 8);
-    preview_tab_layout->setSpacing(8);
+    preview_tab_layout->setContentsMargins(6, 6, 6, 6);
+    preview_tab_layout->setSpacing(6);
 
     auto *preview_surface = new QFrame(preview_tab);
     preview_surface->setObjectName("PreviewSurface");
@@ -1219,6 +1229,9 @@ QLabel#PreviewTimeBadge {
 
     preview_tab_layout->addWidget(preview_surface, 1);
     preview_tab_layout->addWidget(preview_controls_panel_);
+
+    preview_surface_widget_->installEventFilter(this);
+    preview_controls_panel_->installEventFilter(this);
     right_tabs->addTab(preview_tab, "Preview");
 
     auto *task_log_tab = new QWidget(right_tabs);
@@ -1250,7 +1263,7 @@ QLabel#PreviewTimeBadge {
     setCentralWidget(central_widget);
 
     QTimer::singleShot(0, this, [this, body_splitter]() {
-        body_splitter->setSizes(QList<int>{210, 320});
+        body_splitter->setSizes(QList<int>{190, 340});
         apply_native_caption_accent(this);
     });
 
@@ -1369,6 +1382,26 @@ QString MainWindow::window_structure_summary() const {
         "- Left tabs: Main, Encode, Special, and global Logs\n"
         "- Right tabs: transport-controlled Preview with trim timeline plus selected-task log"
     );
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    if ((watched == preview_surface_widget_ || watched == preview_controls_panel_) && event != nullptr) {
+        switch (event->type()) {
+        case QEvent::Enter:
+        case QEvent::MouseMove:
+        case QEvent::Show:
+            refresh_preview_footer_visibility();
+            break;
+        case QEvent::Leave:
+        case QEvent::Hide:
+            QTimer::singleShot(0, this, [this]() { refresh_preview_footer_visibility(); });
+            break;
+        default:
+            break;
+        }
+    }
+
+    return QMainWindow::eventFilter(watched, event);
 }
 
 std::optional<utsure::core::job::EncodeJob> MainWindow::build_job_from_entry(
@@ -1993,7 +2026,6 @@ void MainWindow::sync_preview_surface_state() {
         return;
     }
 
-    const bool preview_panel_visible = preview_enabled_check_->isChecked() && is_valid_job_index(selected_job_index_);
     const bool controls_enabled = preview_enabled_check_->isChecked() &&
         is_valid_job_index(selected_job_index_) &&
         jobs_[static_cast<std::size_t>(selected_job_index_)].source_inspection_error.trimmed().isEmpty();
@@ -2001,7 +2033,6 @@ void MainWindow::sync_preview_surface_state() {
     preview_surface_widget_->set_playing(preview_playing_);
 
     if (preview_controls_panel_ != nullptr) {
-        preview_controls_panel_->setVisible(preview_panel_visible);
         preview_controls_panel_->setEnabled(controls_enabled);
     }
 
@@ -2023,6 +2054,27 @@ void MainWindow::sync_preview_surface_state() {
     if (preview_stop_button_ != nullptr) {
         preview_stop_button_->setEnabled(controls_enabled);
     }
+
+    refresh_preview_footer_visibility();
+}
+
+void MainWindow::refresh_preview_footer_visibility() {
+    if (preview_controls_panel_ == nullptr || preview_surface_widget_ == nullptr || preview_enabled_check_ == nullptr) {
+        return;
+    }
+
+    const bool controls_enabled = preview_enabled_check_->isChecked() &&
+        is_valid_job_index(selected_job_index_) &&
+        jobs_[static_cast<std::size_t>(selected_job_index_)].source_inspection_error.trimmed().isEmpty();
+
+    bool hover_active = false;
+    if (controls_enabled) {
+        const QPoint cursor_pos = QCursor::pos();
+        hover_active = widget_contains_global_pos(preview_surface_widget_, cursor_pos) ||
+            widget_contains_global_pos(preview_controls_panel_, cursor_pos);
+    }
+
+    preview_controls_panel_->setVisible(controls_enabled && hover_active);
 }
 
 void MainWindow::handle_preview_loading(const quint64 request_token, const qint64 requested_time_us) {

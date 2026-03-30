@@ -80,6 +80,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M17 preview-pane usability slice is limited to keeping preview usable in smaller non-maximized windows by moving trim/time controls into the preview surface as hover overlays, while preserving the existing trim/timeline behavior and Preview-vs-Task-Log tab split.
 - The current M17 preview-pane usability slice now also includes a smaller seek bar, a compact bottom control row with transport buttons on the left, non-playing timeline seek clicks, and left/right arrow frame stepping when the preview surface has focus.
 - The current M17 preview-pane usability slice now prefers a compact dedicated preview footer beneath the surface, instead of a floating overlay, because that tracks the reference workflow more closely and preserves more usable picture area.
+- The current M17 preview-pane usability slice now also hides that dedicated preview footer unless the pointer is over the preview region, so the default state gives more height back to the video surface.
 
 ## Architecture direction
 
