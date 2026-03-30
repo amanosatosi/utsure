@@ -7,10 +7,12 @@
 
 class QEnterEvent;
 class QEvent;
+class QHBoxLayout;
 class QPaintEvent;
 class QMouseEvent;
 class QResizeEvent;
 class QToolButton;
+class QVBoxLayout;
 class QWidget;
 
 class PreviewSurfaceWidget final : public QWidget {
@@ -30,6 +32,9 @@ public:
     [[nodiscard]] QSize minimumSizeHint() const override;
     [[nodiscard]] bool hasHeightForWidth() const override;
     [[nodiscard]] int heightForWidth(int width) const override;
+    [[nodiscard]] QHBoxLayout *top_right_overlay_layout() const noexcept;
+    [[nodiscard]] QHBoxLayout *overlay_header_layout() const noexcept;
+    [[nodiscard]] QVBoxLayout *overlay_content_layout() const noexcept;
 
 signals:
     void surface_clicked();
@@ -52,7 +57,14 @@ private:
     QImage frame_image_{};
     QString placeholder_headline_{"PREVIEW OFFLINE"};
     QString placeholder_message_{};
-    QWidget *controls_container_{nullptr};
+    QWidget *top_right_overlay_container_{nullptr};
+    QHBoxLayout *top_right_overlay_layout_{nullptr};
+    QWidget *bottom_overlay_container_{nullptr};
+    QWidget *overlay_header_container_{nullptr};
+    QWidget *overlay_header_content_container_{nullptr};
+    QHBoxLayout *overlay_header_layout_{nullptr};
+    QWidget *overlay_content_container_{nullptr};
+    QVBoxLayout *overlay_content_layout_{nullptr};
     QToolButton *play_pause_button_{nullptr};
     QToolButton *stop_button_{nullptr};
     bool controls_enabled_{false};

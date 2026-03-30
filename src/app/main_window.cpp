@@ -510,6 +510,15 @@ QFrame#PreviewSurface {
     border: 1px solid #1f1f1f;
     border-radius: 6px;
 }
+QWidget#PreviewBottomOverlay {
+    background: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 rgba(24, 24, 24, 170),
+        stop:1 rgba(8, 8, 8, 225)
+    );
+    border: 1px solid rgba(255, 255, 255, 32);
+    border-radius: 12px;
+}
 QWidget#PreviewTabCorner {
     background: transparent;
 }
@@ -676,12 +685,22 @@ QLabel#PreviewTitleLabel {
 QLabel#PreviewContextLabel {
     color: #bbbbbb;
 }
+QLabel#PreviewTrimBadge,
 QLabel#PreviewTimeBadge {
-    background: rgba(0, 0, 0, 140);
-    color: #ffffff;
     border-radius: 10px;
     padding: 3px 7px;
     font-family: Consolas, "Courier New", monospace;
+}
+QLabel#PreviewTrimBadge {
+    background: rgba(255, 62, 165, 36);
+    border: 1px solid rgba(255, 62, 165, 170);
+    color: #ff6dbd;
+    font-weight: 700;
+}
+QLabel#PreviewTimeBadge {
+    background: rgba(0, 0, 0, 150);
+    color: #ffffff;
+    border: 1px solid rgba(255, 255, 255, 25);
 }
 )");
 
@@ -1114,65 +1133,57 @@ QLabel#PreviewTimeBadge {
     preview_surface->setMinimumHeight(240);
     preview_surface->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *preview_surface_layout = new QVBoxLayout(preview_surface);
-    preview_surface_layout->setContentsMargins(10, 10, 10, 10);
-    preview_surface_layout->setSpacing(4);
+    preview_surface_layout->setContentsMargins(0, 0, 0, 0);
+    preview_surface_layout->setSpacing(0);
     preview_surface_widget_ = new PreviewSurfaceWidget(preview_surface);
-    preview_time_badge_ = new QLabel("00:00:00.000", preview_surface);
-    preview_time_badge_->setObjectName("PreviewTimeBadge");
     preview_surface_layout->addWidget(preview_surface_widget_, 1);
-    auto *preview_badge_row = new QHBoxLayout();
-    preview_badge_row->setContentsMargins(0, 0, 0, 0);
-    preview_badge_row->addStretch(1);
-    preview_badge_row->addWidget(preview_time_badge_);
-    preview_surface_layout->addLayout(preview_badge_row);
 
-    auto *timeline_group = new QGroupBox("Timeline", preview_tab);
-    timeline_group->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    auto *timeline_layout = new QVBoxLayout(timeline_group);
-    timeline_layout->setSpacing(6);
-    auto *timeline_badges = new QHBoxLayout();
-    timeline_badges->setContentsMargins(0, 0, 0, 0);
-    current_time_value_ = new QLabel("t=00:00:00.000", timeline_group);
-    trim_in_value_ = new QLabel("IN=00:00:00.000", timeline_group);
-    trim_out_value_ = new QLabel("OUT=00:00:00.000", timeline_group);
-    for (const auto label : {current_time_value_, trim_in_value_, trim_out_value_}) {
-        label->setStyleSheet(
-            "QLabel { background: #ffffff; border: 1px solid #cfcfcf; border-radius: 10px; padding: 3px 7px; font-family: Consolas, 'Courier New', monospace; }"
-        );
-        timeline_badges->addWidget(label);
+    preview_time_badge_ = new QLabel("00:00:00.000", preview_surface_widget_);
+    preview_time_badge_->setObjectName("PreviewTimeBadge");
+    current_time_value_ = preview_time_badge_;
+    if (auto *top_right_overlay = preview_surface_widget_->top_right_overlay_layout()) {
+        top_right_overlay->addWidget(preview_time_badge_);
     }
-    timeline_badges->addStretch(1);
-    timeline_layout->addLayout(timeline_badges);
 
-    auto *timeline_buttons = new QHBoxLayout();
+    trim_in_value_ = new QLabel("IN=00:00:00.000", preview_surface_widget_);
+    trim_in_value_->setObjectName("PreviewTrimBadge");
+    trim_out_value_ = new QLabel("OUT=00:00:00.000", preview_surface_widget_);
+    trim_out_value_->setObjectName("PreviewTrimBadge");
+    if (auto *overlay_header = preview_surface_widget_->overlay_header_layout()) {
+        overlay_header->addWidget(trim_in_value_);
+        overlay_header->addWidget(trim_out_value_);
+    }
+
+    auto *timeline_buttons_container = new QWidget(preview_surface_widget_);
+    auto *timeline_buttons = new QHBoxLayout(timeline_buttons_container);
     timeline_buttons->setContentsMargins(0, 0, 0, 0);
     timeline_buttons->setSpacing(6);
-    frame_back_button_ = new QPushButton(timeline_group);
+    frame_back_button_ = new QPushButton(timeline_buttons_container);
     frame_back_button_->setObjectName("TimelineButton");
     frame_back_button_->setCursor(Qt::PointingHandCursor);
     frame_back_button_->setToolTip("Previous frame");
     apply_icon_or_text(frame_back_button_, ":/icons/frame-back.svg", "<", QSize(14, 14), 30, 26, false);
-    frame_forward_button_ = new QPushButton(timeline_group);
+    frame_forward_button_ = new QPushButton(timeline_buttons_container);
     frame_forward_button_->setObjectName("TimelineButton");
     frame_forward_button_->setCursor(Qt::PointingHandCursor);
     frame_forward_button_->setToolTip("Next frame");
     apply_icon_or_text(frame_forward_button_, ":/icons/frame-forward.svg", ">", QSize(14, 14), 30, 26, false);
-    set_in_button_ = new QPushButton(timeline_group);
+    set_in_button_ = new QPushButton(timeline_buttons_container);
     set_in_button_->setObjectName("TimelineButton");
     set_in_button_->setCursor(Qt::PointingHandCursor);
     set_in_button_->setToolTip("Set trim in to the current preview time");
     apply_icon_or_text(set_in_button_, ":/icons/set-in.svg", "Set IN", QSize(15, 15), 34, 26, true);
-    set_out_button_ = new QPushButton(timeline_group);
+    set_out_button_ = new QPushButton(timeline_buttons_container);
     set_out_button_->setObjectName("TimelineButton");
     set_out_button_->setCursor(Qt::PointingHandCursor);
     set_out_button_->setToolTip("Set trim out to the current preview time");
     apply_icon_or_text(set_out_button_, ":/icons/set-out.svg", "Set OUT", QSize(15, 15), 34, 26, true);
-    jump_in_button_ = new QPushButton(timeline_group);
+    jump_in_button_ = new QPushButton(timeline_buttons_container);
     jump_in_button_->setObjectName("TimelinePrimaryButton");
     jump_in_button_->setCursor(Qt::PointingHandCursor);
     jump_in_button_->setToolTip("Jump preview to trim in");
     apply_icon_or_text(jump_in_button_, ":/icons/jump-in.svg", "To IN", QSize(15, 15), 36, 26, true);
-    jump_out_button_ = new QPushButton(timeline_group);
+    jump_out_button_ = new QPushButton(timeline_buttons_container);
     jump_out_button_->setObjectName("TimelinePrimaryButton");
     jump_out_button_->setCursor(Qt::PointingHandCursor);
     jump_out_button_->setToolTip("Jump preview to trim out");
@@ -1184,19 +1195,15 @@ QLabel#PreviewTimeBadge {
     timeline_buttons->addWidget(jump_in_button_);
     timeline_buttons->addWidget(jump_out_button_);
     timeline_buttons->addStretch(1);
-    timeline_layout->addLayout(timeline_buttons);
 
-    trim_timeline_widget_ = new TrimTimelineWidget(timeline_group);
+    trim_timeline_widget_ = new TrimTimelineWidget(preview_surface_widget_);
     trim_timeline_widget_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    timeline_layout->addWidget(trim_timeline_widget_);
+    if (auto *overlay_content = preview_surface_widget_->overlay_content_layout()) {
+        overlay_content->addWidget(timeline_buttons_container);
+        overlay_content->addWidget(trim_timeline_widget_);
+    }
 
-    auto *preview_splitter = new QSplitter(Qt::Vertical, preview_tab);
-    preview_splitter->setChildrenCollapsible(false);
-    preview_splitter->addWidget(preview_surface);
-    preview_splitter->addWidget(timeline_group);
-    preview_splitter->setStretchFactor(0, 5);
-    preview_splitter->setStretchFactor(1, 2);
-    preview_tab_layout->addWidget(preview_splitter, 1);
+    preview_tab_layout->addWidget(preview_surface, 1);
     right_tabs->addTab(preview_tab, "Preview");
 
     auto *task_log_tab = new QWidget(right_tabs);
@@ -1227,9 +1234,8 @@ QLabel#PreviewTimeBadge {
     root_layout->addWidget(content_widget, 1);
     setCentralWidget(central_widget);
 
-    QTimer::singleShot(0, this, [this, body_splitter, preview_splitter]() {
+    QTimer::singleShot(0, this, [this, body_splitter]() {
         body_splitter->setSizes(QList<int>{210, 320});
-        preview_splitter->setSizes(QList<int>{280, 120});
         apply_native_caption_accent(this);
     });
 
@@ -2657,7 +2663,7 @@ void MainWindow::refresh_selected_job_preview() {
 
 void MainWindow::refresh_trim_controls() {
     if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
-        current_time_value_->setText("t=00:00:00.000");
+        current_time_value_->setText("00:00:00.000");
         trim_in_value_->setText("IN=00:00:00.000");
         trim_out_value_->setText("OUT=00:00:00.000");
         trim_timeline_widget_->set_duration_us(10000000);
@@ -2667,7 +2673,7 @@ void MainWindow::refresh_trim_controls() {
     }
 
     const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
-    current_time_value_->setText(QString("t=%1").arg(format_time_us(job.current_time_us)));
+    current_time_value_->setText(format_time_us(job.current_time_us));
     trim_in_value_->setText(QString("IN=%1").arg(format_time_us(job.trim_in_us)));
     trim_out_value_->setText(QString("OUT=%1").arg(format_time_us(job.trim_out_us)));
     trim_timeline_widget_->set_duration_us(std::max<qint64>(job.duration_us, 1));

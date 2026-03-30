@@ -12,6 +12,7 @@
 #include <QMouseEvent>
 #include <QResizeEvent>
 #include <QToolButton>
+#include <QVBoxLayout>
 
 namespace {
 
@@ -34,25 +35,54 @@ PreviewSurfaceWidget::PreviewSurfaceWidget(QWidget *parent) : QWidget(parent) {
     size_policy.setHeightForWidth(true);
     setSizePolicy(size_policy);
 
-    controls_container_ = new QWidget(this);
-    controls_container_->setAttribute(Qt::WA_StyledBackground, true);
-    auto *controls_layout = new QHBoxLayout(controls_container_);
-    controls_layout->setContentsMargins(0, 0, 0, 0);
-    controls_layout->setSpacing(kOverlaySpacing);
+    top_right_overlay_container_ = new QWidget(this);
+    auto *top_right_layout = new QHBoxLayout(top_right_overlay_container_);
+    top_right_layout->setContentsMargins(0, 0, 0, 0);
+    top_right_layout->setSpacing(0);
+    top_right_overlay_layout_ = top_right_layout;
 
-    play_pause_button_ = new QToolButton(controls_container_);
+    bottom_overlay_container_ = new QWidget(this);
+    bottom_overlay_container_->setObjectName("PreviewBottomOverlay");
+    bottom_overlay_container_->setAttribute(Qt::WA_StyledBackground, true);
+    auto *bottom_overlay_layout = new QVBoxLayout(bottom_overlay_container_);
+    bottom_overlay_layout->setContentsMargins(12, 10, 12, 10);
+    bottom_overlay_layout->setSpacing(8);
+
+    overlay_header_container_ = new QWidget(bottom_overlay_container_);
+    auto *header_row_layout = new QHBoxLayout(overlay_header_container_);
+    header_row_layout->setContentsMargins(0, 0, 0, 0);
+    header_row_layout->setSpacing(kOverlaySpacing);
+
+    overlay_header_content_container_ = new QWidget(overlay_header_container_);
+    auto *header_content_layout = new QHBoxLayout(overlay_header_content_container_);
+    header_content_layout->setContentsMargins(0, 0, 0, 0);
+    header_content_layout->setSpacing(kOverlaySpacing);
+    overlay_header_layout_ = header_content_layout;
+
+    play_pause_button_ = new QToolButton(overlay_header_container_);
     play_pause_button_->setObjectName("PreviewOverlayButton");
     play_pause_button_->setCursor(Qt::PointingHandCursor);
     play_pause_button_->setFixedSize(kOverlayButtonSize, kOverlayButtonSize);
     play_pause_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    controls_layout->addWidget(play_pause_button_);
 
-    stop_button_ = new QToolButton(controls_container_);
+    stop_button_ = new QToolButton(overlay_header_container_);
     stop_button_->setObjectName("PreviewOverlayButton");
     stop_button_->setCursor(Qt::PointingHandCursor);
     stop_button_->setFixedSize(kOverlayButtonSize, kOverlayButtonSize);
     stop_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    controls_layout->addWidget(stop_button_);
+
+    header_row_layout->addWidget(overlay_header_content_container_, 1);
+    header_row_layout->addWidget(play_pause_button_);
+    header_row_layout->addWidget(stop_button_);
+
+    overlay_content_container_ = new QWidget(bottom_overlay_container_);
+    auto *content_layout = new QVBoxLayout(overlay_content_container_);
+    content_layout->setContentsMargins(0, 0, 0, 0);
+    content_layout->setSpacing(8);
+    overlay_content_layout_ = content_layout;
+
+    bottom_overlay_layout->addWidget(overlay_header_container_);
+    bottom_overlay_layout->addWidget(overlay_content_container_);
 
     connect(play_pause_button_, &QToolButton::clicked, this, &PreviewSurfaceWidget::play_pause_requested);
     connect(stop_button_, &QToolButton::clicked, this, &PreviewSurfaceWidget::stop_requested);
@@ -121,6 +151,18 @@ int PreviewSurfaceWidget::heightForWidth(const int width) const {
     }
 
     return std::max(kMinimumPreviewHeight, static_cast<int>((static_cast<qreal>(width) * 9.0) / 16.0));
+}
+
+QHBoxLayout *PreviewSurfaceWidget::top_right_overlay_layout() const noexcept {
+    return top_right_overlay_layout_;
+}
+
+QHBoxLayout *PreviewSurfaceWidget::overlay_header_layout() const noexcept {
+    return overlay_header_layout_;
+}
+
+QVBoxLayout *PreviewSurfaceWidget::overlay_content_layout() const noexcept {
+    return overlay_content_layout_;
 }
 
 void PreviewSurfaceWidget::paintEvent(QPaintEvent *event) {
@@ -198,31 +240,43 @@ QRect PreviewSurfaceWidget::content_rect() const {
 }
 
 void PreviewSurfaceWidget::refresh_overlay_visibility() {
-    if (controls_container_ == nullptr) {
+    if (top_right_overlay_container_ == nullptr || bottom_overlay_container_ == nullptr) {
         return;
     }
 
     layout_overlay_controls();
-    controls_container_->setVisible(controls_enabled_ && hovered_);
-    controls_container_->raise();
+    top_right_overlay_container_->setVisible(controls_enabled_);
+    bottom_overlay_container_->setVisible(controls_enabled_ && hovered_);
+    top_right_overlay_container_->raise();
+    bottom_overlay_container_->raise();
 }
 
 void PreviewSurfaceWidget::layout_overlay_controls() {
-    if (controls_container_ == nullptr) {
+    if (top_right_overlay_container_ == nullptr || bottom_overlay_container_ == nullptr) {
         return;
     }
 
-    controls_container_->adjustSize();
-    const QSize overlay_size = controls_container_->sizeHint();
-    const int x = std::max(
-        kOverlayMargin,
-        (width() - overlay_size.width()) / 2
+    const QRect preview_rect = content_rect();
+
+    top_right_overlay_container_->adjustSize();
+    const QSize top_right_size = top_right_overlay_container_->sizeHint();
+    const int top_right_x = std::max(
+        preview_rect.left() + kOverlayMargin,
+        preview_rect.right() - top_right_size.width() - kOverlayMargin + 1
     );
-    const int y = std::max(
-        kOverlayMargin,
-        height() - overlay_size.height() - kOverlayMargin
+    const int top_right_y = preview_rect.top() + kOverlayMargin;
+    top_right_overlay_container_->setGeometry(top_right_x, top_right_y, top_right_size.width(), top_right_size.height());
+
+    const int overlay_width = std::max(0, preview_rect.width() - (kOverlayMargin * 2));
+    bottom_overlay_container_->setFixedWidth(overlay_width);
+    bottom_overlay_container_->adjustSize();
+    const QSize bottom_overlay_size = bottom_overlay_container_->sizeHint();
+    const int overlay_x = std::max(preview_rect.left() + kOverlayMargin, (width() - overlay_width) / 2);
+    const int overlay_y = std::max(
+        preview_rect.top() + kOverlayMargin,
+        preview_rect.bottom() - bottom_overlay_size.height() - kOverlayMargin + 1
     );
-    controls_container_->setGeometry(x, y, overlay_size.width(), overlay_size.height());
+    bottom_overlay_container_->setGeometry(overlay_x, overlay_y, overlay_width, bottom_overlay_size.height());
 }
 
 void PreviewSurfaceWidget::refresh_control_icons() {

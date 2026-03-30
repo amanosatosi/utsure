@@ -104,7 +104,7 @@ void TrimTimelineWidget::paintEvent(QPaintEvent *event) {
 
     painter.setBrush(QColor("#ff3ea5"));
     painter.drawRect(QRectF(in_x - (kHandleWidth / 2.0), rect.top(), kHandleWidth, rect.height()));
-    painter.setBrush(QColor("#19b7ff"));
+    painter.setBrush(QColor("#ff3ea5"));
     painter.drawRect(QRectF(out_x - (kHandleWidth / 2.0), rect.top(), kHandleWidth, rect.height()));
 
     painter.setBrush(QColor("#111111"));

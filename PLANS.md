@@ -23,6 +23,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M16 Streaming transcoding pipeline completed.
   * M17 Desktop GUI quality and usability in progress.
   * M17 FFMS2 preview-backend integration implemented; awaiting CI validation.
+  * M17 Preview-pane usability slice in progress: move trim controls into a hover overlay so smaller desktop windows keep the preview usable.
   * M18 Automatic output naming planned.
   * M19 Automatic subtitle selection planned.
   * M20 FontCollector-based subtitle font recovery and fallback planned.
@@ -75,6 +76,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M17 preview-audio hardening slice now also includes rebuilding the Qt audio output path on each preview run so pause/seek/preview-off transitions cannot reuse stale sink or pull-device state.
 - The current M17 preview-backend slice now also includes replacing the custom FFmpeg preview session path with an FFMS2-indexed preview-only backend for selected-job main-source video, audio, and seek behavior while leaving the main encode/transcode pipeline on the existing FFmpeg/core path.
 - The current M17 preview-backend slice now also includes isolated FFMS2 dependency/build wiring and preview-index file reuse rules, but excludes any FFMS2 adoption in final encode behavior.
+- The current M17 preview-pane usability slice is limited to keeping preview usable in smaller non-maximized windows by moving trim/time controls into the preview surface as hover overlays, while preserving the existing trim/timeline behavior and Preview-vs-Task-Log tab split.
 
 ## Architecture direction
 
