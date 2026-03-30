@@ -45,10 +45,12 @@ export PATH="${ffmpeg_prefix}/bin:/ucrt64/bin:${PATH}"
 export PKG_CONFIG_PATH="${ffmpeg_pcdir}:/ucrt64/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 pushd "${ffms2_source_dir}" >/dev/null
-# Keep FFMS2 in out-of-source build mode. Upstream autogen.sh runs configure
-# unless NOCONFIGURE is set, which would dirty the source tree and break the
-# separate build directory below.
-NOCONFIGURE=1 ./autogen.sh
+# Upstream FFMS2 5.0 autogen.sh always runs configure in the source tree.
+# Re-run only the bootstrap steps here so the actual configure step stays in
+# the separate build directory below.
+mkdir -p src/config
+echo "Running autoreconf..."
+autoreconf -ivf
 popd >/dev/null
 
 pushd "${ffms2_build_dir}" >/dev/null
