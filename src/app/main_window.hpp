@@ -122,7 +122,6 @@ private:
 
     void handle_queue_selection_changed();
     void handle_queue_item_changed(QTableWidgetItem *item);
-    void handle_top_window_toggled(bool enabled);
     void handle_same_as_input_toggled(bool enabled);
     void handle_preview_toggled(bool enabled);
 
@@ -214,7 +213,6 @@ private:
     bool preview_requested_subtitle_enabled_{false};
     bool preview_request_in_flight_{false};
 
-    QCheckBox *top_window_check_{nullptr};
     QTableWidget *queue_table_{nullptr};
     QLabel *detail_status_value_{nullptr};
     QLabel *detail_elapsed_value_{nullptr};

@@ -634,6 +634,7 @@ Current slice status:
   * Completed: restored opt-in Preview audio for the selected job's main source through a separate Qt-audio-backed preview path that reuses encoder-core FFmpeg decode/resample helpers, follows seek/pause/preview-off/selection resets, and keeps the existing subtitle-rendered video preview flow intact.
   * Completed: tightened preview-audio timing so the audio device remains the effective master clock by subtracting queued `QAudioSink` buffer latency from Qt's processed-output time and letting preview video follow that corrected audio clock directly during playback.
   * Completed: hardened preview-audio lifecycle resets so each preview run recreates a fresh `QAudioSink` pull path, discards any queued sink buffers with `reset()`, and refuses to reuse stale stopped-state clocks between pause/seek/selection changes.
+  * Completed: compacted the standalone branding/header row into the main toolbar, removed the always-on-top toggle, and rebalanced the queue/editor/preview spacing so the preview surface gets a larger default footprint closer to the Konayuki-inspired reference.
   * In progress: swap preview video/audio/seek sessions to an FFMS2-backed indexed adapter behind the existing preview session seam, keep Preview opt-in and limited to the selected job's main source, and preserve subtitle overlay reuse through the shared libassmod-based compositor path.
 
 Likely files/modules:
