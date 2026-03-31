@@ -788,6 +788,77 @@ Done criteria:
   * The integration preserves the existing `encoder-core` vs desktop-shell separation and does not bury tool-specific policy across unrelated modules.
   * Implemented with a dedicated subtitle session-preparation helper, a small core external-tool runner, explicit encode-path logs for recovered/no-font/tool-unavailable cases, and focused stub-driven core tests plus CI target coverage.
 
+### M21 Add global parallel batch encoding with bounded job counts and pre-reserved output naming
+
+Status: Planned
+
+Scope:
+  * Add parallel batch encoding as a global run-level feature rather than a per-queue setting.
+  * Detect total usable system threads and allow only parallel job counts that divide that total exactly.
+  * Keep parallel controls out of the per-queue `Main | Encode | Special | Logs` area and place them in the top execution toolbar near process priority and start/stop controls.
+  * Use a compact global `Parallel` control with hover summary behavior and a click-open settings window so the main layout and preview space stay unchanged.
+  * Pre-reserve automatic output names for the full batch before execution begins so parallel workers cannot race and choose the same number.
+
+UI behavior:
+  * Add a global `Parallel` control near the priority selector.
+  * Hovering `Parallel` shows a short summary of current parallel state.
+  * Clicking `Parallel` opens a small settings window for configuring the feature.
+  * Do not place parallel controls inside per-queue tabs.
+
+Scheduling rules:
+  * Let `T` be the detected total usable thread count.
+  * A parallel job count `N` is valid only when `T % N == 0`.
+  * Per-job thread count is `T / N`.
+  * Parallel execution remains disabled when `N == 1`, unless the UI still uses `1` as the explicit non-parallel/default selection.
+
+Buffer policy:
+  * Keep the current single-job buffer behavior at `70` frames.
+  * When parallel encoding is enabled, use tiered per-job buffer values instead of trying to divide the original `70` evenly.
+  * Current intended policy:
+    * `1` job: `70`
+    * `2` to `3` jobs: `40`
+    * `4` to `T / 2` jobs: `20`
+    * more than `T / 2` jobs: `10`
+  * This policy should be computed from the selected valid job count and shown clearly in the UI.
+
+Automatic naming interaction:
+  * Automatic output numbering must be batch-safe under parallel execution.
+  * Output names for all queued jobs must be generated and reserved before any worker starts.
+  * Running workers must not lazily determine the next available number at execution time.
+
+Likely files/modules:
+  * `src/core/include/utsure/core/job/`
+  * `src/core/src/job/`
+  * `src/core/src/encode/`
+  * `src/core/src/process/`
+  * `src/app/`
+  * `src/app/widgets/`
+  * `tests/core/`
+  * `tests/app/`
+
+Risks:
+  * Thread-count detection may be straightforward, but the resulting allowed job counts may feel restrictive on some systems.
+  * Parallel state may become confusing if the UI does not clearly separate global scheduling controls from per-queue settings.
+  * Output numbering may collide unless name reservation happens before execution.
+  * Overly aggressive parallel counts may still be technically valid while performing poorly in practice.
+
+Validation:
+  * Verify total usable thread detection on representative systems.
+  * Verify that only exact divisors of total usable threads are offered as valid parallel job counts.
+  * Verify that per-job thread allocation is computed exactly.
+  * Verify that per-job buffer values follow the intended tiered policy.
+  * Verify that hover summary reflects current parallel state accurately.
+  * Verify that the settings window opens from the top-bar control without shrinking preview space.
+  * Verify that automatic output names are reserved before execution and remain unique across the full batch.
+  * Verify that one failing job does not corrupt progress, naming, or reporting for unrelated jobs.
+
+Done criteria:
+  * The app supports global parallel batch encoding with exact-divisor job counts.
+  * Parallel settings are configured from a top-bar control instead of per-queue tabs.
+  * Hover summary and click-open settings window both work cleanly.
+  * Per-job thread allocation and per-job buffer policy are visible and predictable.
+  * Automatic output naming remains collision-safe under parallel execution.
+
 ## Immediate next milestone
 
-No next milestone is scheduled in `PLANS.md` yet.
+
