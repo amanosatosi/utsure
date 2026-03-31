@@ -399,6 +399,24 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/preflight-auto-copy.mp4"
 )
 
+add_executable(utsure_core_output_naming_tests
+    output_naming_tests.cpp
+)
+
+target_link_libraries(utsure_core_output_naming_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_core_output_naming_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_output_naming_tests)
+
+add_test(
+    NAME utsure.core.job.output_naming
+    COMMAND utsure_core_output_naming_tests
+)
+
 add_executable(utsure_core_timeline_tests
     timeline_tests.cpp
 )

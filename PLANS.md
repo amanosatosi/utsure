@@ -23,7 +23,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M16 Streaming transcoding pipeline completed.
 - [x] M17 Desktop GUI quality and usability completed.
   * Remaining FFMS2 preview-backend follow-up and CI validation are deferred and no longer block M17 completion.
-  * M18 Automatic output naming planned.
+  * M18 Automatic output naming completed.
   * M19 Automatic subtitle selection planned.
   * M20 FontCollector-based subtitle font recovery and fallback planned.
 
@@ -79,6 +79,8 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M17 preview-pane usability slice now also includes a smaller seek bar, a compact bottom control row with transport buttons on the left, non-playing timeline seek clicks, and left/right arrow frame stepping when the preview surface has focus.
 - The current M17 preview-pane usability slice now prefers a compact dedicated preview footer beneath the surface, instead of a floating overlay, because that tracks the reference workflow more closely and preserves more usable picture area.
 - The current M17 preview-pane usability slice now also hides that dedicated preview footer unless the pointer is over the preview region, so the default state gives more height back to the video surface.
+- The current M18 slice is limited to predictable default output-path generation plus GUI wiring for custom text and manual override preservation; it does not add a separate output-container selector.
+- The current M18 slice assumes the generated default should reuse the current output-path extension when one is already present and otherwise fall back to `.mp4` until a dedicated container-selection surface exists.
 
 ## Architecture direction
 
@@ -662,7 +664,7 @@ Done criteria:
 
 ### M18 Add automatic output naming
 
-Status: Planned
+Status: Completed
 
 Scope:
   * Add automatic output naming so the app can generate a predictable default filename from the current job context.
@@ -675,6 +677,12 @@ Scope:
     * output container extension
   * Default the numeric suffix to `1` when no existing matching filenames are present.
   * Preserve manual output-path editing so automatic naming remains a default behavior rather than a forced one.
+
+Current slice status:
+  * Completed: added a dedicated core output-naming helper that builds `[custom text] [source folder] - [number] [video codec] [audio codec].[ext]` names, renders the numeric suffix as two digits such as `01` and `03`, normalizes tags/extensions, and scans the target directory for the next available matching number.
+  * Completed: wired the desktop app to show a dedicated custom-text field, generate a default output path automatically, and preserve manual output-path edits until the user explicitly restores automatic naming with the new `Auto` action.
+  * Completed: added focused core tests for default naming, exact-pattern numbering, source-copy codec tags, silent-source `NoAudio` tagging, and extension normalization.
+  * Validation note: local C++ build/test execution was intentionally not run because this repository's current policy keeps compile/test validation in GitHub Actions; the local validation step for this slice was limited to patch review and `git diff --check`.
 
 Naming shape:
   * `[custom text] [folder name] - [next available number] [video codec] [audio codec].[ext]`
@@ -695,6 +703,7 @@ Risks:
 
 Validation:
   * Verify that the default output name includes the custom text, folder name, numeric suffix, codec tags, and container extension in the expected order.
+  * Verify that the rendered numeric suffix is zero-padded to two digits, such as `01` and `03`.
   * Verify that numbering starts at `1` when no matching outputs exist.
   * Verify that numbering increments to the next available value when matching filenames already exist.
   * Verify that codec and extension tags reflect the actual selected encode/output settings.
@@ -774,4 +783,4 @@ Done criteria:
 
 ## Immediate next milestone
 
-M18 Add automatic output naming.
+M19 Add automatic subtitle selection with explicit priority rules.

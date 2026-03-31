@@ -6,6 +6,7 @@
 #include "preview_surface_widget.hpp"
 #include "trim_timeline_widget.hpp"
 #include "utsure/core/build_info.hpp"
+#include "utsure/core/job/output_naming.hpp"
 #include "utsure/core/job/encode_job_preflight.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 
@@ -95,6 +96,10 @@ QString bool_text(const bool value) {
 
 QString video_file_filter() {
     return "Video Files (*.avi *.mkv *.mov *.mp4 *.webm);;All Files (*)";
+}
+
+QString output_file_filter() {
+    return "Video Files (*.mkv *.mp4 *.mov *.m4v *.webm);;All Files (*)";
 }
 
 QString subtitle_file_filter() {
@@ -1023,6 +1028,23 @@ QLabel#PreviewTimeBadge {
     output_layout->setContentsMargins(8, 5, 8, 5);
     output_layout->setSpacing(3);
 
+    auto *naming_row = new QHBoxLayout();
+    naming_row->setContentsMargins(0, 0, 0, 0);
+    naming_row->setSpacing(8);
+
+    auto *name_label = new QLabel("Text", output_frame);
+    name_label->setMinimumWidth(52);
+    output_name_text_edit_ = new QLineEdit(output_frame);
+    output_name_text_edit_->setPlaceholderText("Custom text, no brackets");
+    output_name_text_edit_->setClearButtonEnabled(true);
+    same_as_input_check_ = new QCheckBox("Same as input", output_frame);
+    same_as_input_check_->setCursor(Qt::PointingHandCursor);
+
+    naming_row->addWidget(name_label);
+    naming_row->addWidget(output_name_text_edit_, 1);
+    naming_row->addWidget(same_as_input_check_);
+    output_layout->addLayout(naming_row);
+
     auto *output_row = new QHBoxLayout();
     output_row->setContentsMargins(0, 0, 0, 0);
     output_row->setSpacing(8);
@@ -1030,17 +1052,18 @@ QLabel#PreviewTimeBadge {
     auto *output_label = new QLabel("Output", output_frame);
     output_label->setMinimumWidth(52);
     output_path_edit_ = new QLineEdit(output_frame);
-    output_path_edit_->setPlaceholderText("Manual output path");
+    output_path_edit_->setPlaceholderText("Output path");
+    output_auto_button_ = new QPushButton("Auto", output_frame);
+    output_auto_button_->setToolTip("Restore the generated default output path");
+    output_auto_button_->setCursor(Qt::PointingHandCursor);
     output_browse_button_ = new QPushButton(output_frame);
     output_browse_button_->setProperty("browseButton", true);
     apply_icon_or_text(output_browse_button_, ":/icons/browse.svg", "...", QSize(15, 15), 30, 30, false);
-    same_as_input_check_ = new QCheckBox("Same as input", output_frame);
-    same_as_input_check_->setCursor(Qt::PointingHandCursor);
 
     output_row->addWidget(output_label);
     output_row->addWidget(output_path_edit_, 1);
+    output_row->addWidget(output_auto_button_);
     output_row->addWidget(output_browse_button_);
-    output_row->addWidget(same_as_input_check_);
     output_layout->addLayout(output_row);
 
     top_section_layout->addWidget(output_frame);
@@ -1440,6 +1463,7 @@ QLabel#PreviewTimeBadge {
     connect(same_as_input_check_, &QCheckBox::toggled, this, &MainWindow::handle_same_as_input_toggled);
     connect(preview_enabled_check_, &QCheckBox::toggled, this, &MainWindow::handle_preview_toggled);
 
+    connect(output_auto_button_, &QPushButton::clicked, this, &MainWindow::restore_selected_job_auto_output_path);
     connect(output_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_output_path);
     connect(subtitle_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_subtitle_file);
     connect(intro_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_intro_clip);
@@ -1456,6 +1480,14 @@ QLabel#PreviewTimeBadge {
     const auto bind_editor_change = [this]() {
         sync_selected_job_from_editor();
     };
+    connect(output_name_text_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(output_path_edit_, &QLineEdit::textEdited, this, [this](const QString &) {
+        if (!is_valid_job_index(selected_job_index_)) {
+            return;
+        }
+
+        jobs_[static_cast<std::size_t>(selected_job_index_)].output_path_manual_override = true;
+    });
     connect(output_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
     connect(subtitle_enable_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
     connect(subtitle_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
@@ -1496,7 +1528,7 @@ QString MainWindow::window_structure_summary() const {
         "Main window structure:\n"
         "- Toolbar: left controls, centered branding, right-side priority/start/stop\n"
         "- Queue row: batch queue table plus selected-job details summary\n"
-        "- Output strip: selected-job output path plus Same as input toggle\n"
+        "- Output strip: naming text, output path, auto-name action, and Same as input toggle\n"
         "- Left tabs: Main, Encode, Special, and global Logs\n"
         "- Right tabs: transport-controlled Preview with trim timeline plus selected-task log"
     );
@@ -1686,6 +1718,10 @@ void MainWindow::add_source_jobs_from_paths(const QStringList &paths) {
         job.type_label = info.suffix().isEmpty() ? "-" : "." + info.suffix().toLower();
         job.input_size_bytes = info.exists() ? info.size() : -1;
         jobs_.push_back(std::move(job));
+        apply_generated_output_path(static_cast<int>(jobs_.size()) - 1, true);
+        jobs_.back().last_status_message = job_has_minimum_required_fields(jobs_.back())
+            ? "Ready to queue."
+            : "Select an output path to make the job runnable.";
         append_session_log(QString("[info] Added '%1' to the queue.").arg(info.fileName()));
     }
 
@@ -1736,7 +1772,7 @@ void MainWindow::choose_output_path() {
         return;
     }
 
-    const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     QString suggested_path = output_path_edit_->text().trimmed();
     if (suggested_path.isEmpty()) {
         suggested_path = job.same_as_input
@@ -1748,11 +1784,21 @@ void MainWindow::choose_output_path() {
         this,
         "Choose Output Path",
         suggested_path,
-        "MP4 Video (*.mp4);;All Files (*)"
+        output_file_filter()
     );
     if (!selected_path.isEmpty()) {
+        job.output_path_manual_override = true;
         output_path_edit_->setText(QDir::toNativeSeparators(selected_path));
     }
+}
+
+void MainWindow::restore_selected_job_auto_output_path() {
+    if (!is_valid_job_index(selected_job_index_)) {
+        return;
+    }
+
+    apply_generated_output_path(selected_job_index_, true);
+    refresh_all_views();
 }
 
 void MainWindow::choose_subtitle_file() {
@@ -1884,14 +1930,18 @@ void MainWindow::handle_queue_item_changed(QTableWidgetItem *item) {
 }
 
 void MainWindow::handle_same_as_input_toggled(const bool enabled) {
-    if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+    if (loading_selected_job_ || selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
         return;
     }
 
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     job.same_as_input = enabled;
-    if (enabled) {
-        apply_same_as_input_folder(job);
+    if (job.output_path_manual_override) {
+        if (enabled) {
+            apply_same_as_input_folder(job);
+        }
+    } else {
+        apply_generated_output_path(selected_job_index_, false);
     }
 
     load_selected_job_into_editor();
@@ -2541,6 +2591,7 @@ void MainWindow::sync_selected_job_from_editor() {
     }
 
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    job.output_name_custom_text = output_name_text_edit_->text().trimmed();
     job.output_path = output_path_edit_->text().trimmed();
     job.subtitle_enabled = subtitle_enable_check_->isChecked();
     job.subtitle_path = subtitle_path_edit_->text().trimmed();
@@ -2561,6 +2612,10 @@ void MainWindow::sync_selected_job_from_editor() {
     job.audio_bitrate_kbps = audio_quality_combo_->currentData().toInt();
     job.audio_track_display = audio_track_combo_->currentText().trimmed();
 
+    if (!job.output_path_manual_override) {
+        apply_generated_output_path(selected_job_index_, false);
+    }
+
     if (job.state == UiJobState::pending) {
         job.last_status_message = job_has_minimum_required_fields(job)
             ? "Ready to queue."
@@ -2574,6 +2629,7 @@ void MainWindow::load_selected_job_into_editor() {
     loading_selected_job_ = true;
 
     if (!is_valid_job_index(selected_job_index_)) {
+        output_name_text_edit_->clear();
         output_path_edit_->clear();
         same_as_input_check_->setChecked(true);
         subtitle_enable_check_->setChecked(false);
@@ -2596,6 +2652,7 @@ void MainWindow::load_selected_job_into_editor() {
         thumbnail_title_edit_->clear();
     } else {
         const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+        output_name_text_edit_->setText(job.output_name_custom_text);
         output_path_edit_->setText(job.output_path);
         same_as_input_check_->setChecked(job.same_as_input);
         subtitle_enable_check_->setChecked(job.subtitle_enabled);
@@ -2639,6 +2696,7 @@ void MainWindow::select_job(const int index) {
 
     selected_job_index_ = index;
     ensure_job_inspection(index);
+    apply_generated_output_path(index, false);
 
     if (queue_table_ != nullptr && index < queue_table_->rowCount() && queue_table_->currentRow() != index) {
         const QSignalBlocker blocker(queue_table_);
@@ -2723,6 +2781,70 @@ void MainWindow::apply_same_as_input_folder(UiEncodeJob &job) {
     job.output_path = path_to_qstring((source_path.parent_path() / file_name).lexically_normal());
 }
 
+QString MainWindow::generate_output_path_for_job(const UiEncodeJob &job) const {
+    const auto source_path = qstring_to_path(job.source_path);
+    const auto current_output_path = qstring_to_path(job.output_path);
+
+    std::filesystem::path output_directory{};
+    if (job.same_as_input && !source_path.parent_path().empty()) {
+        output_directory = source_path.parent_path();
+    } else if (!current_output_path.parent_path().empty()) {
+        output_directory = current_output_path.parent_path();
+    } else if (!source_path.parent_path().empty()) {
+        output_directory = source_path.parent_path();
+    }
+
+    const std::string extension_hint = current_output_path.has_extension()
+        ? current_output_path.extension().string()
+        : std::string{};
+    const bool source_audio_known = job.inspected_source_info.has_value();
+    const std::optional<utsure::core::media::AudioStreamInfo> source_audio_stream =
+        source_audio_known ? job.inspected_source_info->primary_audio_stream : std::nullopt;
+
+    const auto result = utsure::core::job::OutputNaming::suggest(utsure::core::job::OutputNamingRequest{
+        .source_path = source_path,
+        .output_directory = output_directory,
+        .custom_text = job.output_name_custom_text.trimmed().toUtf8().toStdString(),
+        .extension_hint = extension_hint,
+        .video_codec = job.video_codec,
+        .audio_settings = {
+            .mode = job.audio_mode,
+            .codec = utsure::core::media::OutputAudioCodec::aac,
+            .bitrate_kbps = job.audio_bitrate_kbps
+        },
+        .source_audio_known = source_audio_known,
+        .source_audio_stream = source_audio_stream
+    });
+
+    return path_to_qstring(result.output_path);
+}
+
+void MainWindow::apply_generated_output_path(const int job_index, const bool force_auto_mode) {
+    if (!is_valid_job_index(job_index)) {
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(job_index)];
+    if (force_auto_mode) {
+        job.output_path_manual_override = false;
+    }
+    if (job.output_path_manual_override) {
+        return;
+    }
+
+    const QString generated_output_path = generate_output_path_for_job(job);
+    if (generated_output_path.trimmed().isEmpty()) {
+        return;
+    }
+
+    job.output_path = generated_output_path;
+    if (job_index == selected_job_index_ && output_path_edit_ != nullptr &&
+        output_path_edit_->text().trimmed() != generated_output_path) {
+        const QSignalBlocker blocker(output_path_edit_);
+        output_path_edit_->setText(generated_output_path);
+    }
+}
+
 void MainWindow::refresh_all_views() {
     refresh_queue_table();
     refresh_editor_state();
@@ -2785,7 +2907,9 @@ void MainWindow::refresh_editor_state() {
         audio_format_combo_->currentData().toInt() ==
             static_cast<int>(utsure::core::media::AudioOutputMode::encode_aac);
 
+    output_name_text_edit_->setEnabled(editable);
     output_path_edit_->setEnabled(editable);
+    output_auto_button_->setEnabled(editable);
     output_browse_button_->setEnabled(editable);
     same_as_input_check_->setEnabled(editable);
 
