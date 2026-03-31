@@ -680,7 +680,7 @@ Scope:
 
 Current slice status:
   * Completed: added a dedicated core output-naming helper that builds `[custom text] [source folder] - [number] [video codec] [audio codec].[ext]` names, renders the numeric suffix as two digits such as `01` and `03`, normalizes tags/extensions, and scans the target directory for the next available matching number.
-  * Completed: wired the desktop app to show a dedicated custom-text field, generate a default output path automatically, and preserve manual output-path edits until the user explicitly restores automatic naming with the new `Auto` action.
+  * Completed: wired the desktop app to keep the generated output path in the front output strip while moving the custom-text editor into the Encode settings tab, and preserve manual output-path edits until the user explicitly restores automatic naming with the new `Auto` action.
   * Completed: added focused core tests for default naming, exact-pattern numbering, source-copy codec tags, silent-source `NoAudio` tagging, and extension normalization.
   * Completed: added the new output-naming test target to the Windows MSYS2 CI build script so CTest does not reference an executable that the scripted target list failed to build.
   * Validation note: local C++ build/test execution was intentionally not run because this repository's current policy keeps compile/test validation in GitHub Actions; the local validation step for this slice was limited to patch review and `git diff --check`.

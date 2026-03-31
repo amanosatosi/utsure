@@ -1028,23 +1028,6 @@ QLabel#PreviewTimeBadge {
     output_layout->setContentsMargins(8, 5, 8, 5);
     output_layout->setSpacing(3);
 
-    auto *naming_row = new QHBoxLayout();
-    naming_row->setContentsMargins(0, 0, 0, 0);
-    naming_row->setSpacing(8);
-
-    auto *name_label = new QLabel("Text", output_frame);
-    name_label->setMinimumWidth(52);
-    output_name_text_edit_ = new QLineEdit(output_frame);
-    output_name_text_edit_->setPlaceholderText("Custom text, no brackets");
-    output_name_text_edit_->setClearButtonEnabled(true);
-    same_as_input_check_ = new QCheckBox("Same as input", output_frame);
-    same_as_input_check_->setCursor(Qt::PointingHandCursor);
-
-    naming_row->addWidget(name_label);
-    naming_row->addWidget(output_name_text_edit_, 1);
-    naming_row->addWidget(same_as_input_check_);
-    output_layout->addLayout(naming_row);
-
     auto *output_row = new QHBoxLayout();
     output_row->setContentsMargins(0, 0, 0, 0);
     output_row->setSpacing(8);
@@ -1059,11 +1042,14 @@ QLabel#PreviewTimeBadge {
     output_browse_button_ = new QPushButton(output_frame);
     output_browse_button_->setProperty("browseButton", true);
     apply_icon_or_text(output_browse_button_, ":/icons/browse.svg", "...", QSize(15, 15), 30, 30, false);
+    same_as_input_check_ = new QCheckBox("Same as input", output_frame);
+    same_as_input_check_->setCursor(Qt::PointingHandCursor);
 
     output_row->addWidget(output_label);
     output_row->addWidget(output_path_edit_, 1);
     output_row->addWidget(output_auto_button_);
     output_row->addWidget(output_browse_button_);
+    output_row->addWidget(same_as_input_check_);
     output_layout->addLayout(output_row);
 
     top_section_layout->addWidget(output_frame);
@@ -1144,9 +1130,12 @@ QLabel#PreviewTimeBadge {
     editor_tabs_->addTab(wrap_in_scroll_area(main_tab_content, editor_tabs_), "Main");
 
     auto *encode_tab_content = new QWidget(editor_tabs_);
-    auto *encode_tab_layout = new QHBoxLayout(encode_tab_content);
+    auto *encode_tab_layout = new QVBoxLayout(encode_tab_content);
     encode_tab_layout->setContentsMargins(8, 8, 8, 8);
     encode_tab_layout->setSpacing(8);
+    auto *encode_settings_row = new QHBoxLayout();
+    encode_settings_row->setContentsMargins(0, 0, 0, 0);
+    encode_settings_row->setSpacing(8);
 
     auto *video_group = new QGroupBox("Video", encode_tab_content);
     auto *video_layout = new QFormLayout(video_group);
@@ -1197,8 +1186,25 @@ QLabel#PreviewTimeBadge {
     audio_note->setWordWrap(true);
     audio_layout->addRow(audio_note);
 
-    encode_tab_layout->addWidget(video_group, 1);
-    encode_tab_layout->addWidget(audio_group, 1);
+    auto *output_naming_group = new QGroupBox("Output Naming", encode_tab_content);
+    auto *output_naming_layout = new QFormLayout(output_naming_group);
+    output_name_text_edit_ = new QLineEdit(output_naming_group);
+    output_name_text_edit_->setPlaceholderText("Custom text, no brackets");
+    output_name_text_edit_->setClearButtonEnabled(true);
+    auto *output_naming_note = new QLabel(
+        "Used only for the generated default file name. Leave empty to omit the bracketed prefix.",
+        output_naming_group
+    );
+    output_naming_note->setObjectName("MutedNote");
+    output_naming_note->setWordWrap(true);
+    output_naming_layout->addRow("Custom text", output_name_text_edit_);
+    output_naming_layout->addRow(output_naming_note);
+
+    encode_settings_row->addWidget(video_group, 1);
+    encode_settings_row->addWidget(audio_group, 1);
+    encode_tab_layout->addLayout(encode_settings_row);
+    encode_tab_layout->addWidget(output_naming_group);
+    encode_tab_layout->addStretch(1);
     editor_tabs_->addTab(wrap_in_scroll_area(encode_tab_content, editor_tabs_), "Encode");
 
     auto *special_tab_content = new QWidget(editor_tabs_);
@@ -1528,8 +1534,8 @@ QString MainWindow::window_structure_summary() const {
         "Main window structure:\n"
         "- Toolbar: left controls, centered branding, right-side priority/start/stop\n"
         "- Queue row: batch queue table plus selected-job details summary\n"
-        "- Output strip: naming text, output path, auto-name action, and Same as input toggle\n"
-        "- Left tabs: Main, Encode, Special, and global Logs\n"
+        "- Output strip: output path, auto-name action, and Same as input toggle\n"
+        "- Left tabs: Main, Encode, Special, and global Logs, with custom output naming under Encode\n"
         "- Right tabs: transport-controlled Preview with trim timeline plus selected-task log"
     );
 }
