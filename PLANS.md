@@ -21,10 +21,8 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M13 Usability and safety slice completed.
 - [x] M15 Hardening and handoff completed.
 - [x] M16 Streaming transcoding pipeline completed.
-  * M17 Desktop GUI quality and usability in progress.
-  * M17 FFMS2 preview-backend integration implemented; awaiting CI validation.
-  * M17 Preview-pane usability slice in progress: move trim controls into a hover overlay so smaller desktop windows keep the preview usable.
-  * M17 Preview-pane usability slice revised: compact the hover controls, keep current time in the top-right corner, and add preview-surface keyboard frame stepping.
+- [x] M17 Desktop GUI quality and usability completed.
+  * Remaining FFMS2 preview-backend follow-up and CI validation are deferred and no longer block M17 completion.
   * M18 Automatic output naming planned.
   * M19 Automatic subtitle selection planned.
   * M20 FontCollector-based subtitle font recovery and fallback planned.
@@ -601,7 +599,7 @@ Done criteria:
 
 ### M17 Improve desktop GUI quality and usability
 
-Status: In progress
+Status: Completed
 
 Scope:
   * Improve the Qt 6 Widgets desktop shell so the main encode workflow feels cleaner, more understandable, and more efficient to use.
@@ -639,7 +637,7 @@ Current slice status:
   * Completed: restyled the Qt shell toward the `shin.html` dark-mode reference while keeping the current widget structure, shifting the chrome, fields, tabs, preview, and icons to a black / gold / violet palette.
   * Completed: refined that dark-mode pass by restoring a gold native top bar, moving the preview controls back to a hover-only overlay inside the preview surface so they do not resize the video, unifying the preview/queue stop button treatment, darkening the timeline track, and adding explicit combo-box and spin-box arrow affordances.
   * Completed: moved the preview timer badge out of the video overlay and into the Preview/Task Log header corner, with the badge shown only while the Preview tab is active.
-  * In progress: swap preview video/audio/seek sessions to an FFMS2-backed indexed adapter behind the existing preview session seam, keep Preview opt-in and limited to the selected job's main source, and preserve subtitle overlay reuse through the shared libassmod-based compositor path.
+  * Deferred: remaining FFMS2 preview-backend follow-up and CI validation no longer block M17 completion.
 
 Likely files/modules:
   * `src/app/`
@@ -775,3 +773,5 @@ Done criteria:
   * The integration preserves the existing `encoder-core` vs desktop-shell separation and does not bury tool-specific policy across unrelated modules.
 
 ## Immediate next milestone
+
+M18 Add automatic output naming.
