@@ -13,6 +13,7 @@
 #include <QThreadPool>
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
@@ -23,12 +24,15 @@
 
 namespace {
 
-constexpr std::size_t kPreviewWindowFrameCount = 96;
+using SteadyClock = std::chrono::steady_clock;
+
+constexpr std::size_t kInteractivePreviewWindowFrameCount = 1;
+constexpr std::size_t kPlaybackPreviewWindowFrameCount = 96;
 constexpr std::size_t kRetainedPreviewFrameCount = 192;
 constexpr int kPreviewDecodeMaxWidth = 960;
 constexpr int kPreviewDecodeMaxHeight = 540;
 constexpr qint64 kSequentialPreviewRefillToleranceUs = 1000000;
-constexpr std::size_t kSequentialPreviewPrefetchLeadFrames = kPreviewWindowFrameCount;
+constexpr std::size_t kSequentialPreviewPrefetchLeadFrames = kPlaybackPreviewWindowFrameCount;
 
 Q_LOGGING_CATEGORY(previewWorkerLog, "utsure.preview.worker")
 
@@ -45,11 +49,25 @@ struct PrefetchTaskResult final {
     qint64 window_start_us{-1};
     std::vector<utsure::core::media::DecodedVideoFrame> frames{};
     std::unique_ptr<utsure::core::media::VideoPreviewSession> session{};
+    bool reused_existing_session{false};
+    QString session_diagnostics{};
+    QString decode_diagnostics{};
     QString error_message{};
 };
 
 QString to_qstring(std::string_view text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+}
+
+qint64 steady_clock_now_microseconds() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               SteadyClock::now().time_since_epoch()
+           )
+        .count();
+}
+
+QString format_elapsed_milliseconds(const qint64 elapsed_microseconds) {
+    return QString::number(static_cast<double>(elapsed_microseconds) / 1000.0, 'f', 2) + "ms";
 }
 
 utsure::core::media::DecodeNormalizationPolicy preview_decode_normalization_policy() {
@@ -192,12 +210,18 @@ void append_preview_frames_with_retention(
 
 }  // namespace
 
-PreviewFrameRendererWorker::PreviewFrameRendererWorker(QObject *parent) : QObject(parent) {}
+PreviewFrameRendererWorker::PreviewFrameRendererWorker(
+    std::atomic<quint64> *latest_request_generation,
+    QObject *parent
+) : QObject(parent),
+    latest_request_generation_(latest_request_generation) {}
 
 PreviewFrameRendererWorker::~PreviewFrameRendererWorker() = default;
 
 void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest &request) {
     try {
+        const qint64 render_started_us = steady_clock_now_microseconds();
+        const qint64 queue_wait_us = std::max<qint64>(0, render_started_us - request.enqueued_steady_us);
         if (request.source_path.trimmed().isEmpty()) {
             emit preview_failed(
                 request.request_token,
@@ -212,13 +236,26 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
         const auto cache_summary_before = summarize_cached_preview_window(cached_preview_frames_);
         const bool cache_covers_request = cached_preview_window_covers(normalized_source_path, request.requested_time_us);
         qCInfo(previewWorkerLog).noquote()
-            << QString("render_request token=%1 requested=%2 (%3) playback_active=%4 cache=%5 covers=%6")
+            << QString(
+                   "render_request token=%1 generation=%2 requested=%3 (%4) playback_active=%5 queue_wait=%6 cache=%7 covers=%8"
+               )
                    .arg(request.request_token)
+                   .arg(request.dispatch_generation)
                    .arg(request.requested_time_us)
                    .arg(format_time_us(request.requested_time_us))
                    .arg(bool_text(request.playback_active))
+                   .arg(format_elapsed_milliseconds(queue_wait_us))
                    .arg(format_cached_preview_window_summary(cache_summary_before))
                    .arg(bool_text(cache_covers_request));
+
+        if (request_is_superseded(request)) {
+            qCInfo(previewWorkerLog).noquote()
+                << QString("render_request skipped_superseded_before_work token=%1 generation=%2")
+                       .arg(request.request_token)
+                       .arg(request.dispatch_generation);
+            emit preview_skipped(request.request_token, request.requested_time_us);
+            return;
+        }
 
         if (!cache_covers_request) {
             if (cached_source_path_ != normalized_source_path) {
@@ -230,10 +267,17 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
             }
 
             if (!preview_session_) {
+                const qint64 session_started_us = steady_clock_now_microseconds();
                 auto session_result = utsure::core::media::MediaDecoder::create_video_preview_session(
                     qstring_to_path(normalized_source_path),
                     preview_decode_normalization_policy()
                 );
+                const qint64 session_elapsed_us = steady_clock_now_microseconds() - session_started_us;
+                if (!session_result.diagnostics.empty()) {
+                    qCInfo(previewWorkerLog).noquote()
+                        << QString("render_request session_create diagnostics=%1")
+                               .arg(to_qstring(session_result.diagnostics));
+                }
                 if (!session_result.succeeded()) {
                     emit preview_failed(
                         request.request_token,
@@ -249,24 +293,46 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
 
                 preview_session_ = std::move(session_result.session);
                 qCInfo(previewWorkerLog).noquote()
-                    << QString("render_request created preview session for '%1'").arg(normalized_source_path);
+                    << QString("render_request created preview session for '%1' elapsed=%2")
+                           .arg(normalized_source_path)
+                           .arg(format_elapsed_milliseconds(session_elapsed_us));
             }
 
-            const bool use_sequential_refill = should_decode_next_preview_window(request.requested_time_us);
+            if (request_is_superseded(request)) {
+                qCInfo(previewWorkerLog).noquote()
+                    << QString("render_request skipped_after_session token=%1 generation=%2")
+                           .arg(request.request_token)
+                           .arg(request.dispatch_generation);
+                emit preview_skipped(request.request_token, request.requested_time_us);
+                return;
+            }
+
+            const bool use_sequential_refill = should_decode_next_preview_window(request);
+            const std::size_t refill_frame_count = request.playback_active
+                ? kPlaybackPreviewWindowFrameCount
+                : kInteractivePreviewWindowFrameCount;
             invalidate_prefetch_state();
             qCInfo(previewWorkerLog).noquote()
-                << QString("render_request refill_strategy requested=%1 (%2) sequential=%3 method=%4")
+                << QString("render_request refill_strategy requested=%1 (%2) sequential=%3 frames=%4 method=%5")
                        .arg(request.requested_time_us)
                        .arg(format_time_us(request.requested_time_us))
                        .arg(bool_text(use_sequential_refill))
+                       .arg(static_cast<qulonglong>(refill_frame_count))
                        .arg(use_sequential_refill ? "decode_next_window" : "seek_and_decode_window_at_time");
 
+            const qint64 decode_started_us = steady_clock_now_microseconds();
             auto preview_window_result = use_sequential_refill
-                ? preview_session_->decode_next_window(kPreviewWindowFrameCount)
+                ? preview_session_->decode_next_window(refill_frame_count)
                 : preview_session_->seek_and_decode_window_at_time(
                     request.requested_time_us,
-                    kPreviewWindowFrameCount
+                    refill_frame_count
                 );
+            const qint64 decode_elapsed_us = steady_clock_now_microseconds() - decode_started_us;
+            if (!preview_window_result.diagnostics.empty()) {
+                qCInfo(previewWorkerLog).noquote()
+                    << QString("render_request decode diagnostics=%1")
+                           .arg(to_qstring(preview_window_result.diagnostics));
+            }
             if (!preview_window_result.succeeded()) {
                 emit preview_failed(
                     request.request_token,
@@ -280,13 +346,24 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
                 return;
             }
 
+            if (request_is_superseded(request)) {
+                qCInfo(previewWorkerLog).noquote()
+                    << QString("render_request skipped_after_decode token=%1 generation=%2 elapsed=%3")
+                           .arg(request.request_token)
+                           .arg(request.dispatch_generation)
+                           .arg(format_elapsed_milliseconds(decode_elapsed_us));
+                emit preview_skipped(request.request_token, request.requested_time_us);
+                return;
+            }
+
             cached_source_path_ = normalized_source_path;
             auto new_preview_frames = std::move(*preview_window_result.video_frames);
             const auto new_window_summary = summarize_cached_preview_window(new_preview_frames);
             qCInfo(previewWorkerLog).noquote()
-                << QString("render_request refill_result method=%1 returned=%2 window=%3")
+                << QString("render_request refill_result method=%1 returned=%2 elapsed=%3 window=%4")
                        .arg(use_sequential_refill ? "decode_next_window" : "seek_and_decode_window_at_time")
                        .arg(static_cast<qulonglong>(new_preview_frames.size()))
+                       .arg(format_elapsed_milliseconds(decode_elapsed_us))
                        .arg(format_cached_preview_window_summary(new_window_summary));
 
             if (use_sequential_refill && !cached_preview_frames_.empty()) {
@@ -300,8 +377,6 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
                        .arg(use_sequential_refill ? "append" : "replace")
                        .arg(format_cached_preview_window_summary(summarize_cached_preview_window(cached_preview_frames_)));
         }
-
-        maybe_start_sequential_prefetch(request);
 
         const auto *cached_preview_frame = select_cached_preview_frame(request.requested_time_us);
         if (cached_preview_frame == nullptr) {
@@ -327,10 +402,25 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
                    .arg(format_time_us(cached_preview_frame->timestamp.start_microseconds))
                    .arg(cached_preview_frame->timestamp.duration_microseconds.value_or(0));
 
-        auto preview_frame = *cached_preview_frame;
+        if (request_is_superseded(request)) {
+            qCInfo(previewWorkerLog).noquote()
+                << QString("render_request skipped_before_subtitles token=%1 generation=%2")
+                       .arg(request.request_token)
+                       .arg(request.dispatch_generation);
+            emit preview_skipped(request.request_token, request.requested_time_us);
+            return;
+        }
+
+        const utsure::core::media::DecodedVideoFrame *selected_preview_frame = cached_preview_frame;
+        std::optional<utsure::core::media::DecodedVideoFrame> composed_preview_frame{};
+        qint64 subtitle_session_elapsed_us = 0;
+        qint64 subtitle_compose_elapsed_us = 0;
 
         if (request.subtitle_enabled && !request.subtitle_path.trimmed().isEmpty()) {
-            ensure_subtitle_session(request, preview_frame);
+            composed_preview_frame = *cached_preview_frame;
+            const qint64 subtitle_session_started_us = steady_clock_now_microseconds();
+            ensure_subtitle_session(request, *composed_preview_frame);
+            subtitle_session_elapsed_us = steady_clock_now_microseconds() - subtitle_session_started_us;
             if (!subtitle_session_) {
                 emit preview_failed(
                     request.request_token,
@@ -341,11 +431,22 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
                 return;
             }
 
+            if (request_is_superseded(request)) {
+                qCInfo(previewWorkerLog).noquote()
+                    << QString("render_request skipped_before_subtitle_compose token=%1 generation=%2")
+                           .arg(request.request_token)
+                           .arg(request.dispatch_generation);
+                emit preview_skipped(request.request_token, request.requested_time_us);
+                return;
+            }
+
+            const qint64 subtitle_compose_started_us = steady_clock_now_microseconds();
             const auto compose_result = utsure::core::subtitles::compose_subtitles_into_frame(
-                preview_frame,
+                *composed_preview_frame,
                 *subtitle_session_,
-                preview_frame.timestamp.start_microseconds
+                composed_preview_frame->timestamp.start_microseconds
             );
+            subtitle_compose_elapsed_us = steady_clock_now_microseconds() - subtitle_compose_started_us;
             if (!compose_result.succeeded()) {
                 emit preview_failed(
                     request.request_token,
@@ -358,17 +459,45 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
                 );
                 return;
             }
+
+            selected_preview_frame = &*composed_preview_frame;
         } else {
             invalidate_subtitle_session();
         }
 
+        if (request_is_superseded(request)) {
+            qCInfo(previewWorkerLog).noquote()
+                << QString("render_request skipped_before_image token=%1 generation=%2")
+                       .arg(request.request_token)
+                       .arg(request.dispatch_generation);
+            emit preview_skipped(request.request_token, request.requested_time_us);
+            return;
+        }
+
+        const qint64 image_conversion_started_us = steady_clock_now_microseconds();
+        auto preview_image = image_from_decoded_frame(*selected_preview_frame);
+        const qint64 image_conversion_elapsed_us = steady_clock_now_microseconds() - image_conversion_started_us;
+        const qint64 total_elapsed_us = steady_clock_now_microseconds() - render_started_us;
+        qCInfo(previewWorkerLog).noquote()
+            << QString(
+                   "render_request ready token=%1 generation=%2 subtitle_session=%3 subtitle_compose=%4 image_copy=%5 total=%6"
+               )
+                   .arg(request.request_token)
+                   .arg(request.dispatch_generation)
+                   .arg(format_elapsed_milliseconds(subtitle_session_elapsed_us))
+                   .arg(format_elapsed_milliseconds(subtitle_compose_elapsed_us))
+                   .arg(format_elapsed_milliseconds(image_conversion_elapsed_us))
+                   .arg(format_elapsed_milliseconds(total_elapsed_us));
+
         emit preview_ready(
             request.request_token,
             request.requested_time_us,
-            preview_frame.timestamp.start_microseconds,
-            preview_frame.timestamp.duration_microseconds.value_or(0),
-            image_from_decoded_frame(preview_frame)
+            selected_preview_frame->timestamp.start_microseconds,
+            selected_preview_frame->timestamp.duration_microseconds.value_or(0),
+            std::move(preview_image)
         );
+
+        maybe_start_sequential_prefetch(request);
     } catch (const std::exception &exception) {
         emit preview_failed(
             request.request_token,
@@ -410,6 +539,8 @@ void PreviewFrameRendererWorker::invalidate_preview_frame_cache() {
     cached_source_path_.clear();
     cached_preview_frames_.clear();
     preview_session_.reset();
+    prefetch_session_.reset();
+    prefetch_session_source_path_.clear();
 }
 
 void PreviewFrameRendererWorker::invalidate_subtitle_session() {
@@ -449,7 +580,7 @@ bool PreviewFrameRendererWorker::should_start_sequential_prefetch(const PreviewF
 }
 
 void PreviewFrameRendererWorker::maybe_start_sequential_prefetch(const PreviewFrameRenderRequest &request) {
-    if (!should_start_sequential_prefetch(request)) {
+    if (request_is_superseded(request) || !should_start_sequential_prefetch(request)) {
         return;
     }
 
@@ -470,29 +601,56 @@ void PreviewFrameRendererWorker::maybe_start_sequential_prefetch(const PreviewFr
                .arg(format_time_us(prefetch_window_start_us))
                .arg(format_cached_preview_window_summary(summarize_cached_preview_window(cached_preview_frames_)));
 
+    std::unique_ptr<utsure::core::media::VideoPreviewSession> task_session{};
+    bool reused_existing_session = false;
+    if (prefetch_session_ && prefetch_session_source_path_ == normalized_source_path) {
+        task_session = std::move(prefetch_session_);
+        reused_existing_session = true;
+    } else {
+        prefetch_session_.reset();
+    }
+    prefetch_session_source_path_.clear();
+
     const QPointer<PreviewFrameRendererWorker> worker(this);
     QThreadPool::globalInstance()->start(QRunnable::create(
-        [worker, generation, normalized_source_path, prefetch_window_start_us]() {
+        [
+            worker,
+            generation,
+            normalized_source_path,
+            prefetch_window_start_us,
+            reused_existing_session,
+            task_session = std::move(task_session)
+        ]() mutable {
             auto result = std::make_shared<PrefetchTaskResult>();
             result->generation = generation;
             result->source_path = normalized_source_path;
             result->window_start_us = prefetch_window_start_us;
+            result->reused_existing_session = reused_existing_session;
 
-            auto session_result = utsure::core::media::MediaDecoder::create_video_preview_session(
-                qstring_to_path(normalized_source_path),
-                preview_decode_normalization_policy()
-            );
-            if (!session_result.succeeded()) {
-                result->error_message = format_error_detail(
-                    session_result.error->message,
-                    session_result.error->actionable_hint
+            if (task_session == nullptr) {
+                auto session_result = utsure::core::media::MediaDecoder::create_video_preview_session(
+                    qstring_to_path(normalized_source_path),
+                    preview_decode_normalization_policy()
                 );
+                result->session_diagnostics = to_qstring(session_result.diagnostics);
+                if (!session_result.succeeded()) {
+                    result->error_message = format_error_detail(
+                        session_result.error->message,
+                        session_result.error->actionable_hint
+                    );
+                } else {
+                    result->session = std::move(session_result.session);
+                }
             } else {
-                result->session = std::move(session_result.session);
+                result->session = std::move(task_session);
+            }
+
+            if (result->session != nullptr) {
                 auto window_result = result->session->seek_and_decode_window_at_time(
                     prefetch_window_start_us,
-                    kPreviewWindowFrameCount
+                    kPlaybackPreviewWindowFrameCount
                 );
+                result->decode_diagnostics = to_qstring(window_result.diagnostics);
                 if (!window_result.succeeded()) {
                     result->error_message = format_error_detail(
                         window_result.error->message,
@@ -534,10 +692,13 @@ void PreviewFrameRendererWorker::maybe_start_sequential_prefetch(const PreviewFr
                     if (!result->error_message.isEmpty()) {
                         worker->blocked_prefetch_window_start_us_ = result->window_start_us;
                         qCInfo(previewWorkerLog).noquote()
-                            << QString("prefetch_failed window_start=%1 (%2) detail=%3")
+                            << QString(
+                                   "prefetch_failed window_start=%1 (%2) reused_session=%3 session_diagnostics=%4 decode_diagnostics=%5 detail=%6"
+                               )
                                    .arg(result->window_start_us)
                                    .arg(format_time_us(result->window_start_us))
-                                   .arg(result->error_message);
+                                   .arg(bool_text(result->reused_existing_session))
+                                   .arg(result->session_diagnostics, result->decode_diagnostics, result->error_message);
                         return;
                     }
 
@@ -554,12 +715,24 @@ void PreviewFrameRendererWorker::maybe_start_sequential_prefetch(const PreviewFr
 
                     worker->blocked_prefetch_window_start_us_ = -1;
                     append_preview_frames_with_retention(worker->cached_preview_frames_, std::move(result->frames));
+                    auto previous_primary_session = std::move(worker->preview_session_);
                     worker->preview_session_ = std::move(result->session);
+                    worker->prefetch_session_ = std::move(previous_primary_session);
+                    worker->prefetch_session_source_path_ = worker->cached_source_path_;
                     qCInfo(previewWorkerLog).noquote()
-                        << QString("prefetch_ready_applied window_start=%1 (%2) cache=%3")
+                        << QString(
+                               "prefetch_ready_applied window_start=%1 (%2) reused_session=%3 session_diagnostics=%4 decode_diagnostics=%5 cache=%6"
+                           )
                                .arg(result->window_start_us)
                                .arg(format_time_us(result->window_start_us))
-                               .arg(format_cached_preview_window_summary(summarize_cached_preview_window(worker->cached_preview_frames_)));
+                               .arg(bool_text(result->reused_existing_session))
+                               .arg(
+                                   result->session_diagnostics,
+                                   result->decode_diagnostics,
+                                   format_cached_preview_window_summary(
+                                       summarize_cached_preview_window(worker->cached_preview_frames_)
+                                   )
+                               );
                 },
                 Qt::QueuedConnection
             );
@@ -613,14 +786,22 @@ const utsure::core::media::DecodedVideoFrame *PreviewFrameRendererWorker::select
     return &(*upper_bound);
 }
 
-bool PreviewFrameRendererWorker::should_decode_next_preview_window(const qint64 requested_time_us) const {
-    if (!preview_session_ || cached_preview_frames_.empty()) {
+bool PreviewFrameRendererWorker::should_decode_next_preview_window(const PreviewFrameRenderRequest &request) const {
+    if (!request.playback_active || !preview_session_ || cached_preview_frames_.empty()) {
         return false;
     }
 
     const qint64 cached_window_end_us = frame_coverage_end_us(cached_preview_frames_.back());
-    return requested_time_us >= cached_window_end_us &&
-        requested_time_us <= (cached_window_end_us + kSequentialPreviewRefillToleranceUs);
+    return request.requested_time_us >= cached_window_end_us &&
+        request.requested_time_us <= (cached_window_end_us + kSequentialPreviewRefillToleranceUs);
+}
+
+bool PreviewFrameRendererWorker::request_is_superseded(const PreviewFrameRenderRequest &request) const {
+    if (latest_request_generation_ == nullptr) {
+        return false;
+    }
+
+    return latest_request_generation_->load(std::memory_order_acquire) != request.dispatch_generation;
 }
 
 void PreviewFrameRendererWorker::ensure_subtitle_session(

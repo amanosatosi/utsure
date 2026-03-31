@@ -32,6 +32,7 @@ struct VideoFrameDecodeResult final {
 struct VideoFrameWindowDecodeResult final {
     std::optional<std::vector<DecodedVideoFrame>> video_frames{};
     std::optional<MediaDecodeError> error{};
+    std::string diagnostics{};
 
     [[nodiscard]] bool succeeded() const noexcept;
 };
@@ -50,6 +51,7 @@ class AudioPreviewSession;
 struct VideoPreviewSessionCreateResult final {
     std::unique_ptr<VideoPreviewSession> session{};
     std::optional<MediaDecodeError> error{};
+    std::string diagnostics{};
 
     [[nodiscard]] bool succeeded() const noexcept;
 };

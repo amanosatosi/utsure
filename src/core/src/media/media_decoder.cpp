@@ -184,7 +184,8 @@ VideoFrameDecodeResult make_video_frame_error(
 VideoFrameWindowDecodeResult make_video_frame_window_error(
     std::string input_path,
     std::string message,
-    std::string actionable_hint
+    std::string actionable_hint,
+    std::string diagnostics = {}
 ) {
     return VideoFrameWindowDecodeResult{
         .video_frames = std::nullopt,
@@ -192,14 +193,16 @@ VideoFrameWindowDecodeResult make_video_frame_window_error(
             .input_path = std::move(input_path),
             .message = std::move(message),
             .actionable_hint = std::move(actionable_hint)
-        }
+        },
+        .diagnostics = std::move(diagnostics)
     };
 }
 
 VideoPreviewSessionCreateResult make_video_preview_session_error(
     std::string input_path,
     std::string message,
-    std::string actionable_hint
+    std::string actionable_hint,
+    std::string diagnostics = {}
 ) {
     return VideoPreviewSessionCreateResult{
         .session = nullptr,
@@ -207,7 +210,8 @@ VideoPreviewSessionCreateResult make_video_preview_session_error(
             .input_path = std::move(input_path),
             .message = std::move(message),
             .actionable_hint = std::move(actionable_hint)
-        }
+        },
+        .diagnostics = std::move(diagnostics)
     };
 }
 
@@ -2191,7 +2195,8 @@ VideoPreviewSessionCreateResult MediaDecoder::create_video_preview_session(
         if (!backend_result.succeeded()) {
             return VideoPreviewSessionCreateResult{
                 .session = nullptr,
-                .error = std::move(backend_result.error)
+                .error = std::move(backend_result.error),
+                .diagnostics = std::move(backend_result.diagnostics)
             };
         }
 
@@ -2203,7 +2208,8 @@ VideoPreviewSessionCreateResult MediaDecoder::create_video_preview_session(
 
         return VideoPreviewSessionCreateResult{
             .session = std::unique_ptr<VideoPreviewSession>(new VideoPreviewSession(std::move(impl))),
-            .error = std::nullopt
+            .error = std::nullopt,
+            .diagnostics = std::move(backend_result.diagnostics)
         };
     } catch (const std::exception &exception) {
         return make_video_preview_session_error(
@@ -2281,7 +2287,8 @@ VideoFrameWindowDecodeResult VideoPreviewSession::seek_and_decode_window_at_time
 
         return VideoFrameWindowDecodeResult{
             .video_frames = seek_and_decode_video_frame_window(*impl_, requested_time_microseconds, maximum_frame_count),
-            .error = std::nullopt
+            .error = std::nullopt,
+            .diagnostics = {}
         };
     } catch (const std::exception &exception) {
         return make_video_frame_window_error(
@@ -2317,7 +2324,8 @@ VideoFrameWindowDecodeResult VideoPreviewSession::decode_next_window(const std::
 
         return VideoFrameWindowDecodeResult{
             .video_frames = preview_frames,
-            .error = std::nullopt
+            .error = std::nullopt,
+            .diagnostics = {}
         };
     } catch (const std::exception &exception) {
         return make_video_frame_window_error(

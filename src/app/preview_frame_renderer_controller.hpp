@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QThread>
 
+#include <atomic>
 #include <optional>
 
 class PreviewFrameRendererController final : public QObject {
@@ -31,6 +32,7 @@ signals:
 private:
     void dispatch_request(const PreviewFrameRenderRequest &request);
     void finish_request();
+    void handle_preview_skipped(quint64 request_token, qint64 requested_time_us);
     void handle_preview_ready(
         quint64 request_token,
         qint64 requested_time_us,
@@ -44,4 +46,7 @@ private:
     PreviewFrameRendererWorker *worker_{nullptr};
     bool request_in_flight_{false};
     std::optional<PreviewFrameRenderRequest> pending_request_{};
+    std::optional<PreviewFrameRenderRequest> active_request_{};
+    quint64 dispatch_generation_counter_{0};
+    std::atomic<quint64> latest_request_generation_{0};
 };

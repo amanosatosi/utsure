@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QString>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -17,6 +18,8 @@ class VideoPreviewSession;
 
 struct PreviewFrameRenderRequest final {
     quint64 request_token{0};
+    quint64 dispatch_generation{0};
+    qint64 enqueued_steady_us{0};
     QString source_path{};
     qint64 requested_time_us{0};
     bool playback_active{false};
@@ -29,7 +32,10 @@ class PreviewFrameRendererWorker final : public QObject {
     Q_OBJECT
 
 public:
-    explicit PreviewFrameRendererWorker(QObject *parent = nullptr);
+    explicit PreviewFrameRendererWorker(
+        std::atomic<quint64> *latest_request_generation,
+        QObject *parent = nullptr
+    );
     ~PreviewFrameRendererWorker() override;
 
     void render_request(const PreviewFrameRenderRequest &request);
@@ -43,6 +49,7 @@ signals:
         qint64 frame_duration_us,
         QImage image
     );
+    void preview_skipped(quint64 request_token, qint64 requested_time_us);
     void preview_failed(quint64 request_token, qint64 requested_time_us, QString title, QString detail);
 
 private:
@@ -56,12 +63,15 @@ private:
     );
     [[nodiscard]] bool cached_preview_window_covers(const QString &source_path, qint64 requested_time_us) const;
     [[nodiscard]] const utsure::core::media::DecodedVideoFrame *select_cached_preview_frame(qint64 requested_time_us) const;
-    [[nodiscard]] bool should_decode_next_preview_window(qint64 requested_time_us) const;
+    [[nodiscard]] bool should_decode_next_preview_window(const PreviewFrameRenderRequest &request) const;
     [[nodiscard]] bool should_start_sequential_prefetch(const PreviewFrameRenderRequest &request) const;
+    [[nodiscard]] bool request_is_superseded(const PreviewFrameRenderRequest &request) const;
 
     QString cached_source_path_{};
     std::vector<utsure::core::media::DecodedVideoFrame> cached_preview_frames_{};
     std::unique_ptr<utsure::core::media::VideoPreviewSession> preview_session_{};
+    std::unique_ptr<utsure::core::media::VideoPreviewSession> prefetch_session_{};
+    QString prefetch_session_source_path_{};
     quint64 preview_cache_generation_{0};
     bool prefetch_in_progress_{false};
     qint64 prefetch_window_start_us_{-1};
@@ -74,4 +84,5 @@ private:
     std::optional<utsure::core::media::Rational> cached_subtitle_sample_aspect_ratio_{};
     std::unique_ptr<utsure::core::subtitles::SubtitleRenderer> subtitle_renderer_{};
     std::unique_ptr<utsure::core::subtitles::SubtitleRenderSession> subtitle_session_{};
+    std::atomic<quint64> *latest_request_generation_{nullptr};
 };

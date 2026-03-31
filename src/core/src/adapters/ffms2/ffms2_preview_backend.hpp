@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
 
 namespace utsure::core::media::ffms2_preview {
 
@@ -88,6 +89,7 @@ private:
 struct VideoPreviewBackendCreateResult final {
     std::unique_ptr<VideoPreviewBackend> backend{};
     std::optional<MediaDecodeError> error{};
+    std::string diagnostics{};
 
     [[nodiscard]] bool succeeded() const noexcept {
         return backend != nullptr && !error.has_value();

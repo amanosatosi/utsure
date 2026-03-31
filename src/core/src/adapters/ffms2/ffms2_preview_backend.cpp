@@ -12,6 +12,7 @@ extern "C" {
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cctype>
 #include <cstdint>
@@ -21,6 +22,7 @@ extern "C" {
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -38,6 +40,7 @@ constexpr std::size_t kFfmsErrorBufferSize = 1024;
 constexpr std::int64_t kMicrosecondsPerSecond = 1000000;
 constexpr std::int64_t kAudioPrerollUs = 100000;
 constexpr std::int64_t kAudioWindowMarginUs = 500000;
+using SteadyClock = std::chrono::steady_clock;
 
 struct FfmsErrorBuffer final {
     std::array<char, kFfmsErrorBufferSize> storage{};
@@ -104,6 +107,8 @@ using SwrContextHandle = std::unique_ptr<SwrContext, SwrContextDeleter>;
 
 struct PreviewIndexLoadResult final {
     IndexHandle index{};
+    bool reused_cached_index{false};
+    std::string diagnostics{};
 };
 
 struct FrameTiming final {
@@ -124,6 +129,21 @@ struct AudioResamplePlan final {
     bool needs_resample{false};
     std::string output_channel_layout_name{"unknown"};
 };
+
+[[nodiscard]] std::int64_t elapsed_microseconds(
+    const SteadyClock::time_point started_at,
+    const SteadyClock::time_point finished_at
+) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(finished_at - started_at).count();
+}
+
+[[nodiscard]] std::string format_elapsed_milliseconds(const std::int64_t elapsed_us) {
+    std::ostringstream stream{};
+    stream.setf(std::ios::fixed, std::ios::floatfield);
+    stream.precision(2);
+    stream << (static_cast<double>(elapsed_us) / 1000.0) << "ms";
+    return stream.str();
+}
 
 [[nodiscard]] std::string path_to_utf8(const std::filesystem::path &path) {
 #ifdef _WIN32
@@ -205,21 +225,21 @@ void initialize_ffms() {
         (final_path.filename().string() + ".tmp-" + std::to_string(std::rand()));
 }
 
-void write_index_atomically(
+[[nodiscard]] bool write_index_atomically(
     const std::filesystem::path &index_path,
     FFMS_Index &index
 ) {
     std::error_code error_code;
     std::filesystem::create_directories(index_path.parent_path(), error_code);
     if (error_code) {
-        return;
+        return false;
     }
 
     const auto temporary_path = make_preview_index_temp_path(index_path);
     FfmsErrorBuffer error_buffer{};
     if (FFMS_WriteIndex(path_to_utf8(temporary_path).c_str(), &index, &error_buffer.info) != FFMS_ERROR_SUCCESS) {
         std::filesystem::remove(temporary_path, error_code);
-        return;
+        return false;
     }
 
     std::filesystem::remove(index_path, error_code);
@@ -227,24 +247,41 @@ void write_index_atomically(
     std::filesystem::rename(temporary_path, index_path, error_code);
     if (error_code) {
         std::filesystem::remove(temporary_path, error_code);
+        return false;
     }
+
+    return true;
 }
 
 [[nodiscard]] PreviewIndexLoadResult load_or_build_preview_index(const std::filesystem::path &input_path) {
     initialize_ffms();
 
+    const auto total_started_at = SteadyClock::now();
     const auto source_path_utf8 = path_to_utf8(input_path);
     const auto index_path = preview_index_path_for_source(input_path);
     FfmsErrorBuffer error_buffer{};
 
     if (std::filesystem::exists(index_path)) {
+        const auto read_started_at = SteadyClock::now();
         IndexHandle cached_index(FFMS_ReadIndex(path_to_utf8(index_path).c_str(), &error_buffer.info));
+        const auto read_elapsed_us = elapsed_microseconds(read_started_at, SteadyClock::now());
         if (cached_index != nullptr) {
             error_buffer = FfmsErrorBuffer{};
+            const auto belongs_started_at = SteadyClock::now();
             if (FFMS_IndexBelongsToFile(cached_index.get(), source_path_utf8.c_str(), &error_buffer.info) ==
                 FFMS_ERROR_SUCCESS) {
+                const auto belongs_elapsed_us = elapsed_microseconds(belongs_started_at, SteadyClock::now());
+                const auto total_elapsed_us = elapsed_microseconds(total_started_at, SteadyClock::now());
+                std::ostringstream diagnostics{};
+                diagnostics
+                    << "index=cache_hit"
+                    << " read=" << format_elapsed_milliseconds(read_elapsed_us)
+                    << " belongs=" << format_elapsed_milliseconds(belongs_elapsed_us)
+                    << " total=" << format_elapsed_milliseconds(total_elapsed_us);
                 return PreviewIndexLoadResult{
-                    .index = std::move(cached_index)
+                    .index = std::move(cached_index),
+                    .reused_cached_index = true,
+                    .diagnostics = diagnostics.str()
                 };
             }
         }
@@ -253,7 +290,9 @@ void write_index_atomically(
         std::filesystem::remove(index_path, remove_error);
     }
 
+    const auto create_indexer_started_at = SteadyClock::now();
     FFMS_Indexer *indexer = FFMS_CreateIndexer(source_path_utf8.c_str(), &error_buffer.info);
+    const auto create_indexer_elapsed_us = elapsed_microseconds(create_indexer_started_at, SteadyClock::now());
     if (indexer == nullptr) {
         throw std::runtime_error("FFMS2 could not create a preview indexer: " + error_buffer.message());
     }
@@ -265,14 +304,29 @@ void write_index_atomically(
     FFMS_TrackTypeIndexSettings(indexer, FFMS_TYPE_ATTACHMENT, 0, 0);
 
     error_buffer = FfmsErrorBuffer{};
+    const auto build_index_started_at = SteadyClock::now();
     IndexHandle built_index(FFMS_DoIndexing2(indexer, FFMS_IEH_ABORT, &error_buffer.info));
+    const auto build_index_elapsed_us = elapsed_microseconds(build_index_started_at, SteadyClock::now());
     if (built_index == nullptr) {
         throw std::runtime_error("FFMS2 preview indexing failed: " + error_buffer.message());
     }
 
-    write_index_atomically(index_path, *built_index);
+    const auto write_started_at = SteadyClock::now();
+    const bool wrote_cache_file = write_index_atomically(index_path, *built_index);
+    const auto write_elapsed_us = elapsed_microseconds(write_started_at, SteadyClock::now());
+    const auto total_elapsed_us = elapsed_microseconds(total_started_at, SteadyClock::now());
+    std::ostringstream diagnostics{};
+    diagnostics
+        << "index=build"
+        << " create_indexer=" << format_elapsed_milliseconds(create_indexer_elapsed_us)
+        << " build=" << format_elapsed_milliseconds(build_index_elapsed_us)
+        << " write=" << format_elapsed_milliseconds(write_elapsed_us)
+        << " wrote_cache=" << (wrote_cache_file ? "true" : "false")
+        << " total=" << format_elapsed_milliseconds(total_elapsed_us);
     return PreviewIndexLoadResult{
-        .index = std::move(built_index)
+        .index = std::move(built_index),
+        .reused_cached_index = false,
+        .diagnostics = diagnostics.str()
     };
 }
 
@@ -842,11 +896,13 @@ namespace {
 [[nodiscard]] VideoFrameWindowDecodeResult make_video_error_result(
     const std::filesystem::path &input_path,
     std::string message,
-    std::string actionable_hint
+    std::string actionable_hint,
+    std::string diagnostics = {}
 ) {
     return VideoFrameWindowDecodeResult{
         .video_frames = std::nullopt,
-        .error = make_error(input_path, std::move(message), std::move(actionable_hint))
+        .error = make_error(input_path, std::move(message), std::move(actionable_hint)),
+        .diagnostics = std::move(diagnostics)
     };
 }
 
@@ -869,6 +925,27 @@ namespace {
     return std::string(prefix) + error_buffer.message();
 }
 
+[[nodiscard]] std::string build_video_window_diagnostics(
+    std::string_view operation,
+    const std::size_t start_index,
+    const std::size_t end_index,
+    const std::size_t decoded_frame_count,
+    const std::int64_t ffms_get_elapsed_us,
+    const std::int64_t frame_build_elapsed_us,
+    const std::int64_t total_elapsed_us
+) {
+    std::ostringstream diagnostics{};
+    diagnostics
+        << operation
+        << " start_index=" << start_index
+        << " end_index=" << end_index
+        << " frames=" << decoded_frame_count
+        << " ffms_get=" << format_elapsed_milliseconds(ffms_get_elapsed_us)
+        << " frame_build=" << format_elapsed_milliseconds(frame_build_elapsed_us)
+        << " total=" << format_elapsed_milliseconds(total_elapsed_us);
+    return diagnostics.str();
+}
+
 }  // namespace
 
 std::filesystem::path preview_index_path_for_source(const std::filesystem::path &input_path) {
@@ -887,6 +964,7 @@ VideoFrameWindowDecodeResult VideoPreviewBackend::seek_and_decode_window_at_time
     const std::size_t maximum_frame_count
 ) noexcept {
     try {
+        const auto total_started_at = SteadyClock::now();
         if (!impl_) {
             return make_video_error_result(
                 {},
@@ -912,23 +990,37 @@ VideoFrameWindowDecodeResult VideoPreviewBackend::seek_and_decode_window_at_time
             start_index + maximum_frame_count
         );
 
+        std::int64_t ffms_get_elapsed_us = 0;
+        std::int64_t frame_build_elapsed_us = 0;
         std::vector<DecodedVideoFrame> frames{};
         frames.reserve(end_index - start_index);
         for (std::size_t frame_index = start_index; frame_index < end_index; ++frame_index) {
             FfmsErrorBuffer error_buffer{};
+            const auto get_frame_started_at = SteadyClock::now();
             const auto *frame = FFMS_GetFrame(
                 impl_->video_source.get(),
                 static_cast<int>(frame_index),
                 &error_buffer.info
             );
+            ffms_get_elapsed_us += elapsed_microseconds(get_frame_started_at, SteadyClock::now());
             if (frame == nullptr) {
                 return make_video_error_result(
                     impl_->input_path,
                     ffms_error_message("FFMS2 could not decode a preview frame: ", error_buffer),
-                    "Try seeking again or choose a different source clip."
+                    "Try seeking again or choose a different source clip.",
+                    build_video_window_diagnostics(
+                        "seek_window",
+                        start_index,
+                        end_index,
+                        frames.size(),
+                        ffms_get_elapsed_us,
+                        frame_build_elapsed_us,
+                        elapsed_microseconds(total_started_at, SteadyClock::now())
+                    )
                 );
             }
 
+            const auto build_frame_started_at = SteadyClock::now();
             frames.push_back(build_decoded_video_frame(
                 *frame,
                 impl_->frame_timings[frame_index],
@@ -937,12 +1029,22 @@ VideoFrameWindowDecodeResult VideoPreviewBackend::seek_and_decode_window_at_time
                 static_cast<std::int64_t>(frame_index),
                 impl_->sample_aspect_ratio
             ));
+            frame_build_elapsed_us += elapsed_microseconds(build_frame_started_at, SteadyClock::now());
         }
 
         impl_->next_frame_index = end_index;
         return VideoFrameWindowDecodeResult{
             .video_frames = std::move(frames),
-            .error = std::nullopt
+            .error = std::nullopt,
+            .diagnostics = build_video_window_diagnostics(
+                "seek_window",
+                start_index,
+                end_index,
+                end_index - start_index,
+                ffms_get_elapsed_us,
+                frame_build_elapsed_us,
+                elapsed_microseconds(total_started_at, SteadyClock::now())
+            )
         };
     } catch (const std::exception &exception) {
         return make_video_error_result(
@@ -955,6 +1057,7 @@ VideoFrameWindowDecodeResult VideoPreviewBackend::seek_and_decode_window_at_time
 
 VideoFrameWindowDecodeResult VideoPreviewBackend::decode_next_window(const std::size_t maximum_frame_count) noexcept {
     try {
+        const auto total_started_at = SteadyClock::now();
         if (!impl_) {
             return make_video_error_result(
                 {},
@@ -984,23 +1087,38 @@ VideoFrameWindowDecodeResult VideoPreviewBackend::decode_next_window(const std::
             impl_->next_frame_index + maximum_frame_count
         );
 
+        const std::size_t start_index = impl_->next_frame_index;
+        std::int64_t ffms_get_elapsed_us = 0;
+        std::int64_t frame_build_elapsed_us = 0;
         std::vector<DecodedVideoFrame> frames{};
         frames.reserve(end_index - impl_->next_frame_index);
         for (std::size_t frame_index = impl_->next_frame_index; frame_index < end_index; ++frame_index) {
             FfmsErrorBuffer error_buffer{};
+            const auto get_frame_started_at = SteadyClock::now();
             const auto *frame = FFMS_GetFrame(
                 impl_->video_source.get(),
                 static_cast<int>(frame_index),
                 &error_buffer.info
             );
+            ffms_get_elapsed_us += elapsed_microseconds(get_frame_started_at, SteadyClock::now());
             if (frame == nullptr) {
                 return make_video_error_result(
                     impl_->input_path,
                     ffms_error_message("FFMS2 could not decode a sequential preview frame: ", error_buffer),
-                    "Seek to another position or choose a different source clip."
+                    "Seek to another position or choose a different source clip.",
+                    build_video_window_diagnostics(
+                        "next_window",
+                        start_index,
+                        end_index,
+                        frames.size(),
+                        ffms_get_elapsed_us,
+                        frame_build_elapsed_us,
+                        elapsed_microseconds(total_started_at, SteadyClock::now())
+                    )
                 );
             }
 
+            const auto build_frame_started_at = SteadyClock::now();
             frames.push_back(build_decoded_video_frame(
                 *frame,
                 impl_->frame_timings[frame_index],
@@ -1009,12 +1127,22 @@ VideoFrameWindowDecodeResult VideoPreviewBackend::decode_next_window(const std::
                 static_cast<std::int64_t>(frame_index),
                 impl_->sample_aspect_ratio
             ));
+            frame_build_elapsed_us += elapsed_microseconds(build_frame_started_at, SteadyClock::now());
         }
 
         impl_->next_frame_index = end_index;
         return VideoFrameWindowDecodeResult{
             .video_frames = std::move(frames),
-            .error = std::nullopt
+            .error = std::nullopt,
+            .diagnostics = build_video_window_diagnostics(
+                "next_window",
+                start_index,
+                end_index,
+                end_index - start_index,
+                ffms_get_elapsed_us,
+                frame_build_elapsed_us,
+                elapsed_microseconds(total_started_at, SteadyClock::now())
+            )
         };
     } catch (const std::exception &exception) {
         return make_video_error_result(
@@ -1207,6 +1335,7 @@ VideoPreviewBackendCreateResult create_video_preview_backend(
     const DecodeNormalizationPolicy &normalization_policy
 ) noexcept {
     try {
+        const auto total_started_at = SteadyClock::now();
         const auto normalized_input_path = input_path.lexically_normal();
         const auto input_path_string = display_path_string(normalized_input_path);
 
@@ -1258,11 +1387,14 @@ VideoPreviewBackendCreateResult create_video_preview_backend(
 
         auto index_result = load_or_build_preview_index(normalized_input_path);
         FfmsErrorBuffer error_buffer{};
+        const auto video_track_lookup_started_at = SteadyClock::now();
         const int video_track_index = FFMS_GetFirstIndexedTrackOfType(
             index_result.index.get(),
             FFMS_TYPE_VIDEO,
             &error_buffer.info
         );
+        const auto video_track_lookup_elapsed_us =
+            elapsed_microseconds(video_track_lookup_started_at, SteadyClock::now());
         if (video_track_index < 0) {
             return VideoPreviewBackendCreateResult{
                 .backend = nullptr,
@@ -1270,10 +1402,12 @@ VideoPreviewBackendCreateResult create_video_preview_backend(
                     normalized_input_path,
                     "No previewable video stream was found in '" + input_path_string + "'.",
                     "Provide a media file that contains a decodable video stream before enabling Preview."
-                )
+                ),
+                .diagnostics = index_result.diagnostics
             };
         }
 
+        const auto create_video_source_started_at = SteadyClock::now();
         VideoSourceHandle video_source(FFMS_CreateVideoSource(
             path_to_utf8(normalized_input_path).c_str(),
             video_track_index,
@@ -1282,6 +1416,8 @@ VideoPreviewBackendCreateResult create_video_preview_backend(
             FFMS_SEEK_NORMAL,
             &error_buffer.info
         ));
+        const auto create_video_source_elapsed_us =
+            elapsed_microseconds(create_video_source_started_at, SteadyClock::now());
         if (video_source == nullptr) {
             return VideoPreviewBackendCreateResult{
                 .backend = nullptr,
@@ -1289,7 +1425,8 @@ VideoPreviewBackendCreateResult create_video_preview_backend(
                     normalized_input_path,
                     "FFMS2 could not open the preview video stream for '" + input_path_string + "'.",
                     error_buffer.message()
-                )
+                ),
+                .diagnostics = index_result.diagnostics
             };
         }
 
@@ -1302,12 +1439,15 @@ VideoPreviewBackendCreateResult create_video_preview_backend(
                     normalized_input_path,
                     "The selected source does not expose a primary video stream for preview.",
                     "Choose a source file with a decodable video stream before enabling Preview."
-                )
+                ),
+                .diagnostics = index_result.diagnostics
             };
         }
 
+        const auto first_frame_started_at = SteadyClock::now();
         error_buffer = FfmsErrorBuffer{};
         const auto *first_frame = FFMS_GetFrame(video_source.get(), 0, &error_buffer.info);
+        const auto first_frame_elapsed_us = elapsed_microseconds(first_frame_started_at, SteadyClock::now());
         if (first_frame == nullptr) {
             return VideoPreviewBackendCreateResult{
                 .backend = nullptr,
@@ -1315,7 +1455,8 @@ VideoPreviewBackendCreateResult create_video_preview_backend(
                     normalized_input_path,
                     "FFMS2 could not decode the first preview frame.",
                     error_buffer.message()
-                )
+                ),
+                .diagnostics = index_result.diagnostics
             };
         }
 
@@ -1332,11 +1473,13 @@ VideoPreviewBackendCreateResult create_video_preview_backend(
                     normalized_input_path,
                     "FFMS2 could not resolve an RGBA preview pixel format.",
                     "Keep the preview backend built against a swscale-capable FFMS2/FFmpeg stack."
-                )
+                ),
+                .diagnostics = index_result.diagnostics
             };
         }
 
         const int target_formats[2] = {rgba_pixel_format, -1};
+        const auto output_format_started_at = SteadyClock::now();
         error_buffer = FfmsErrorBuffer{};
         if (FFMS_SetOutputFormatV2(
                 video_source.get(),
@@ -1352,9 +1495,11 @@ VideoPreviewBackendCreateResult create_video_preview_backend(
                     normalized_input_path,
                     "FFMS2 could not normalize preview frames to RGBA output.",
                     error_buffer.message()
-                )
+                ),
+                .diagnostics = index_result.diagnostics
             };
         }
+        const auto output_format_elapsed_us = elapsed_microseconds(output_format_started_at, SteadyClock::now());
 
         const auto *time_base = FFMS_GetTimeBase(video_track);
         if (time_base == nullptr || time_base->Num <= 0 || time_base->Den <= 0) {
@@ -1364,7 +1509,8 @@ VideoPreviewBackendCreateResult create_video_preview_backend(
                     normalized_input_path,
                     "FFMS2 did not expose a usable preview video time base.",
                     "Choose a source file with readable video timestamps before enabling Preview."
-                )
+                ),
+                .diagnostics = index_result.diagnostics
             };
         }
 
@@ -1382,11 +1528,26 @@ VideoPreviewBackendCreateResult create_video_preview_backend(
             .denominator = std::max(video_properties->SARDen, 1)
         };
         impl->frame_count = video_properties->NumFrames;
+        const auto frame_timings_started_at = SteadyClock::now();
         impl->frame_timings = build_frame_timings(*video_track, *time_base, *video_properties);
+        const auto frame_timings_elapsed_us = elapsed_microseconds(frame_timings_started_at, SteadyClock::now());
+
+        const auto total_elapsed_us = elapsed_microseconds(total_started_at, SteadyClock::now());
+        std::ostringstream diagnostics{};
+        diagnostics
+            << "create_video_preview_backend"
+            << " " << index_result.diagnostics
+            << " track_lookup=" << format_elapsed_milliseconds(video_track_lookup_elapsed_us)
+            << " create_video_source=" << format_elapsed_milliseconds(create_video_source_elapsed_us)
+            << " first_frame_probe=" << format_elapsed_milliseconds(first_frame_elapsed_us)
+            << " output_format=" << format_elapsed_milliseconds(output_format_elapsed_us)
+            << " frame_timing=" << format_elapsed_milliseconds(frame_timings_elapsed_us)
+            << " total=" << format_elapsed_milliseconds(total_elapsed_us);
 
         return VideoPreviewBackendCreateResult{
             .backend = std::unique_ptr<VideoPreviewBackend>(new VideoPreviewBackend(std::move(impl))),
-            .error = std::nullopt
+            .error = std::nullopt,
+            .diagnostics = diagnostics.str()
         };
     } catch (const std::exception &exception) {
         return VideoPreviewBackendCreateResult{

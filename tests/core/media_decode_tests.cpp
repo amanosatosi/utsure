@@ -210,23 +210,55 @@ int run_preview_session_sequential_assertion(const std::filesystem::path &sample
         return fail(error_message);
     }
 
-    constexpr std::size_t kPreviewWindowFrameCount = 96;
-    auto first_window_result = session_result.session->seek_and_decode_window_at_time(0, kPreviewWindowFrameCount);
+    if (session_result.diagnostics.empty()) {
+        return fail("Preview session creation did not report FFMS2 setup diagnostics.");
+    }
+
+    auto interactive_window_result = session_result.session->seek_and_decode_window_at_time(0, 1);
+    if (!interactive_window_result.succeeded()) {
+        const std::string error_message =
+            "The initial one-frame preview seek failed unexpectedly: " +
+            interactive_window_result.error->message +
+            " Hint: " +
+            interactive_window_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    if (interactive_window_result.diagnostics.empty()) {
+        return fail("The interactive preview seek did not report FFMS2 decode diagnostics.");
+    }
+
+    const auto &interactive_window = *interactive_window_result.video_frames;
+    if (interactive_window.size() != 1) {
+        return fail("The interactive preview seek did not return exactly one frame.");
+    }
+
+    constexpr std::size_t kPlaybackWindowFrameCount = 96;
+    auto first_window_result = session_result.session->decode_next_window(kPlaybackWindowFrameCount);
     if (!first_window_result.succeeded()) {
         const std::string error_message =
-            "The initial preview seek window failed unexpectedly: " +
+            "The sequential preview window failed unexpectedly after the one-frame seek: " +
             first_window_result.error->message +
             " Hint: " +
             first_window_result.error->actionable_hint;
         return fail(error_message);
     }
 
-    const auto &first_window = *first_window_result.video_frames;
-    if (first_window.size() != kPreviewWindowFrameCount) {
-        return fail("The initial preview seek window did not fill the expected 96-frame cache window.");
+    if (first_window_result.diagnostics.empty()) {
+        return fail("The sequential preview window did not report FFMS2 decode diagnostics.");
     }
 
-    auto second_window_result = session_result.session->decode_next_window(kPreviewWindowFrameCount);
+    const auto &first_window = *first_window_result.video_frames;
+    if (first_window.size() != kPlaybackWindowFrameCount) {
+        return fail("The sequential preview window after the one-frame seek did not fill the expected 96-frame cache window.");
+    }
+
+    if (first_window.front().timestamp.start_microseconds <=
+        interactive_window.front().timestamp.start_microseconds) {
+        return fail("The sequential preview window did not advance beyond the interactive one-frame seek.");
+    }
+
+    auto second_window_result = session_result.session->decode_next_window(kPlaybackWindowFrameCount);
     if (!second_window_result.succeeded()) {
         const std::string error_message =
             "The sequential preview window failed unexpectedly after the first 96-frame window: " +
@@ -234,6 +266,10 @@ int run_preview_session_sequential_assertion(const std::filesystem::path &sample
             " Hint: " +
             second_window_result.error->actionable_hint;
         return fail(error_message);
+    }
+
+    if (second_window_result.diagnostics.empty()) {
+        return fail("The second sequential preview window did not report FFMS2 decode diagnostics.");
     }
 
     const auto &second_window = *second_window_result.video_frames;
@@ -260,6 +296,8 @@ int run_preview_session_sequential_assertion(const std::filesystem::path &sample
         return fail("Preview seek after sequential playback returned no frames.");
     }
 
+    std::cout << "interactive_window.frames=" << interactive_window.size() << '\n';
+    std::cout << "interactive_window.start_us=" << interactive_window.front().timestamp.start_microseconds << '\n';
     std::cout << "first_window.frames=" << first_window.size() << '\n';
     std::cout << "second_window.frames=" << second_window.size() << '\n';
     std::cout << "second_window.first_start_us=" << second_window.front().timestamp.start_microseconds << '\n';

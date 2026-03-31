@@ -27,6 +27,7 @@ This file is the living execution plan for the repository. Update it when a mile
   * M19 Automatic subtitle selection completed.
   * M20 FontCollector-based subtitle font recovery and fallback completed.
   * M21 Global parallel batch encoding with bounded job counts and pre-reserved output naming completed.
+  * M22 FFMS2 preview latency investigation and responsiveness hardening completed.
 
 ## Active assumptions
 
@@ -85,6 +86,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M19 slice is limited to same-folder subtitle discovery with strict exact-stem and exact `.fx`-qualified matches; it intentionally avoids recursive search and loose partial-name guessing.
 - The current M20 slice is limited to explicit FontCollector-based recovery for ASS/SSA subtitle session preparation, staged into a job-scoped temporary font directory and applied through the existing subtitle renderer abstraction when available.
 - The current M21 slice is limited to global batch-level parallel scheduling, bounded per-job thread/buffer planning, and pre-reserved auto output naming; it does not add new per-queue tabs or broader encode-policy changes beyond those execution-planning surfaces.
+- The current M22 slice is limited to FFMS2-based preview responsiveness: timing instrumentation, lower-latency interactive seek behavior, request coalescing hardening, and safer prefetch/session reuse without changing unrelated encode or GUI layout behavior.
 
 ## Architecture direction
 
@@ -829,5 +831,23 @@ Validation:
   * Verify that only exact divisors of the detected usable thread count are offered and that the resulting threads/job and buffer/job values follow the documented tiers.
   * Verify that the batch planner reserves auto-managed output paths before worker startup and rejects duplicate final output paths within the run.
   * Local validation for this slice is limited to patch-level checks because compile/test validation is reserved for GitHub Actions in this repository.
+
+### M22 Improve FFMS2 preview responsiveness and latency visibility
+
+Status: Completed
+
+Scope:
+  * Investigate the FFMS2-backed video preview path and add lightweight timing instrumentation so preview latency costs are visible.
+  * Prioritize low-latency interactive seek/scrub requests over large cache-window refills while keeping playback/prefetch behavior intact.
+  * Reuse preview setup more effectively, especially around prefetch, without violating FFMS2 per-source thread-safety rules.
+  * Keep subtitle-enabled preview correctness, existing error handling, and the current preview UI layout intact.
+
+Current slice status:
+  * Completed: instrumented the preview controller, worker, and FFMS2 backend so preview logs now report queue wait, session-creation timing, index load/build reuse, video-source setup, frame-timing-table construction, decode-window cost, subtitle composition, final image-copy cost, and total request latency.
+  * Completed: split preview refill behavior so interactive scrubs decode a single frame by default, while playback keeps the existing larger sequential window behavior for smoother forward motion and prefetch.
+  * Completed: hardened newest-request-wins behavior by tagging each dispatched preview request with a controller-side generation and letting the worker skip superseded work before subtitle composition and QImage conversion when newer scrub requests arrive.
+  * Completed: replaced per-prefetch session recreation with a reusable secondary preview session for the active source so background playback prefetch can reuse FFMS2 setup without touching the same source context concurrently.
+  * Completed: reduced unnecessary frame copying by avoiding a full decoded-frame copy on subtitle-free preview requests, and added focused core regression coverage for one-frame interactive seek plus reusable sequential preview-session playback.
+  * Validation note: local runtime measurements and local C++ build/test execution were intentionally not run because this repository keeps compile/test validation in GitHub Actions; the local validation step for this slice was limited to code-path inspection, targeted regression-test updates, and `git diff --check`.
 
 ## Immediate next milestone
