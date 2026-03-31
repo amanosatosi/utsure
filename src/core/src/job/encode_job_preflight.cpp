@@ -2,6 +2,7 @@
 
 #include "encode_job_working_set_guard.hpp"
 #include "utsure/core/media/media_inspector.hpp"
+#include "utsure/core/subtitles/subtitle_font_recovery.hpp"
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 
 #include <algorithm>
@@ -324,13 +325,14 @@ void validate_subtitle_session(
     }
 
     const auto &video_stream = *main_segment_info.primary_video_stream;
-    auto session_result = subtitle_renderer->create_session(SubtitleRenderSessionCreateRequest{
+    auto prepared_session_request = subtitles::prepare_subtitle_render_session_request(SubtitleRenderSessionCreateRequest{
         .subtitle_path = job.subtitles->subtitle_path,
         .format_hint = job.subtitles->format_hint,
         .canvas_width = video_stream.width,
         .canvas_height = video_stream.height,
         .sample_aspect_ratio = video_stream.sample_aspect_ratio
     });
+    auto session_result = subtitle_renderer->create_session(prepared_session_request.session_request);
     if (!session_result.succeeded()) {
         append_issue(
             issues,

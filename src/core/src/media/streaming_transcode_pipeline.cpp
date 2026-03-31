@@ -4,6 +4,7 @@
 #include "transcode_threading.hpp"
 #include "../subtitles/subtitle_bitmap_compositor.hpp"
 #include "utsure/core/media/media_inspector.hpp"
+#include "utsure/core/subtitles/subtitle_font_recovery.hpp"
 
 extern "C" {
 #include <libavutil/mathematics.h>
@@ -3613,14 +3614,20 @@ SegmentProcessResult process_segment(
     return result;
 }
 
-subtitles::SubtitleRenderSessionResult create_subtitle_session(
+struct PreparedSubtitleSession final {
+    subtitles::PreparedSubtitleRenderSessionRequest prepared_request{};
+    subtitles::SubtitleRenderSessionResult session_result{};
+};
+
+PreparedSubtitleSession create_subtitle_session(
     subtitles::SubtitleRenderer &subtitle_renderer,
     const timeline::TimelinePlan &timeline_plan,
-    const job::EncodeJobSubtitleSettings &subtitle_settings
+    const job::EncodeJobSubtitleSettings &subtitle_settings,
+    const std::function<void(const std::string &)> &log_callback
 ) {
     const auto &main_segment_info = timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info;
     const auto &video_stream = *main_segment_info.primary_video_stream;
-    return subtitle_renderer.create_session(subtitles::SubtitleRenderSessionCreateRequest{
+    auto prepared_request = subtitles::prepare_subtitle_render_session_request(subtitles::SubtitleRenderSessionCreateRequest{
         .subtitle_path = subtitle_settings.subtitle_path,
         .format_hint = subtitle_settings.format_hint,
         .canvas_width = video_stream.width,
@@ -3629,6 +3636,19 @@ subtitles::SubtitleRenderSessionResult create_subtitle_session(
             ? video_stream.sample_aspect_ratio
             : Rational{1, 1}
     });
+
+    if (!prepared_request.font_recovery_report.message.empty()) {
+        emit_runtime_log(log_callback, prepared_request.font_recovery_report.message);
+    }
+    if (!prepared_request.font_recovery_report.actionable_hint.empty()) {
+        emit_runtime_log(log_callback, "Hint: " + prepared_request.font_recovery_report.actionable_hint);
+    }
+
+    auto session_result = subtitle_renderer.create_session(prepared_request.session_request);
+    return PreparedSubtitleSession{
+        .prepared_request = std::move(prepared_request),
+        .session_result = std::move(session_result)
+    };
 }
 
 StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request) {
@@ -3726,21 +3746,23 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
             )
         );
 
+        std::optional<PreparedSubtitleSession> prepared_subtitle_session{};
         std::unique_ptr<subtitles::SubtitleRenderSession> subtitle_session{};
         if (request.subtitle_settings != nullptr && request.subtitle_settings->has_value()) {
-            auto session_result = create_subtitle_session(
+            prepared_subtitle_session = create_subtitle_session(
                 *request.subtitle_renderer,
                 timeline_plan,
-                request.subtitle_settings->value()
+                request.subtitle_settings->value(),
+                request.log_callback
             );
-            if (!session_result.succeeded()) {
+            if (!prepared_subtitle_session->session_result.succeeded()) {
                 return make_error(
-                    session_result.error->message,
-                    session_result.error->actionable_hint
+                    prepared_subtitle_session->session_result.error->message,
+                    prepared_subtitle_session->session_result.error->actionable_hint
                 );
             }
 
-            subtitle_session = std::move(session_result.session);
+            subtitle_session = std::move(prepared_subtitle_session->session_result.session);
         }
 
         timeline::TimelineCompositionSummary timeline_summary{

@@ -435,6 +435,29 @@ add_test(
     COMMAND utsure_core_subtitle_auto_selection_tests
 )
 
+add_executable(utsure_core_subtitle_font_recovery_tests
+    subtitle_font_recovery_tests.cpp
+)
+
+target_link_libraries(utsure_core_subtitle_font_recovery_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_include_directories(utsure_core_subtitle_font_recovery_tests
+    PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/core/src"
+)
+
+target_compile_features(utsure_core_subtitle_font_recovery_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_subtitle_font_recovery_tests)
+
+add_test(
+    NAME utsure.core.subtitles.font_recovery
+    COMMAND utsure_core_subtitle_font_recovery_tests
+)
+
 add_executable(utsure_core_timeline_tests
     timeline_tests.cpp
 )

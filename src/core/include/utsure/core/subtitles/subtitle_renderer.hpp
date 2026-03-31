@@ -22,6 +22,7 @@ struct SubtitleRenderSessionCreateRequest final {
     int canvas_width{0};
     int canvas_height{0};
     media::Rational sample_aspect_ratio{1, 1};
+    std::optional<std::filesystem::path> font_search_directory{};
 };
 
 struct SubtitleRenderRequest final {

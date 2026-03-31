@@ -25,7 +25,7 @@ This file is the living execution plan for the repository. Update it when a mile
   * Remaining FFMS2 preview-backend follow-up and CI validation are deferred and no longer block M17 completion.
   * M18 Automatic output naming completed.
   * M19 Automatic subtitle selection completed.
-  * M20 FontCollector-based subtitle font recovery and fallback planned.
+  * M20 FontCollector-based subtitle font recovery and fallback completed.
 
 ## Active assumptions
 
@@ -82,6 +82,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M18 slice is limited to predictable default output-path generation plus GUI wiring for custom text and manual override preservation; it does not add a separate output-container selector.
 - The current M18 slice assumes the generated default should reuse the current output-path extension when one is already present and otherwise fall back to `.mp4` until a dedicated container-selection surface exists.
 - The current M19 slice is limited to same-folder subtitle discovery with strict exact-stem and exact `.fx`-qualified matches; it intentionally avoids recursive search and loose partial-name guessing.
+- The current M20 slice is limited to explicit FontCollector-based recovery for ASS/SSA subtitle session preparation, staged into a job-scoped temporary font directory and applied through the existing subtitle renderer abstraction when available.
 
 ## Architecture direction
 
@@ -752,7 +753,7 @@ Done criteria:
 
 ### M20 Add FontCollector-based subtitle font recovery and fallback
 
-Status: Planned
+Status: Completed
 
 Scope:
   * Add a font-recovery path using `FontCollector` to improve subtitle font correctness when the normal Windows/system-font path fails in real-world encode runs.
@@ -779,12 +780,14 @@ Validation:
   * Verify that subtitle rendering can use recovered fonts when the normal system-font path would otherwise produce incorrect styling.
   * Verify that jobs still behave predictably when the recovery step finds no additional fonts or when the tool is unavailable.
   * Verify that the integration remains bounded and explicit, with clear logs/reporting about whether recovered fonts were used.
+  * Local validation for this slice is limited to patch-level checks because compile/test validation is reserved for GitHub Actions in this repository.
 
 Done criteria:
   * The app can use `FontCollector` as an explicit fallback path for ASS subtitle font recovery.
   * Recovered fonts can be made available to the subtitle pipeline so bad-font cases are reduced in practical Windows encode runs.
   * The integration preserves the existing `encoder-core` vs desktop-shell separation and does not bury tool-specific policy across unrelated modules.
+  * Implemented with a dedicated subtitle session-preparation helper, a small core external-tool runner, explicit encode-path logs for recovered/no-font/tool-unavailable cases, and focused stub-driven core tests plus CI target coverage.
 
 ## Immediate next milestone
 
-M19 Add automatic subtitle selection with explicit priority rules.
+No next milestone is scheduled in `PLANS.md` yet.

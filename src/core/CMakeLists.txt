@@ -6,6 +6,7 @@ add_library(utsure_encoder_core STATIC
     src/job/encode_job_preflight.cpp
     src/job/encode_job_report.cpp
     src/job/output_naming.cpp
+    src/process/external_tool_runner.cpp
     src/media/audio_output.cpp
     src/media/decoded_media.cpp
     src/media/ffmpeg_media_support.cpp
@@ -18,6 +19,7 @@ add_library(utsure_encoder_core STATIC
     src/subtitles/subtitle_bitmap_compositor.cpp
     src/subtitles/subtitle_burn_in.cpp
     src/subtitles/subtitle_auto_selection.cpp
+    src/subtitles/subtitle_font_recovery.cpp
     src/subtitles/subtitle_frame_composer.cpp
     src/subtitles/subtitle_renderer.cpp
     src/timeline/timeline.cpp

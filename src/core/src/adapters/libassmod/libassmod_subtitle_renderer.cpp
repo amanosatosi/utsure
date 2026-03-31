@@ -149,6 +149,18 @@ LibraryHandle create_library() {
     return library;
 }
 
+void configure_library_fonts(
+    ASS_Library &library,
+    const SubtitleRenderSessionCreateRequest &request
+) {
+    if (!request.font_search_directory.has_value()) {
+        return;
+    }
+
+    const auto font_directory_utf8 = path_to_utf8_string(*request.font_search_directory);
+    ass_set_fonts_dir(&library, font_directory_utf8.c_str());
+}
+
 RendererHandle create_renderer(
     ASS_Library &library,
     const SubtitleRenderSessionCreateRequest &request
@@ -330,7 +342,32 @@ public:
                 );
             }
 
+            if (request.font_search_directory.has_value()) {
+                if (request.font_search_directory->empty()) {
+                    return make_session_error(
+                        request,
+                        "Cannot create a subtitle render session because the recovered-font directory is empty.",
+                        "Provide an existing directory of recovered font files, or clear the fallback font directory."
+                    );
+                }
+
+                std::error_code font_directory_error{};
+                const bool font_directory_exists =
+                    std::filesystem::exists(*request.font_search_directory, font_directory_error);
+                if (font_directory_error || !font_directory_exists ||
+                    !std::filesystem::is_directory(*request.font_search_directory, font_directory_error) ||
+                    font_directory_error) {
+                    return make_session_error(
+                        request,
+                        "Cannot create a subtitle render session because the recovered-font directory is not available.",
+                        "Re-run the subtitle font recovery step, or clear the fallback directory and rely on the "
+                        "normal system-font path."
+                    );
+                }
+            }
+
             auto library = create_library();
+            configure_library_fonts(*library, request);
             auto renderer = create_renderer(*library, request);
             const auto script_feature_scan = scan_script_features(normalized_path);
             if (script_feature_scan.references_tag_images) {

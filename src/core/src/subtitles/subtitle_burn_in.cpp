@@ -2,6 +2,7 @@
 
 #include "subtitle_bitmap_compositor.hpp"
 #include "utsure/core/subtitles/subtitle_frame_composer.hpp"
+#include "utsure/core/subtitles/subtitle_font_recovery.hpp"
 
 #include <utility>
 
@@ -45,15 +46,15 @@ SubtitleBurnInResult apply(
         );
     }
 
-    const SubtitleRenderSessionCreateRequest session_request{
+    auto prepared_session_request = prepare_subtitle_render_session_request(SubtitleRenderSessionCreateRequest{
         .subtitle_path = subtitle_settings.subtitle_path,
         .format_hint = subtitle_settings.format_hint,
         .canvas_width = first_frame.width,
         .canvas_height = first_frame.height,
         .sample_aspect_ratio = first_frame.sample_aspect_ratio
-    };
+    });
 
-    SubtitleRenderSessionResult session_result = subtitle_renderer.create_session(session_request);
+    SubtitleRenderSessionResult session_result = subtitle_renderer.create_session(prepared_session_request.session_request);
     if (!session_result.succeeded()) {
         return make_error(
             session_result.error->message,
