@@ -57,6 +57,7 @@ public:
         bool same_as_input{true};
         bool subtitle_enabled{false};
         QString subtitle_path{};
+        bool subtitle_manual_override{false};
         bool intro_enabled{false};
         QString intro_path{};
         bool intro_music_enabled{false};
@@ -116,6 +117,7 @@ private:
     void choose_output_path();
     void restore_selected_job_auto_output_path();
     void choose_subtitle_file();
+    void restore_selected_job_auto_subtitle_selection();
     void choose_intro_clip();
     void choose_intro_music_file();
     void choose_endcard_clip();
@@ -143,6 +145,7 @@ private:
     void apply_same_as_input_folder(UiEncodeJob &job);
     void apply_generated_output_path(int job_index, bool force_auto_mode);
     [[nodiscard]] QString generate_output_path_for_job(const UiEncodeJob &job) const;
+    void apply_automatic_subtitle_selection(int job_index, bool force_auto_mode, QString *decision_summary = nullptr);
     void request_selected_job_preview_frame();
     void clear_preview_surface();
     void start_preview_playback();
@@ -236,6 +239,7 @@ private:
     QTabWidget *editor_tabs_{nullptr};
     QCheckBox *subtitle_enable_check_{nullptr};
     QLineEdit *subtitle_path_edit_{nullptr};
+    QPushButton *subtitle_auto_button_{nullptr};
     QPushButton *subtitle_browse_button_{nullptr};
     QCheckBox *intro_enable_check_{nullptr};
     QLineEdit *intro_path_edit_{nullptr};

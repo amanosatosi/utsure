@@ -24,7 +24,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M17 Desktop GUI quality and usability completed.
   * Remaining FFMS2 preview-backend follow-up and CI validation are deferred and no longer block M17 completion.
   * M18 Automatic output naming completed.
-  * M19 Automatic subtitle selection planned.
+  * M19 Automatic subtitle selection completed.
   * M20 FontCollector-based subtitle font recovery and fallback planned.
 
 ## Active assumptions
@@ -81,6 +81,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M17 preview-pane usability slice now also hides that dedicated preview footer unless the pointer is over the preview region, so the default state gives more height back to the video surface.
 - The current M18 slice is limited to predictable default output-path generation plus GUI wiring for custom text and manual override preservation; it does not add a separate output-container selector.
 - The current M18 slice assumes the generated default should reuse the current output-path extension when one is already present and otherwise fall back to `.mp4` until a dedicated container-selection surface exists.
+- The current M19 slice is limited to same-folder subtitle discovery with strict exact-stem and exact `.fx`-qualified matches; it intentionally avoids recursive search and loose partial-name guessing.
 
 ## Architecture direction
 
@@ -718,7 +719,7 @@ Done criteria:
 
 ### M19 Add automatic subtitle selection with explicit priority rules
 
-Status: Planned
+Status: Completed
 
 Scope:
   * Add automatic subtitle discovery and selection for the current source workflow.
@@ -741,11 +742,13 @@ Validation:
   * Verify subtitle auto-selection for one source with no matching subtitle, one matching `.ass` subtitle, and multiple matching subtitle candidates.
   * Verify that a candidate containing `.fx` before `.ass` is preferred over an otherwise matching plain `.ass` candidate.
   * Verify that manual subtitle selection can still override the automatic result.
+  * Local validation for this slice is limited to patch-level checks because compile/test validation is reserved for GitHub Actions in this repository.
 
 Done criteria:
   * The app can auto-select a subtitle file when a clear matching candidate exists.
   * Priority rules are explicit enough to test and explain.
   * `.fx`-qualified ASS subtitles win over lower-priority ASS candidates when both match the same source.
+  * Implemented with a dedicated core selector, UI auto/manual override wiring, focused subtitle-selection tests, and CI target coverage for the new test executable.
 
 ### M20 Add FontCollector-based subtitle font recovery and fallback
 

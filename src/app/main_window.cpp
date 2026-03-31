@@ -9,6 +9,7 @@
 #include "utsure/core/job/output_naming.hpp"
 #include "utsure/core/job/encode_job_preflight.hpp"
 #include "utsure/core/media/media_inspector.hpp"
+#include "utsure/core/subtitles/subtitle_auto_selection.hpp"
 
 #include <QAbstractButton>
 #include <QAbstractItemView>
@@ -1067,12 +1068,33 @@ QLabel#PreviewTimeBadge {
     auto *subtitle_group = new QGroupBox("Subtitle", main_tab_content);
     auto *subtitle_layout = new QGridLayout(subtitle_group);
     subtitle_enable_check_ = new QCheckBox("Enable subtitle burn-in", subtitle_group);
-    const auto subtitle_row = create_path_field(subtitle_group, "Optional subtitle file", "Choose subtitle file");
-    subtitle_path_edit_ = subtitle_row.line_edit;
-    subtitle_browse_button_ = subtitle_row.browse_button;
+    auto *subtitle_path_row = new QWidget(subtitle_group);
+    auto *subtitle_path_layout = new QHBoxLayout(subtitle_path_row);
+    subtitle_path_layout->setContentsMargins(0, 0, 0, 0);
+    subtitle_path_layout->setSpacing(8);
+    subtitle_path_edit_ = new QLineEdit(subtitle_path_row);
+    subtitle_path_edit_->setPlaceholderText("Automatic or manual subtitle file");
+    subtitle_auto_button_ = new QPushButton("Auto", subtitle_path_row);
+    subtitle_auto_button_->setToolTip("Restore automatic subtitle selection");
+    subtitle_auto_button_->setCursor(Qt::PointingHandCursor);
+    subtitle_browse_button_ = new QPushButton(subtitle_path_row);
+    subtitle_browse_button_->setProperty("browseButton", true);
+    subtitle_browse_button_->setToolTip("Choose subtitle file");
+    subtitle_browse_button_->setCursor(Qt::PointingHandCursor);
+    apply_icon_or_text(subtitle_browse_button_, ":/icons/browse.svg", "...", QSize(15, 15), 30, 30, false);
+    subtitle_path_layout->addWidget(subtitle_path_edit_, 1);
+    subtitle_path_layout->addWidget(subtitle_auto_button_);
+    subtitle_path_layout->addWidget(subtitle_browse_button_);
+    auto *subtitle_note = new QLabel(
+        "Automatic selection checks only the source folder for an exact stem match or an exact '.fx' subtitle variant.",
+        subtitle_group
+    );
+    subtitle_note->setObjectName("MutedNote");
+    subtitle_note->setWordWrap(true);
     subtitle_layout->addWidget(subtitle_enable_check_, 0, 0, 1, 2);
     subtitle_layout->addWidget(new QLabel("Subtitle file", subtitle_group), 1, 0);
-    subtitle_layout->addWidget(subtitle_row.container, 1, 1);
+    subtitle_layout->addWidget(subtitle_path_row, 1, 1);
+    subtitle_layout->addWidget(subtitle_note, 2, 0, 1, 2);
     main_tab_layout->addWidget(subtitle_group);
 
     auto *intro_group = new QGroupBox("Intro", main_tab_content);
@@ -1471,6 +1493,7 @@ QLabel#PreviewTimeBadge {
 
     connect(output_auto_button_, &QPushButton::clicked, this, &MainWindow::restore_selected_job_auto_output_path);
     connect(output_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_output_path);
+    connect(subtitle_auto_button_, &QPushButton::clicked, this, &MainWindow::restore_selected_job_auto_subtitle_selection);
     connect(subtitle_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_subtitle_file);
     connect(intro_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_intro_clip);
     connect(intro_music_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_intro_music_file);
@@ -1495,6 +1518,20 @@ QLabel#PreviewTimeBadge {
         jobs_[static_cast<std::size_t>(selected_job_index_)].output_path_manual_override = true;
     });
     connect(output_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(subtitle_enable_check_, &QCheckBox::clicked, this, [this](bool) {
+        if (!is_valid_job_index(selected_job_index_)) {
+            return;
+        }
+
+        jobs_[static_cast<std::size_t>(selected_job_index_)].subtitle_manual_override = true;
+    });
+    connect(subtitle_path_edit_, &QLineEdit::textEdited, this, [this](const QString &) {
+        if (!is_valid_job_index(selected_job_index_)) {
+            return;
+        }
+
+        jobs_[static_cast<std::size_t>(selected_job_index_)].subtitle_manual_override = true;
+    });
     connect(subtitle_enable_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
     connect(subtitle_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
     connect(intro_enable_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
@@ -1535,7 +1572,7 @@ QString MainWindow::window_structure_summary() const {
         "- Toolbar: left controls, centered branding, right-side priority/start/stop\n"
         "- Queue row: batch queue table plus selected-job details summary\n"
         "- Output strip: output path, auto-name action, and Same as input toggle\n"
-        "- Left tabs: Main, Encode, Special, and global Logs, with custom output naming under Encode\n"
+        "- Left tabs: Main, Encode, Special, and global Logs, with automatic subtitle selection under Main and custom output naming under Encode\n"
         "- Right tabs: transport-controlled Preview with trim timeline plus selected-task log"
     );
 }
@@ -1724,11 +1761,17 @@ void MainWindow::add_source_jobs_from_paths(const QStringList &paths) {
         job.type_label = info.suffix().isEmpty() ? "-" : "." + info.suffix().toLower();
         job.input_size_bytes = info.exists() ? info.size() : -1;
         jobs_.push_back(std::move(job));
-        apply_generated_output_path(static_cast<int>(jobs_.size()) - 1, true);
+        const int job_index = static_cast<int>(jobs_.size()) - 1;
+        apply_generated_output_path(job_index, true);
+        QString subtitle_decision_summary{};
+        apply_automatic_subtitle_selection(job_index, true, &subtitle_decision_summary);
         jobs_.back().last_status_message = job_has_minimum_required_fields(jobs_.back())
             ? "Ready to queue."
             : "Select an output path to make the job runnable.";
         append_session_log(QString("[info] Added '%1' to the queue.").arg(info.fileName()));
+        if (!subtitle_decision_summary.trimmed().isEmpty()) {
+            append_session_log("[info] " + subtitle_decision_summary);
+        }
     }
 
     select_job(first_new_index);
@@ -1808,6 +1851,10 @@ void MainWindow::restore_selected_job_auto_output_path() {
 }
 
 void MainWindow::choose_subtitle_file() {
+    if (!is_valid_job_index(selected_job_index_)) {
+        return;
+    }
+
     const QString selected_path = QFileDialog::getOpenFileName(
         this,
         "Choose Subtitle File",
@@ -1815,9 +1862,29 @@ void MainWindow::choose_subtitle_file() {
         subtitle_file_filter()
     );
     if (!selected_path.isEmpty()) {
+        auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+        job.subtitle_manual_override = true;
         subtitle_enable_check_->setChecked(true);
         subtitle_path_edit_->setText(QDir::toNativeSeparators(selected_path));
+        append_session_log(
+            QString("[info] Subtitle selection for '%1' is now manual: '%2'.")
+                .arg(queue_source_display_name(job))
+                .arg(QFileInfo(selected_path).fileName())
+        );
     }
+}
+
+void MainWindow::restore_selected_job_auto_subtitle_selection() {
+    if (!is_valid_job_index(selected_job_index_)) {
+        return;
+    }
+
+    QString decision_summary{};
+    apply_automatic_subtitle_selection(selected_job_index_, true, &decision_summary);
+    if (!decision_summary.trimmed().isEmpty()) {
+        append_session_log("[info] " + decision_summary);
+    }
+    refresh_all_views();
 }
 
 void MainWindow::choose_intro_clip() {
@@ -2621,6 +2688,9 @@ void MainWindow::sync_selected_job_from_editor() {
     if (!job.output_path_manual_override) {
         apply_generated_output_path(selected_job_index_, false);
     }
+    if (!job.subtitle_manual_override) {
+        apply_automatic_subtitle_selection(selected_job_index_, false);
+    }
 
     if (job.state == UiJobState::pending) {
         job.last_status_message = job_has_minimum_required_fields(job)
@@ -2703,6 +2773,7 @@ void MainWindow::select_job(const int index) {
     selected_job_index_ = index;
     ensure_job_inspection(index);
     apply_generated_output_path(index, false);
+    apply_automatic_subtitle_selection(index, false);
 
     if (queue_table_ != nullptr && index < queue_table_->rowCount() && queue_table_->currentRow() != index) {
         const QSignalBlocker blocker(queue_table_);
@@ -2733,6 +2804,7 @@ void MainWindow::ensure_job_inspection(const int job_index) {
     if (!inspection_result.succeeded()) {
         job.source_inspection_error = to_qstring(inspection_result.error->message);
         job.audio_track_display = "No source audio detected";
+        apply_automatic_subtitle_selection(job_index, false);
         return;
     }
 
@@ -2748,6 +2820,7 @@ void MainWindow::ensure_job_inspection(const int job_index) {
     job.current_time_us = std::clamp<qint64>(job.current_time_us, 0, std::max<qint64>(job.duration_us, 0));
     job.trim_in_us = std::clamp<qint64>(job.trim_in_us, 0, std::max<qint64>(job.duration_us, 0));
     job.trim_out_us = std::clamp<qint64>(job.trim_out_us, job.trim_in_us, std::max<qint64>(job.duration_us, 0));
+    apply_automatic_subtitle_selection(job_index, false);
 }
 
 void MainWindow::reset_job_for_rerun(UiEncodeJob &job) {
@@ -2851,6 +2924,48 @@ void MainWindow::apply_generated_output_path(const int job_index, const bool for
     }
 }
 
+void MainWindow::apply_automatic_subtitle_selection(
+    const int job_index,
+    const bool force_auto_mode,
+    QString *decision_summary
+) {
+    if (decision_summary != nullptr) {
+        decision_summary->clear();
+    }
+    if (!is_valid_job_index(job_index)) {
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(job_index)];
+    if (force_auto_mode) {
+        job.subtitle_manual_override = false;
+    }
+    if (job.subtitle_manual_override) {
+        return;
+    }
+
+    const auto selection_result =
+        utsure::core::subtitles::SubtitleAutoSelector::select(qstring_to_path(job.source_path));
+    if (decision_summary != nullptr) {
+        *decision_summary = to_qstring(selection_result.decision_summary);
+    }
+
+    if (selection_result.has_selection()) {
+        job.subtitle_enabled = true;
+        job.subtitle_path = path_to_qstring(selection_result.selected_candidate->subtitle_path);
+    } else {
+        job.subtitle_enabled = false;
+        job.subtitle_path.clear();
+    }
+
+    if (job_index == selected_job_index_ && subtitle_enable_check_ != nullptr && subtitle_path_edit_ != nullptr) {
+        const QSignalBlocker enabled_blocker(subtitle_enable_check_);
+        const QSignalBlocker path_blocker(subtitle_path_edit_);
+        subtitle_enable_check_->setChecked(job.subtitle_enabled);
+        subtitle_path_edit_->setText(job.subtitle_path);
+    }
+}
+
 void MainWindow::refresh_all_views() {
     refresh_queue_table();
     refresh_editor_state();
@@ -2926,6 +3041,7 @@ void MainWindow::refresh_editor_state() {
 
     subtitle_enable_check_->setEnabled(editable);
     subtitle_path_edit_->setEnabled(editable);
+    subtitle_auto_button_->setEnabled(editable);
     subtitle_browse_button_->setEnabled(editable);
     intro_enable_check_->setEnabled(editable);
     intro_path_edit_->setEnabled(editable);
