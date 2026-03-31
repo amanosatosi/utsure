@@ -243,14 +243,23 @@ DecodedMediaSource make_minimal_decoded_media_source() {
 struct RecordingState final {
     std::optional<SubtitleRenderSessionCreateRequest> create_request{};
     int render_request_count{0};
+    bool font_search_directory_visible_during_render{false};
 };
 
 class RecordingSubtitleRenderSession final : public SubtitleRenderSession {
 public:
-    explicit RecordingSubtitleRenderSession(std::shared_ptr<RecordingState> state) : state_(std::move(state)) {}
+    RecordingSubtitleRenderSession(
+        std::shared_ptr<RecordingState> state,
+        SubtitleRenderSessionCreateRequest create_request
+    )
+        : state_(std::move(state)),
+          create_request_(std::move(create_request)) {}
 
     [[nodiscard]] SubtitleRenderResult render(const SubtitleRenderRequest &request) noexcept override {
         ++state_->render_request_count;
+        state_->font_search_directory_visible_during_render =
+            create_request_.font_search_directory.has_value() &&
+            std::filesystem::exists(*create_request_.font_search_directory);
         return SubtitleRenderResult{
             .rendered_frame = RenderedSubtitleFrame{
                 .timestamp_microseconds = request.timestamp_microseconds,
@@ -264,6 +273,7 @@ public:
 
 private:
     std::shared_ptr<RecordingState> state_{};
+    SubtitleRenderSessionCreateRequest create_request_{};
 };
 
 class RecordingSubtitleRenderer final : public SubtitleRenderer {
@@ -275,7 +285,7 @@ public:
     ) noexcept override {
         state_->create_request = request;
         return SubtitleRenderSessionResult{
-            .session = std::make_unique<RecordingSubtitleRenderSession>(state_),
+            .session = std::make_unique<RecordingSubtitleRenderSession>(state_, request),
             .error = std::nullopt
         };
     }
@@ -406,12 +416,12 @@ int assert_burn_in_pipeline_applies_recovered_font_directory(
     }
 
     if (!recording_state->create_request.has_value() ||
-        !recording_state->create_request->font_search_directory.has_value() ||
-        !std::filesystem::exists(*recording_state->create_request->font_search_directory)) {
+        !recording_state->create_request->font_search_directory.has_value()) {
         return fail("Subtitle burn-in did not pass the recovered font directory into the renderer session request.");
     }
 
-    if (recording_state->render_request_count != 1) {
+    if (recording_state->render_request_count != 1 ||
+        !recording_state->font_search_directory_visible_during_render) {
         return fail("Subtitle burn-in did not render through the recording session as expected.");
     }
 
