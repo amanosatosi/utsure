@@ -547,7 +547,8 @@ StreamingRuntimeBehavior resolve_streaming_runtime_behavior(
     const std::optional<std::uint32_t> logical_core_count_override
 ) noexcept {
     const auto detected_logical_core_count =
-        logical_core_count_override.value_or(detail::detect_logical_core_count());
+        logical_core_count_override
+            .value_or(threading.logical_core_count_override.value_or(detail::detect_logical_core_count()));
     const auto effective_core_count = detail::effective_logical_core_count(detected_logical_core_count);
     const int default_thread_count =
         detail::resolve_requested_ffmpeg_thread_count_impl(threading.cpu_usage_mode, effective_core_count);

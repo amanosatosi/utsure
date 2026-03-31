@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 namespace {
 
@@ -183,6 +184,83 @@ int assert_codec_tags_follow_selected_settings(const std::filesystem::path &root
     return 0;
 }
 
+int assert_batch_reservation_avoids_parallel_collisions(const std::filesystem::path &root) {
+    const auto source_directory = root / "Series";
+    const auto output_directory = root / "parallel";
+
+    std::filesystem::create_directories(source_directory);
+    std::filesystem::create_directories(output_directory);
+    touch_file(source_directory / "episode-01.mkv");
+    touch_file(source_directory / "episode-02.mkv");
+    touch_file(source_directory / "episode-03.mkv");
+    touch_file(output_directory / "[BDRip] Series - 01 [x265] [AAC].mkv");
+    touch_file(output_directory / "[BDRip] Series - 03 [x265] [AAC].mkv");
+
+    const std::vector<OutputNamingRequest> requests{
+        OutputNamingRequest{
+            .source_path = source_directory / "episode-01.mkv",
+            .output_directory = output_directory,
+            .custom_text = "BDRip",
+            .extension_hint = ".mkv",
+            .video_codec = OutputVideoCodec::h265,
+            .audio_settings = AudioEncodeSettings{
+                .mode = AudioOutputMode::encode_aac,
+                .codec = OutputAudioCodec::aac
+            },
+            .source_audio_known = true,
+            .source_audio_stream = AudioStreamInfo{
+                .codec_name = "aac"
+            }
+        },
+        OutputNamingRequest{
+            .source_path = source_directory / "episode-02.mkv",
+            .output_directory = output_directory,
+            .custom_text = "BDRip",
+            .extension_hint = ".mkv",
+            .video_codec = OutputVideoCodec::h265,
+            .audio_settings = AudioEncodeSettings{
+                .mode = AudioOutputMode::encode_aac,
+                .codec = OutputAudioCodec::aac
+            },
+            .source_audio_known = true,
+            .source_audio_stream = AudioStreamInfo{
+                .codec_name = "aac"
+            }
+        },
+        OutputNamingRequest{
+            .source_path = source_directory / "episode-03.mkv",
+            .output_directory = output_directory,
+            .custom_text = "BDRip",
+            .extension_hint = ".mkv",
+            .video_codec = OutputVideoCodec::h265,
+            .audio_settings = AudioEncodeSettings{
+                .mode = AudioOutputMode::encode_aac,
+                .codec = OutputAudioCodec::aac
+            },
+            .source_audio_known = true,
+            .source_audio_stream = AudioStreamInfo{
+                .codec_name = "aac"
+            }
+        }
+    };
+
+    const auto results = OutputNaming::reserve_batch(requests);
+    if (results.size() != requests.size()) {
+        return fail("The batch reservation helper did not return one result per request.");
+    }
+
+    if (results[0].file_name != "[BDRip] Series - 02 [x265] [AAC].mkv" ||
+        results[1].file_name != "[BDRip] Series - 04 [x265] [AAC].mkv" ||
+        results[2].file_name != "[BDRip] Series - 05 [x265] [AAC].mkv") {
+        return fail("The batch reservation helper did not reserve unique sequence numbers across the batch.");
+    }
+
+    std::cout << "batch.0=" << results[0].file_name << '\n';
+    std::cout << "batch.1=" << results[1].file_name << '\n';
+    std::cout << "batch.2=" << results[2].file_name << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -198,6 +276,10 @@ int main() {
     }
 
     if (assert_codec_tags_follow_selected_settings(root) != 0) {
+        return 1;
+    }
+
+    if (assert_batch_reservation_avoids_parallel_collisions(root) != 0) {
         return 1;
     }
 

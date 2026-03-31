@@ -6,7 +6,7 @@
 #include "preview_surface_widget.hpp"
 #include "trim_timeline_widget.hpp"
 #include "utsure/core/build_info.hpp"
-#include "utsure/core/job/output_naming.hpp"
+#include "utsure/core/job/batch_parallelism.hpp"
 #include "utsure/core/job/encode_job_preflight.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 #include "utsure/core/subtitles/subtitle_auto_selection.hpp"
@@ -16,6 +16,8 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCursor>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QDebug>
 #include <QEvent>
@@ -28,6 +30,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHeaderView>
+#include <QHash>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
@@ -56,6 +59,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string_view>
+#include <system_error>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -830,7 +834,6 @@ QLabel#PreviewTimeBadge {
 }
 )");
 
-    runner_controller_ = new EncodeJobRunnerController(this);
     preview_audio_controller_ = new PreviewAudioController(this);
     preview_renderer_controller_ = new PreviewFrameRendererController(this);
     busy_spinner_timer_ = new QTimer(this);
@@ -838,6 +841,7 @@ QLabel#PreviewTimeBadge {
     preview_playback_timer_ = new QTimer(this);
     preview_playback_timer_->setInterval(33);
     preview_playback_timer_->setTimerType(Qt::PreciseTimer);
+    refresh_parallel_batch_summary();
 
     auto *central_widget = new QWidget(this);
     auto *root_layout = new QVBoxLayout(central_widget);
@@ -904,14 +908,26 @@ QLabel#PreviewTimeBadge {
     ));
     priority_combo_->setMinimumWidth(148);
 
+    parallel_button_ = new QToolButton(toolbar_frame);
+    parallel_button_->setProperty("toolbarButton", true);
+    parallel_button_->setCursor(Qt::PointingHandCursor);
+    parallel_button_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    parallel_button_->setText("Parallel");
+    parallel_button_->setCheckable(true);
+    parallel_button_->setMinimumWidth(82);
+    parallel_button_->setMaximumWidth(QWIDGETSIZE_MAX);
+    parallel_button_->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    parallel_button_->setFixedHeight(30);
+
     start_button_ = create_toolbar_button(":/icons/play.svg", "Start", "Start checked jobs", toolbar_frame);
-    stop_button_ = create_toolbar_button(":/icons/stop.svg", "Stop", "Stop current job", toolbar_frame);
+    stop_button_ = create_toolbar_button(":/icons/stop.svg", "Stop", "Stop active jobs", toolbar_frame);
     auto *toolbar_right_widget = new QWidget(toolbar_frame);
     toolbar_right_widget->setProperty("chromeTransparent", true);
     auto *toolbar_right_layout = new QHBoxLayout(toolbar_right_widget);
     toolbar_right_layout->setContentsMargins(0, 0, 0, 0);
     toolbar_right_layout->setSpacing(6);
     toolbar_right_layout->addStretch(1);
+    toolbar_right_layout->addWidget(parallel_button_);
     toolbar_right_layout->addWidget(priority_combo_);
     toolbar_right_layout->addWidget(start_button_);
     toolbar_right_layout->addWidget(stop_button_);
@@ -1438,22 +1454,7 @@ QLabel#PreviewTimeBadge {
         apply_native_caption_accent(this);
     });
 
-    connect(runner_controller_, &EncodeJobRunnerController::running_changed, this, &MainWindow::handle_running_changed);
-    connect(runner_controller_, &EncodeJobRunnerController::progress_changed, this, &MainWindow::handle_progress_changed);
-    connect(
-        runner_controller_,
-        &EncodeJobRunnerController::job_finished,
-        this,
-        &MainWindow::handle_job_finished
-    );
-    connect(runner_controller_, &EncodeJobRunnerController::log_message, this, [this](const QString &line) {
-        if (active_job_index_ >= 0 && active_job_index_ < static_cast<int>(jobs_.size())) {
-            append_job_log(active_job_index_, line);
-            return;
-        }
-
-        append_session_log(line);
-    });
+    ensure_runner_slot_count(1);
     connect(
         preview_renderer_controller_,
         &PreviewFrameRendererController::preview_loading,
@@ -1486,6 +1487,7 @@ QLabel#PreviewTimeBadge {
     connect(remove_button_, &QToolButton::clicked, this, &MainWindow::remove_selected_job);
     connect(settings_button_, &QToolButton::clicked, this, &MainWindow::show_settings_placeholder);
     connect(info_button_, &QToolButton::clicked, this, &MainWindow::show_info_dialog);
+    connect(parallel_button_, &QToolButton::clicked, this, &MainWindow::show_parallel_settings_dialog);
     connect(start_button_, &QToolButton::clicked, this, &MainWindow::start_encode_queue);
     connect(stop_button_, &QToolButton::clicked, this, &MainWindow::stop_encode_queue);
     connect(same_as_input_check_, &QCheckBox::toggled, this, &MainWindow::handle_same_as_input_toggled);
@@ -1569,7 +1571,7 @@ QLabel#PreviewTimeBadge {
 QString MainWindow::window_structure_summary() const {
     return QString(
         "Main window structure:\n"
-        "- Toolbar: left controls, centered branding, right-side priority/start/stop\n"
+        "- Toolbar: left controls, centered branding, right-side Parallel/priority/start/stop\n"
         "- Queue row: batch queue table plus selected-job details summary\n"
         "- Output strip: output path, auto-name action, and Same as input toggle\n"
         "- Left tabs: Main, Encode, Special, and global Logs, with automatic subtitle selection under Main and custom output naming under Encode\n"
@@ -1656,6 +1658,42 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job_from_entry(
     return job;
 }
 
+utsure::core::job::OutputNamingRequest MainWindow::build_output_naming_request(const UiEncodeJob &job) const {
+    const auto source_path = qstring_to_path(job.source_path);
+    const auto current_output_path = qstring_to_path(job.output_path);
+
+    std::filesystem::path output_directory{};
+    if (job.same_as_input && !source_path.parent_path().empty()) {
+        output_directory = source_path.parent_path();
+    } else if (!current_output_path.parent_path().empty()) {
+        output_directory = current_output_path.parent_path();
+    } else if (!source_path.parent_path().empty()) {
+        output_directory = source_path.parent_path();
+    }
+
+    const std::string extension_hint = current_output_path.has_extension()
+        ? current_output_path.extension().string()
+        : std::string{};
+    const bool source_audio_known = job.inspected_source_info.has_value();
+    const std::optional<utsure::core::media::AudioStreamInfo> source_audio_stream =
+        source_audio_known ? job.inspected_source_info->primary_audio_stream : std::nullopt;
+
+    return utsure::core::job::OutputNamingRequest{
+        .source_path = source_path,
+        .output_directory = output_directory,
+        .custom_text = job.output_name_custom_text.trimmed().toUtf8().toStdString(),
+        .extension_hint = extension_hint,
+        .video_codec = job.video_codec,
+        .audio_settings = {
+            .mode = job.audio_mode,
+            .codec = utsure::core::media::OutputAudioCodec::aac,
+            .bitrate_kbps = job.audio_bitrate_kbps
+        },
+        .source_audio_known = source_audio_known,
+        .source_audio_stream = source_audio_stream
+    };
+}
+
 utsure::core::job::EncodeJobProcessPriority MainWindow::current_worker_priority() const {
     switch (static_cast<utsure::core::job::EncodeJobProcessPriority>(priority_combo_->currentData().toInt())) {
     case utsure::core::job::EncodeJobProcessPriority::high:
@@ -1704,6 +1742,68 @@ bool MainWindow::job_is_terminal(const UiEncodeJob &job) const {
     return job.state == UiJobState::finished ||
         job.state == UiJobState::failed ||
         job.state == UiJobState::canceled;
+}
+
+bool MainWindow::any_runner_slot_running() const {
+    return std::any_of(
+        runner_slots_.begin(),
+        runner_slots_.end(),
+        [](const RunnerSlot &slot) {
+            return slot.controller != nullptr && slot.controller->is_running();
+        }
+    );
+}
+
+int MainWindow::active_runner_count() const {
+    return static_cast<int>(std::count_if(
+        runner_slots_.begin(),
+        runner_slots_.end(),
+        [](const RunnerSlot &slot) {
+            return slot.controller != nullptr && slot.controller->is_running();
+        }
+    ));
+}
+
+int MainWindow::configured_parallel_job_count() const {
+    return std::max(parallel_batch_summary_.selected_job_count, 1);
+}
+
+int MainWindow::find_free_runner_slot_index() const {
+    for (int index = 0; index < static_cast<int>(runner_slots_.size()); ++index) {
+        const auto &slot = runner_slots_[static_cast<std::size_t>(index)];
+        if (slot.controller != nullptr && !slot.controller->is_running() && slot.active_job_index < 0) {
+            return index;
+        }
+    }
+
+    return -1;
+}
+
+QString MainWindow::format_parallel_tooltip() const {
+    return QString("Parallel: %1\nJobs: %2\nThreads/job: %3\nBuffer/job: %4")
+        .arg(parallel_batch_summary_.enabled ? "On" : "Off")
+        .arg(parallel_batch_summary_.selected_job_count)
+        .arg(parallel_batch_summary_.threads_per_job)
+        .arg(parallel_batch_summary_.video_frame_queue_depth);
+}
+
+QString MainWindow::normalized_output_path_key(const QString &path_text) const {
+    const auto path = qstring_to_path(path_text.trimmed());
+    if (path.empty()) {
+        return {};
+    }
+
+    std::error_code error{};
+    auto absolute_path = std::filesystem::absolute(path, error);
+    if (error) {
+        absolute_path = path;
+    }
+
+#ifdef _WIN32
+    return QString::fromStdWString(absolute_path.lexically_normal().generic_wstring()).toLower();
+#else
+    return QString::fromStdString(absolute_path.lexically_normal().generic_string());
+#endif
 }
 
 bool MainWindow::job_has_minimum_required_fields(const UiEncodeJob &job) const {
@@ -1802,7 +1902,7 @@ void MainWindow::show_settings_placeholder() {
     QMessageBox::information(
         this,
         "Settings",
-        "Settings is a placeholder in this M17 slice.\n\nThe current UI exposes the worker-thread priority in the toolbar and the per-job encode settings in the selected-job editor."
+        "Settings is a placeholder in this slice.\n\nThe current UI exposes global parallel batch and worker priority controls in the toolbar, plus per-job encode settings in the selected-job editor."
     );
 }
 
@@ -1814,6 +1914,100 @@ void MainWindow::show_info_dialog() {
             .arg(to_qstring(utsure::core::BuildInfo::project_name()))
             .arg(to_qstring(utsure::core::BuildInfo::project_version()))
     );
+}
+
+void MainWindow::show_parallel_settings_dialog() {
+    if (queue_run_active_) {
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle("Parallel Batch Encoding");
+    dialog.setModal(true);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *form_layout = new QFormLayout();
+
+    auto *enable_parallel_check = new QCheckBox("Enable parallel batch encoding", &dialog);
+    enable_parallel_check->setChecked(parallel_batch_settings_.enabled);
+
+    auto *job_count_combo = new QComboBox(&dialog);
+    auto *usable_threads_value = new QLabel(&dialog);
+    auto *threads_per_job_value = new QLabel(&dialog);
+    auto *buffer_per_job_value = new QLabel(&dialog);
+
+    const std::uint32_t usable_thread_count = parallel_batch_summary_.usable_thread_count;
+    auto dialog_summary = parallel_batch_summary_;
+
+    const auto populate_job_count_combo = [&](const utsure::core::job::ParallelBatchSummary &summary, const int preferred_count) {
+        const QSignalBlocker blocker(job_count_combo);
+        job_count_combo->clear();
+        for (const int job_count : summary.valid_job_counts) {
+            job_count_combo->addItem(QString::number(job_count), job_count);
+        }
+
+        const int selected_index = job_count_combo->findData(preferred_count);
+        if (selected_index >= 0) {
+            job_count_combo->setCurrentIndex(selected_index);
+            return;
+        }
+
+        const int fallback_index = job_count_combo->findData(summary.selected_job_count);
+        job_count_combo->setCurrentIndex(fallback_index >= 0 ? fallback_index : 0);
+    };
+
+    const auto refresh_dialog_summary = [&]() {
+        const int requested_job_count = std::max(job_count_combo->currentData().toInt(), 1);
+        dialog_summary = utsure::core::job::BatchParallelism::summarize(
+            utsure::core::job::ParallelBatchSettings{
+                .enabled = enable_parallel_check->isChecked(),
+                .requested_job_count = requested_job_count
+            },
+            usable_thread_count
+        );
+        populate_job_count_combo(dialog_summary, requested_job_count);
+        job_count_combo->setEnabled(enable_parallel_check->isChecked());
+        usable_threads_value->setText(QString::number(dialog_summary.usable_thread_count));
+        threads_per_job_value->setText(QString::number(dialog_summary.threads_per_job));
+        buffer_per_job_value->setText(QString("%1 frames").arg(dialog_summary.video_frame_queue_depth));
+    };
+
+    populate_job_count_combo(dialog_summary, parallel_batch_settings_.requested_job_count);
+    form_layout->addRow(QString(), enable_parallel_check);
+    form_layout->addRow("Jobs", job_count_combo);
+    form_layout->addRow("Usable threads", usable_threads_value);
+    form_layout->addRow("Threads/job", threads_per_job_value);
+    form_layout->addRow("Buffer/job", buffer_per_job_value);
+    layout->addLayout(form_layout);
+
+    auto *button_box = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(button_box);
+
+    connect(enable_parallel_check, &QCheckBox::toggled, &dialog, [refresh_dialog_summary](bool) { refresh_dialog_summary(); });
+    connect(job_count_combo, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [refresh_dialog_summary](int) {
+        refresh_dialog_summary();
+    });
+    connect(button_box, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(button_box, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    refresh_dialog_summary();
+
+    if (dialog.exec() != QDialog::Accepted) {
+        refresh_parallel_batch_summary();
+        return;
+    }
+
+    parallel_batch_settings_.enabled = enable_parallel_check->isChecked();
+    parallel_batch_settings_.requested_job_count = std::max(job_count_combo->currentData().toInt(), 1);
+    refresh_parallel_batch_summary();
+    append_session_log(
+        QString("[info] Parallel batch encoding %1. Jobs: %2 | Threads/job: %3 | Buffer/job: %4 frames.")
+            .arg(parallel_batch_summary_.enabled ? "enabled" : "disabled")
+            .arg(parallel_batch_summary_.selected_job_count)
+            .arg(parallel_batch_summary_.threads_per_job)
+            .arg(parallel_batch_summary_.video_frame_queue_depth)
+    );
+    refresh_toolbar_state();
 }
 
 void MainWindow::choose_output_path() {
@@ -2772,8 +2966,10 @@ void MainWindow::select_job(const int index) {
 
     selected_job_index_ = index;
     ensure_job_inspection(index);
-    apply_generated_output_path(index, false);
-    apply_automatic_subtitle_selection(index, false);
+    if (!queue_run_active_) {
+        apply_generated_output_path(index, false);
+        apply_automatic_subtitle_selection(index, false);
+    }
 
     if (queue_table_ != nullptr && index < queue_table_->rowCount() && queue_table_->currentRow() != index) {
         const QSignalBlocker blocker(queue_table_);
@@ -2782,6 +2978,57 @@ void MainWindow::select_job(const int index) {
 
     load_selected_job_into_editor();
     refresh_all_views();
+}
+
+void MainWindow::ensure_runner_slot_count(const int slot_count) {
+    const int required_slot_count = std::max(slot_count, 1);
+    while (static_cast<int>(runner_slots_.size()) < required_slot_count) {
+        const int slot_index = static_cast<int>(runner_slots_.size());
+        auto *controller = new EncodeJobRunnerController(this);
+
+        connect(controller, &EncodeJobRunnerController::running_changed, this, [this, slot_index](const bool running) {
+            handle_runner_running_changed(slot_index, running);
+        });
+        connect(
+            controller,
+            &EncodeJobRunnerController::progress_changed,
+            this,
+            [this, slot_index](const utsure::core::job::EncodeJobProgress &progress) {
+                handle_runner_progress(slot_index, progress);
+            }
+        );
+        connect(
+            controller,
+            &EncodeJobRunnerController::job_finished,
+            this,
+            [this, slot_index](
+                const bool succeeded,
+                const bool canceled,
+                const QString &status_text,
+                const QString &details_text
+            ) {
+                handle_runner_finished(slot_index, succeeded, canceled, status_text, details_text);
+            }
+        );
+        connect(controller, &EncodeJobRunnerController::log_message, this, [this, slot_index](const QString &line) {
+            if (slot_index < 0 || slot_index >= static_cast<int>(runner_slots_.size())) {
+                append_session_log(line);
+                return;
+            }
+
+            const int active_job_index = runner_slots_[static_cast<std::size_t>(slot_index)].active_job_index;
+            if (active_job_index >= 0 && active_job_index < static_cast<int>(jobs_.size())) {
+                append_job_log(active_job_index, line);
+                return;
+            }
+
+            append_session_log(line);
+        });
+
+        runner_slots_.push_back(RunnerSlot{
+            .controller = controller
+        });
+    }
 }
 
 void MainWindow::ensure_job_inspection(const int job_index) {
@@ -2860,40 +3107,51 @@ void MainWindow::apply_same_as_input_folder(UiEncodeJob &job) {
     job.output_path = path_to_qstring((source_path.parent_path() / file_name).lexically_normal());
 }
 
-QString MainWindow::generate_output_path_for_job(const UiEncodeJob &job) const {
-    const auto source_path = qstring_to_path(job.source_path);
-    const auto current_output_path = qstring_to_path(job.output_path);
+void MainWindow::reserve_batch_output_paths_for_jobs(const std::vector<int> &job_indices) {
+    struct BatchOutputReservation final {
+        int job_index{-1};
+        utsure::core::job::OutputNamingRequest request{};
+    };
 
-    std::filesystem::path output_directory{};
-    if (job.same_as_input && !source_path.parent_path().empty()) {
-        output_directory = source_path.parent_path();
-    } else if (!current_output_path.parent_path().empty()) {
-        output_directory = current_output_path.parent_path();
-    } else if (!source_path.parent_path().empty()) {
-        output_directory = source_path.parent_path();
+    std::vector<BatchOutputReservation> reservations{};
+    reservations.reserve(job_indices.size());
+
+    for (const int job_index : job_indices) {
+        if (!is_valid_job_index(job_index)) {
+            continue;
+        }
+
+        const auto &job = jobs_[static_cast<std::size_t>(job_index)];
+        if (job.output_path_manual_override) {
+            continue;
+        }
+
+        reservations.push_back(BatchOutputReservation{
+            .job_index = job_index,
+            .request = build_output_naming_request(job)
+        });
     }
 
-    const std::string extension_hint = current_output_path.has_extension()
-        ? current_output_path.extension().string()
-        : std::string{};
-    const bool source_audio_known = job.inspected_source_info.has_value();
-    const std::optional<utsure::core::media::AudioStreamInfo> source_audio_stream =
-        source_audio_known ? job.inspected_source_info->primary_audio_stream : std::nullopt;
+    std::vector<utsure::core::job::OutputNamingRequest> requests{};
+    requests.reserve(reservations.size());
+    for (const auto &reservation : reservations) {
+        requests.push_back(reservation.request);
+    }
 
-    const auto result = utsure::core::job::OutputNaming::suggest(utsure::core::job::OutputNamingRequest{
-        .source_path = source_path,
-        .output_directory = output_directory,
-        .custom_text = job.output_name_custom_text.trimmed().toUtf8().toStdString(),
-        .extension_hint = extension_hint,
-        .video_codec = job.video_codec,
-        .audio_settings = {
-            .mode = job.audio_mode,
-            .codec = utsure::core::media::OutputAudioCodec::aac,
-            .bitrate_kbps = job.audio_bitrate_kbps
-        },
-        .source_audio_known = source_audio_known,
-        .source_audio_stream = source_audio_stream
-    });
+    const auto reserved_results = utsure::core::job::OutputNaming::reserve_batch(requests);
+    for (std::size_t index = 0; index < reservations.size() && index < reserved_results.size(); ++index) {
+        auto &job = jobs_[static_cast<std::size_t>(reservations[index].job_index)];
+        job.output_path = path_to_qstring(reserved_results[index].output_path);
+
+        if (reservations[index].job_index == selected_job_index_ && output_path_edit_ != nullptr) {
+            const QSignalBlocker blocker(output_path_edit_);
+            output_path_edit_->setText(job.output_path);
+        }
+    }
+}
+
+QString MainWindow::generate_output_path_for_job(const UiEncodeJob &job) const {
+    const auto result = utsure::core::job::OutputNaming::suggest(build_output_naming_request(job));
 
     return path_to_qstring(result.output_path);
 }
@@ -3208,10 +3466,25 @@ void MainWindow::refresh_session_log_view() {
     );
 }
 
+void MainWindow::refresh_parallel_batch_summary() {
+    parallel_batch_summary_ = utsure::core::job::BatchParallelism::summarize(parallel_batch_settings_);
+    if (parallel_button_ == nullptr) {
+        return;
+    }
+
+    parallel_button_->setChecked(parallel_batch_summary_.enabled);
+    parallel_button_->setToolTip(format_parallel_tooltip());
+}
+
 void MainWindow::refresh_toolbar_state() {
     const bool has_job = selected_job_index_ >= 0 && selected_job_index_ < static_cast<int>(jobs_.size());
     add_button_->setEnabled(!queue_run_active_);
     remove_button_->setEnabled(!queue_run_active_ && has_job);
+    if (parallel_button_ != nullptr) {
+        parallel_button_->setEnabled(!queue_run_active_);
+        parallel_button_->setChecked(parallel_batch_summary_.enabled);
+        parallel_button_->setToolTip(format_parallel_tooltip());
+    }
     priority_combo_->setEnabled(!queue_run_active_);
     start_button_->setEnabled(!jobs_.empty());
     stop_button_->setEnabled(queue_run_active_);
@@ -3262,14 +3535,29 @@ void MainWindow::advance_busy_spinner() {
 }
 
 void MainWindow::start_encode_queue() {
-    if (queue_run_active_ || runner_controller_->is_running()) {
+    if (queue_run_active_ || any_runner_slot_running()) {
         return;
     }
 
-    queued_job_indices_.clear();
+    planned_queue_jobs_.clear();
     queue_cursor_ = 0;
     stop_requested_ = false;
 
+    std::vector<int> checked_job_indices{};
+    checked_job_indices.reserve(jobs_.size());
+    for (int index = 0; index < static_cast<int>(jobs_.size()); ++index) {
+        if (!jobs_[static_cast<std::size_t>(index)].checked) {
+            continue;
+        }
+
+        ensure_job_inspection(index);
+        checked_job_indices.push_back(index);
+    }
+
+    reserve_batch_output_paths_for_jobs(checked_job_indices);
+    refresh_parallel_batch_summary();
+
+    QHash<QString, int> reserved_output_paths{};
     for (int index = 0; index < static_cast<int>(jobs_.size()); ++index) {
         auto &job = jobs_[static_cast<std::size_t>(index)];
         if (!job.checked) {
@@ -3277,12 +3565,14 @@ void MainWindow::start_encode_queue() {
         }
 
         QString build_error{};
-        const auto built_job = build_job_from_entry(index, build_error);
+        auto built_job = build_job_from_entry(index, build_error);
         if (!built_job.has_value()) {
             job.last_status_message = build_error;
             append_job_log(index, "[error] " + build_error);
             continue;
         }
+
+        utsure::core::job::BatchParallelism::apply_execution_settings(*built_job, parallel_batch_summary_);
 
         append_job_log(index, "[info] Validating job before queue start.");
         const auto preflight = utsure::core::job::EncodeJobPreflight::inspect(*built_job);
@@ -3305,50 +3595,11 @@ void MainWindow::start_encode_queue() {
             continue;
         }
 
-        job.last_status_message = "Queued for batch encode.";
-        queued_job_indices_.push_back(index);
-    }
-
-    if (queued_job_indices_.empty()) {
-        append_session_log("[warning] No checked jobs were runnable.");
-        refresh_all_views();
-        return;
-    }
-
-    queue_run_active_ = true;
-    append_session_log(QString("[info] Starting queue with %1 job(s).").arg(queued_job_indices_.size()));
-    refresh_all_views();
-    start_next_queued_job();
-}
-
-void MainWindow::start_next_queued_job() {
-    while (queue_cursor_ < static_cast<int>(queued_job_indices_.size())) {
-        if (stop_requested_) {
-            finish_queue_run();
-            return;
-        }
-
-        const int job_index = queued_job_indices_[static_cast<std::size_t>(queue_cursor_++)];
-        if (job_index < 0 || job_index >= static_cast<int>(jobs_.size())) {
-            continue;
-        }
-
-        auto &job = jobs_[static_cast<std::size_t>(job_index)];
-        if (!job.checked) {
-            continue;
-        }
-
-        QString build_error{};
-        const auto built_job = build_job_from_entry(job_index, build_error);
-        if (!built_job.has_value()) {
-            job.last_status_message = build_error;
-            append_job_log(job_index, "[error] " + build_error);
-            continue;
-        }
-
-        const auto preflight = utsure::core::job::EncodeJobPreflight::inspect(*built_job);
-        if (!preflight.can_start_encode()) {
-            append_job_log(job_index, "[error] Job became unrunnable before start.");
+        const QString normalized_output_key =
+            normalized_output_path_key(path_to_qstring(built_job->output.output_path));
+        if (!normalized_output_key.isEmpty() && reserved_output_paths.contains(normalized_output_key)) {
+            job.last_status_message = "Output path conflicts with another queued job.";
+            append_job_log(index, "[error] Output path conflicts with another queued job in this batch.");
             continue;
         }
 
@@ -3357,32 +3608,89 @@ void MainWindow::start_next_queued_job() {
                 this,
                 "Overwrite Existing Output?",
                 QString("'%1' already exists.\n\nOverwrite it?")
-                    .arg(QDir::toNativeSeparators(job.output_path))
+                    .arg(QDir::toNativeSeparators(path_to_qstring(built_job->output.output_path)))
             );
             if (response != QMessageBox::Yes) {
-                append_job_log(job_index, "[warning] Overwrite declined. The job was skipped.");
+                append_job_log(index, "[warning] Overwrite declined. The job was skipped.");
                 continue;
             }
         }
 
+        job.last_status_message = "Queued for batch encode.";
+        if (!normalized_output_key.isEmpty()) {
+            reserved_output_paths.insert(normalized_output_key, index);
+        }
+        planned_queue_jobs_.push_back(PlannedBatchJob{
+            .job_index = index,
+            .job = *built_job
+        });
+    }
+
+    if (planned_queue_jobs_.empty()) {
+        append_session_log("[warning] No checked jobs were runnable.");
+        refresh_all_views();
+        return;
+    }
+
+    queue_run_active_ = true;
+    ensure_runner_slot_count(configured_parallel_job_count());
+    append_session_log(
+        QString("[info] Starting queue with %1 job(s). Parallel %2 | Jobs: %3 | Threads/job: %4 | Buffer/job: %5 frames.")
+            .arg(planned_queue_jobs_.size())
+            .arg(parallel_batch_summary_.enabled ? "On" : "Off")
+            .arg(parallel_batch_summary_.selected_job_count)
+            .arg(parallel_batch_summary_.threads_per_job)
+            .arg(parallel_batch_summary_.video_frame_queue_depth)
+    );
+    refresh_all_views();
+    start_available_queued_jobs();
+}
+
+void MainWindow::start_available_queued_jobs() {
+    if (!queue_run_active_) {
+        return;
+    }
+
+    ensure_runner_slot_count(configured_parallel_job_count());
+    while (!stop_requested_) {
+        const int slot_index = find_free_runner_slot_index();
+        if (slot_index < 0 || queue_cursor_ >= static_cast<int>(planned_queue_jobs_.size())) {
+            break;
+        }
+
+        auto &slot = runner_slots_[static_cast<std::size_t>(slot_index)];
+        const auto &planned_job = planned_queue_jobs_[static_cast<std::size_t>(queue_cursor_++)];
+        if (!is_valid_job_index(planned_job.job_index) || slot.controller == nullptr) {
+            continue;
+        }
+
+        auto &job = jobs_[static_cast<std::size_t>(planned_job.job_index)];
         job.state = UiJobState::encoding;
         job.last_status_message = "Encoding...";
         job.elapsed_ms = 0;
         job.remaining_ms = -1;
         job.efps_display.clear();
         job.speed_display.clear();
-        active_job_index_ = job_index;
-        active_job_elapsed_timer_.restart();
-        active_job_elapsed_valid_ = true;
-        select_job(job_index);
-        append_job_log(job_index, "[info] Starting encode job.");
-        runner_controller_->start_job(*built_job);
-        refresh_all_views();
+
+        slot.active_job_index = planned_job.job_index;
+        slot.elapsed_timer.restart();
+        slot.elapsed_valid = true;
+
+        if (configured_parallel_job_count() == 1) {
+            select_job(planned_job.job_index);
+        }
+
+        append_job_log(planned_job.job_index, "[info] Starting encode job.");
+        slot.controller->start_job(planned_job.job);
+    }
+
+    if (!stop_requested_ && queue_cursor_ >= static_cast<int>(planned_queue_jobs_.size()) && active_runner_count() == 0) {
+        append_session_log("[info] Queue completed.");
+        finish_queue_run();
         return;
     }
 
-    append_session_log("[info] Queue completed.");
-    finish_queue_run();
+    refresh_all_views();
 }
 
 void MainWindow::stop_encode_queue() {
@@ -3391,22 +3699,36 @@ void MainWindow::stop_encode_queue() {
     }
 
     stop_requested_ = true;
-    append_session_log("[warning] Stop requested. Waiting for the current job to cancel.");
-    if (active_job_index_ >= 0 && active_job_index_ < static_cast<int>(jobs_.size())) {
-        append_job_log(active_job_index_, "[warning] Cancel requested by user.");
+    append_session_log("[warning] Stop requested. Canceling active jobs and leaving queued jobs pending.");
+    for (auto &slot : runner_slots_) {
+        if (slot.controller == nullptr || !slot.controller->is_running()) {
+            continue;
+        }
+
+        if (slot.active_job_index >= 0 && slot.active_job_index < static_cast<int>(jobs_.size())) {
+            append_job_log(slot.active_job_index, "[warning] Cancel requested by user.");
+        }
+
+        slot.controller->cancel_job();
     }
 
-    runner_controller_->cancel_job();
     refresh_toolbar_state();
+
+    if (active_runner_count() == 0) {
+        append_session_log("[warning] Queue stopped.");
+        finish_queue_run();
+    }
 }
 
 void MainWindow::finish_queue_run() {
     queue_run_active_ = false;
     stop_requested_ = false;
-    queued_job_indices_.clear();
+    planned_queue_jobs_.clear();
     queue_cursor_ = 0;
-    active_job_index_ = -1;
-    active_job_elapsed_valid_ = false;
+    for (auto &slot : runner_slots_) {
+        slot.active_job_index = -1;
+        slot.elapsed_valid = false;
+    }
     refresh_all_views();
 }
 
@@ -3430,14 +3752,19 @@ void MainWindow::append_job_log(const int job_index, const QString &line, const 
     }
 }
 
-void MainWindow::update_active_job_progress(const utsure::core::job::EncodeJobProgress &progress) {
-    if (active_job_index_ < 0 || active_job_index_ >= static_cast<int>(jobs_.size())) {
+void MainWindow::update_job_progress(
+    const int job_index,
+    const QElapsedTimer *elapsed_timer,
+    const bool elapsed_valid,
+    const utsure::core::job::EncodeJobProgress &progress
+) {
+    if (job_index < 0 || job_index >= static_cast<int>(jobs_.size())) {
         return;
     }
 
-    auto &job = jobs_[static_cast<std::size_t>(active_job_index_)];
-    if (active_job_elapsed_valid_) {
-        job.elapsed_ms = active_job_elapsed_timer_.elapsed();
+    auto &job = jobs_[static_cast<std::size_t>(job_index)];
+    if (elapsed_valid && elapsed_timer != nullptr) {
+        job.elapsed_ms = elapsed_timer->elapsed();
     }
 
     if (progress.encoded_video_duration_us.has_value()) {
@@ -3481,28 +3808,52 @@ void MainWindow::update_job_file_sizes(UiEncodeJob &job) {
     job.output_size_bytes = output_info.exists() ? output_info.size() : -1;
 }
 
-void MainWindow::handle_running_changed(const bool /*running*/) {
+void MainWindow::handle_runner_running_changed(const int /*slot_index*/, const bool /*running*/) {
     refresh_all_views();
 }
 
-void MainWindow::handle_progress_changed(const utsure::core::job::EncodeJobProgress &progress) {
-    update_active_job_progress(progress);
+void MainWindow::handle_runner_progress(
+    const int slot_index,
+    const utsure::core::job::EncodeJobProgress &progress
+) {
+    if (slot_index < 0 || slot_index >= static_cast<int>(runner_slots_.size())) {
+        return;
+    }
+
+    const auto &slot = runner_slots_[static_cast<std::size_t>(slot_index)];
+    update_job_progress(slot.active_job_index, &slot.elapsed_timer, slot.elapsed_valid, progress);
 }
 
-void MainWindow::handle_job_finished(
+void MainWindow::handle_runner_finished(
+    const int slot_index,
     const bool succeeded,
     const bool canceled,
     const QString &status_text,
     const QString &details_text
 ) {
-    if (active_job_index_ < 0 || active_job_index_ >= static_cast<int>(jobs_.size())) {
-        finish_queue_run();
+    if (slot_index < 0 || slot_index >= static_cast<int>(runner_slots_.size())) {
+        if (stop_requested_ && active_runner_count() == 0) {
+            append_session_log("[warning] Queue stopped.");
+            finish_queue_run();
+        }
         return;
     }
 
-    auto &job = jobs_[static_cast<std::size_t>(active_job_index_)];
-    if (active_job_elapsed_valid_) {
-        job.elapsed_ms = active_job_elapsed_timer_.elapsed();
+    auto &slot = runner_slots_[static_cast<std::size_t>(slot_index)];
+    const int job_index = slot.active_job_index;
+    if (job_index < 0 || job_index >= static_cast<int>(jobs_.size())) {
+        slot.active_job_index = -1;
+        slot.elapsed_valid = false;
+        if (stop_requested_ && active_runner_count() == 0) {
+            append_session_log("[warning] Queue stopped.");
+            finish_queue_run();
+        }
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(job_index)];
+    if (slot.elapsed_valid) {
+        job.elapsed_ms = slot.elapsed_timer.elapsed();
     }
     job.last_status_message = status_text;
     job.last_details_summary = details_text;
@@ -3512,31 +3863,36 @@ void MainWindow::handle_job_finished(
         job.state = UiJobState::finished;
         job.checked = false;
         job.remaining_ms = 0;
-        append_job_log(active_job_index_, "[info] Encode finished successfully.");
+        append_job_log(job_index, "[info] Encode finished successfully.");
     } else if (canceled) {
         job.state = UiJobState::canceled;
         job.checked = false;
         job.efps_display.clear();
         job.speed_display.clear();
         job.remaining_ms = -1;
-        append_job_log(active_job_index_, "[warning] Encode canceled.");
+        append_job_log(job_index, "[warning] Encode canceled.");
     } else {
         job.state = UiJobState::failed;
         job.checked = false;
         job.remaining_ms = -1;
-        append_job_log(active_job_index_, "[error] Encode failed.");
+        append_job_log(job_index, "[error] Encode failed.");
     }
 
-    append_job_log(active_job_index_, details_text, false);
-    active_job_elapsed_valid_ = false;
+    append_job_log(job_index, details_text, false);
+    slot.active_job_index = -1;
+    slot.elapsed_valid = false;
 
-    if (stop_requested_ || canceled) {
-        append_session_log("[warning] Queue stopped after cancel.");
-        finish_queue_run();
+    if (stop_requested_) {
+        if (active_runner_count() == 0) {
+            append_session_log("[warning] Queue stopped.");
+            finish_queue_run();
+        } else {
+            refresh_all_views();
+        }
         return;
     }
 
-    start_next_queued_job();
+    start_available_queued_jobs();
 }
 
 std::filesystem::path MainWindow::qstring_to_path(const QString &text) {

@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <cctype>
 #include <iomanip>
+#include <map>
 #include <sstream>
 #include <set>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 
 namespace utsure::core::job {
 
@@ -95,6 +97,24 @@ std::string normalize_extension(std::string extension) {
     }
 
     return extension;
+}
+
+std::string normalize_path_key(const std::filesystem::path &path) {
+    if (path.empty()) {
+        return {};
+    }
+
+    std::error_code error{};
+    auto absolute_path = std::filesystem::absolute(path, error);
+    if (error) {
+        absolute_path = path;
+    }
+
+    std::string normalized = absolute_path.lexically_normal().generic_string();
+#ifdef _WIN32
+    normalized = lowercase_ascii(std::move(normalized));
+#endif
+    return normalized;
 }
 
 std::string resolve_source_folder_name(const std::filesystem::path &source_path) {
@@ -220,46 +240,112 @@ std::string format_sequence_number(const int sequence_number) {
     return stream.str();
 }
 
-}  // namespace
-
-OutputNamingResult OutputNaming::suggest(const OutputNamingRequest &request) {
-    const std::string custom_text = sanitize_filename_fragment(request.custom_text);
-    const std::string source_folder_name = resolve_source_folder_name(request.source_path);
-    const std::string video_codec_tag = resolve_video_codec_tag(request.video_codec);
-    const std::string audio_codec_tag = resolve_audio_codec_tag(request);
-    const std::string extension = normalize_extension(request.extension_hint);
-
+struct OutputNamingFragments final {
+    std::string source_folder_name{};
+    std::string custom_text{};
+    std::string video_codec_tag{};
+    std::string audio_codec_tag{};
+    std::string extension{};
     std::string stem_prefix{};
-    if (!custom_text.empty()) {
-        stem_prefix += '[';
-        stem_prefix += custom_text;
-        stem_prefix += "] ";
+    std::string stem_suffix{};
+    std::string full_suffix{};
+};
+
+struct ReservationGroupKey final {
+    std::string directory_key{};
+    std::string stem_prefix{};
+    std::string full_suffix{};
+
+    [[nodiscard]] auto tie() const noexcept {
+        return std::tie(directory_key, stem_prefix, full_suffix);
     }
-    stem_prefix += source_folder_name + " - ";
 
-    const std::string stem_suffix = " [" + video_codec_tag + "] [" + audio_codec_tag + "]";
-    const std::string full_suffix = stem_suffix + extension;
+    [[nodiscard]] bool operator<(const ReservationGroupKey &other) const noexcept {
+        return tie() < other.tie();
+    }
+};
 
-    const auto used_sequence_numbers =
-        collect_used_sequence_numbers(request.output_directory, stem_prefix, full_suffix);
-    const int sequence_number = next_available_sequence_number(used_sequence_numbers);
+OutputNamingFragments build_output_naming_fragments(const OutputNamingRequest &request) {
+    OutputNamingFragments fragments{
+        .source_folder_name = resolve_source_folder_name(request.source_path),
+        .custom_text = sanitize_filename_fragment(request.custom_text),
+        .video_codec_tag = resolve_video_codec_tag(request.video_codec),
+        .audio_codec_tag = resolve_audio_codec_tag(request),
+        .extension = normalize_extension(request.extension_hint)
+    };
+
+    if (!fragments.custom_text.empty()) {
+        fragments.stem_prefix += '[';
+        fragments.stem_prefix += fragments.custom_text;
+        fragments.stem_prefix += "] ";
+    }
+    fragments.stem_prefix += fragments.source_folder_name + " - ";
+
+    fragments.stem_suffix = " [" + fragments.video_codec_tag + "] [" + fragments.audio_codec_tag + "]";
+    fragments.full_suffix = fragments.stem_suffix + fragments.extension;
+    return fragments;
+}
+
+OutputNamingResult build_output_naming_result(
+    const std::filesystem::path &output_directory,
+    const OutputNamingFragments &fragments,
+    const int sequence_number
+) {
     const std::string rendered_sequence_number = format_sequence_number(sequence_number);
     const std::string file_name =
-        stem_prefix + rendered_sequence_number + stem_suffix + extension;
-    const std::filesystem::path output_path = request.output_directory.empty()
+        fragments.stem_prefix + rendered_sequence_number + fragments.stem_suffix + fragments.extension;
+    const std::filesystem::path output_path = output_directory.empty()
         ? std::filesystem::path(file_name)
-        : (request.output_directory / file_name).lexically_normal();
+        : (output_directory / file_name).lexically_normal();
 
     return OutputNamingResult{
         .output_path = output_path,
         .file_name = file_name,
-        .source_folder_name = source_folder_name,
-        .custom_text = custom_text,
-        .video_codec_tag = video_codec_tag,
-        .audio_codec_tag = audio_codec_tag,
-        .extension = extension,
+        .source_folder_name = fragments.source_folder_name,
+        .custom_text = fragments.custom_text,
+        .video_codec_tag = fragments.video_codec_tag,
+        .audio_codec_tag = fragments.audio_codec_tag,
+        .extension = fragments.extension,
         .sequence_number = sequence_number
     };
+}
+
+}  // namespace
+
+OutputNamingResult OutputNaming::suggest(const OutputNamingRequest &request) {
+    const OutputNamingFragments fragments = build_output_naming_fragments(request);
+
+    const auto used_sequence_numbers =
+        collect_used_sequence_numbers(request.output_directory, fragments.stem_prefix, fragments.full_suffix);
+    const int sequence_number = next_available_sequence_number(used_sequence_numbers);
+    return build_output_naming_result(request.output_directory, fragments, sequence_number);
+}
+
+std::vector<OutputNamingResult> OutputNaming::reserve_batch(const std::vector<OutputNamingRequest> &requests) {
+    std::vector<OutputNamingResult> results{};
+    results.reserve(requests.size());
+
+    std::map<ReservationGroupKey, std::set<int>> reserved_sequence_numbers{};
+    for (const auto &request : requests) {
+        const OutputNamingFragments fragments = build_output_naming_fragments(request);
+        const ReservationGroupKey key{
+            .directory_key = normalize_path_key(request.output_directory),
+            .stem_prefix = fragments.stem_prefix,
+            .full_suffix = fragments.full_suffix
+        };
+
+        auto [iterator, inserted] = reserved_sequence_numbers.try_emplace(key);
+        if (inserted) {
+            iterator->second =
+                collect_used_sequence_numbers(request.output_directory, fragments.stem_prefix, fragments.full_suffix);
+        }
+
+        const int sequence_number = next_available_sequence_number(iterator->second);
+        iterator->second.insert(sequence_number);
+        results.push_back(build_output_naming_result(request.output_directory, fragments, sequence_number));
+    }
+
+    return results;
 }
 
 }  // namespace utsure::core::job

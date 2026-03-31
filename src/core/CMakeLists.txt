@@ -2,6 +2,7 @@ add_library(utsure_encoder_core STATIC
     src/adapters/ffms2/ffms2_preview_backend.cpp
     src/adapters/libassmod/libassmod_subtitle_renderer.cpp
     src/build_info.cpp
+    src/job/batch_parallelism.cpp
     src/job/encode_job.cpp
     src/job/encode_job_preflight.cpp
     src/job/encode_job_report.cpp

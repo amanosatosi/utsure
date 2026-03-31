@@ -1,6 +1,8 @@
 #pragma once
 
+#include "utsure/core/job/batch_parallelism.hpp"
 #include "utsure/core/job/encode_job.hpp"
+#include "utsure/core/job/output_naming.hpp"
 
 #include <QElapsedTimer>
 #include <QImage>
@@ -93,11 +95,24 @@ public:
     };
 
 private:
+    struct PlannedBatchJob final {
+        int job_index{-1};
+        utsure::core::job::EncodeJob job{};
+    };
+
+    struct RunnerSlot final {
+        EncodeJobRunnerController *controller{nullptr};
+        int active_job_index{-1};
+        QElapsedTimer elapsed_timer{};
+        bool elapsed_valid{false};
+    };
+
     bool eventFilter(QObject *watched, QEvent *event) override;
     [[nodiscard]] std::optional<utsure::core::job::EncodeJob> build_job_from_entry(
         int job_index,
         QString &error_message
     ) const;
+    [[nodiscard]] utsure::core::job::OutputNamingRequest build_output_naming_request(const UiEncodeJob &job) const;
     [[nodiscard]] utsure::core::job::EncodeJobProcessPriority current_worker_priority() const;
     [[nodiscard]] QString selected_job_name() const;
     [[nodiscard]] QString format_job_state_text(const UiEncodeJob &job) const;
@@ -106,6 +121,12 @@ private:
     [[nodiscard]] bool job_has_minimum_required_fields(const UiEncodeJob &job) const;
     [[nodiscard]] QString current_audio_quality_label() const;
     [[nodiscard]] bool is_valid_job_index(int index) const;
+    [[nodiscard]] bool any_runner_slot_running() const;
+    [[nodiscard]] int active_runner_count() const;
+    [[nodiscard]] int configured_parallel_job_count() const;
+    [[nodiscard]] int find_free_runner_slot_index() const;
+    [[nodiscard]] QString format_parallel_tooltip() const;
+    [[nodiscard]] QString normalized_output_path_key(const QString &path_text) const;
     [[nodiscard]] qint64 selected_job_frame_step_us() const;
 
     void add_source_jobs();
@@ -113,6 +134,7 @@ private:
     void remove_selected_job();
     void show_settings_placeholder();
     void show_info_dialog();
+    void show_parallel_settings_dialog();
 
     void choose_output_path();
     void restore_selected_job_auto_output_path();
@@ -140,10 +162,12 @@ private:
     void sync_selected_job_from_editor();
     void load_selected_job_into_editor();
     void select_job(int index);
+    void ensure_runner_slot_count(int slot_count);
     void ensure_job_inspection(int job_index);
     void reset_job_for_rerun(UiEncodeJob &job);
     void apply_same_as_input_folder(UiEncodeJob &job);
     void apply_generated_output_path(int job_index, bool force_auto_mode);
+    void reserve_batch_output_paths_for_jobs(const std::vector<int> &job_indices);
     [[nodiscard]] QString generate_output_path_for_job(const UiEncodeJob &job) const;
     void apply_automatic_subtitle_selection(int job_index, bool force_auto_mode, QString *decision_summary = nullptr);
     void request_selected_job_preview_frame();
@@ -178,38 +202,48 @@ private:
     void refresh_task_log_view();
     void refresh_session_log_view();
     void refresh_toolbar_state();
+    void refresh_parallel_batch_summary();
     void refresh_audio_track_combo();
     void update_start_button_visuals();
     void advance_busy_spinner();
 
     void start_encode_queue();
-    void start_next_queued_job();
+    void start_available_queued_jobs();
     void stop_encode_queue();
     void finish_queue_run();
     void append_session_log(const QString &line);
     void append_job_log(int job_index, const QString &line, bool mirror_to_session = true);
-    void update_active_job_progress(const utsure::core::job::EncodeJobProgress &progress);
+    void update_job_progress(
+        int job_index,
+        const QElapsedTimer *elapsed_timer,
+        bool elapsed_valid,
+        const utsure::core::job::EncodeJobProgress &progress
+    );
     void update_job_file_sizes(UiEncodeJob &job);
 
-    void handle_running_changed(bool running);
-    void handle_progress_changed(const utsure::core::job::EncodeJobProgress &progress);
-    void handle_job_finished(bool succeeded, bool canceled, const QString &status_text, const QString &details_text);
+    void handle_runner_running_changed(int slot_index, bool running);
+    void handle_runner_progress(int slot_index, const utsure::core::job::EncodeJobProgress &progress);
+    void handle_runner_finished(
+        int slot_index,
+        bool succeeded,
+        bool canceled,
+        const QString &status_text,
+        const QString &details_text
+    );
 
     static std::filesystem::path qstring_to_path(const QString &text);
     static QString path_to_qstring(const std::filesystem::path &path);
 
     std::vector<UiEncodeJob> jobs_{};
-    std::vector<int> queued_job_indices_{};
+    std::vector<PlannedBatchJob> planned_queue_jobs_{};
+    std::vector<RunnerSlot> runner_slots_{};
     int selected_job_index_{-1};
-    int active_job_index_{-1};
     int queue_cursor_{0};
     bool queue_run_active_{false};
     bool stop_requested_{false};
     bool loading_selected_job_{false};
     bool suppress_queue_table_changes_{false};
     int busy_spinner_phase_{0};
-    QElapsedTimer active_job_elapsed_timer_{};
-    bool active_job_elapsed_valid_{false};
     bool preview_playing_{false};
     QStringList session_log_lines_{};
     quint64 preview_request_token_{0};
@@ -287,12 +321,14 @@ private:
     QToolButton *remove_button_{nullptr};
     QToolButton *settings_button_{nullptr};
     QToolButton *info_button_{nullptr};
+    QToolButton *parallel_button_{nullptr};
     QComboBox *priority_combo_{nullptr};
     QToolButton *start_button_{nullptr};
     QToolButton *stop_button_{nullptr};
     QTimer *busy_spinner_timer_{nullptr};
     QTimer *preview_playback_timer_{nullptr};
     PreviewAudioController *preview_audio_controller_{nullptr};
-    EncodeJobRunnerController *runner_controller_{nullptr};
     PreviewFrameRendererController *preview_renderer_controller_{nullptr};
+    utsure::core::job::ParallelBatchSettings parallel_batch_settings_{};
+    utsure::core::job::ParallelBatchSummary parallel_batch_summary_{};
 };

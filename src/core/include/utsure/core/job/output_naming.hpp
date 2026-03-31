@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace utsure::core::job {
 
@@ -35,6 +36,7 @@ struct OutputNamingResult final {
 class OutputNaming final {
 public:
     [[nodiscard]] static OutputNamingResult suggest(const OutputNamingRequest &request);
+    [[nodiscard]] static std::vector<OutputNamingResult> reserve_batch(const std::vector<OutputNamingRequest> &requests);
 };
 
 }  // namespace utsure::core::job

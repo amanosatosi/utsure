@@ -22,6 +22,15 @@ namespace {
 using utsure::core::subtitles::SubtitleRenderRequest;
 using utsure::core::subtitles::SubtitleRenderSessionCreateRequest;
 
+media::streaming::PipelineQueueLimits resolve_pipeline_queue_limits(const EncodeJob &job) {
+    auto queue_limits = media::streaming::kDefaultPipelineQueueLimits;
+    if (job.execution.video_frame_queue_depth_override.has_value()) {
+        queue_limits.video_frame_queue_depth = *job.execution.video_frame_queue_depth_override;
+    }
+
+    return queue_limits;
+}
+
 bool issues_contain_error(const std::vector<EncodeJobPreflightIssue> &issues) {
     return std::any_of(
         issues.begin(),
@@ -587,10 +596,13 @@ EncodeJobPreflightResult EncodeJobPreflight::inspect(const EncodeJob &job) noexc
             ),
             .output_audio_summary = media::format_resolved_audio_output_summary(resolved_audio_output),
             .encoder_threading_summary = media::streaming::format_encoder_threading_summary(
-                media::streaming::resolve_streaming_runtime_behavior(job.execution.threading),
+                media::streaming::resolve_streaming_runtime_behavior(
+                    job.execution.threading,
+                    resolve_pipeline_queue_limits(job)
+                ),
                 job.output.video.codec
             ),
-            .video_frame_queue_depth = media::streaming::kDefaultPipelineQueueLimits.video_frame_queue_depth,
+            .video_frame_queue_depth = resolve_pipeline_queue_limits(job).video_frame_queue_depth,
             .process_priority = job.execution.process_priority,
             .subtitles_enabled = job.subtitles.has_value(),
             .subtitle_timing_mode = job.subtitles.has_value()

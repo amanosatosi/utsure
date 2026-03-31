@@ -16,6 +16,22 @@ namespace utsure::core::job {
 
 namespace {
 
+media::streaming::PipelineQueueLimits resolve_pipeline_queue_limits(const EncodeJob &job) {
+    auto queue_limits = media::streaming::kDefaultPipelineQueueLimits;
+    if (job.execution.video_frame_queue_depth_override.has_value()) {
+        queue_limits.video_frame_queue_depth = *job.execution.video_frame_queue_depth_override;
+    }
+
+    return queue_limits;
+}
+
+media::streaming::StreamingRuntimeBehavior resolve_runtime_behavior(const EncodeJob &job) {
+    return media::streaming::resolve_streaming_runtime_behavior(
+        job.execution.threading,
+        resolve_pipeline_queue_limits(job)
+    );
+}
+
 struct EncodeJobTelemetry final {
     EncodeJobObserver *observer{nullptr};
     int total_steps{0};
@@ -197,7 +213,7 @@ std::string format_encode_log_message(const EncodeJob &job) {
 }
 
 std::string format_encode_runtime_log_message(const EncodeJob &job) {
-    const auto runtime_behavior = media::streaming::resolve_streaming_runtime_behavior(job.execution.threading);
+    const auto runtime_behavior = resolve_runtime_behavior(job);
     return "Encoding runtime request: CPU mode " +
         std::string(media::to_string(job.execution.threading.cpu_usage_mode)) +
         ", encoder threads " +
@@ -406,6 +422,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                 .media_encode_request = build_media_encode_request(job),
                 .normalization_policy = options.decode_normalization_policy,
                 .subtitle_renderer = subtitle_renderer.get(),
+                .queue_limits = resolve_pipeline_queue_limits(job),
                 .progress_callback = [&telemetry](const media::streaming::StreamingEncodeProgress &progress) {
                     notify_encode_progress(telemetry, progress);
                 },

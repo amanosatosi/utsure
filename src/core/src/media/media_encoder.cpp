@@ -599,7 +599,7 @@ int resolve_requested_ffmpeg_thread_count(
 ) noexcept {
     return detail::resolve_requested_ffmpeg_thread_count_impl(
         settings.cpu_usage_mode,
-        detail::effective_logical_core_count(logical_core_count)
+        detail::effective_logical_core_count(settings.logical_core_count_override.value_or(logical_core_count))
     );
 }
 

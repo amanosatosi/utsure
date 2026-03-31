@@ -26,6 +26,7 @@ This file is the living execution plan for the repository. Update it when a mile
   * M18 Automatic output naming completed.
   * M19 Automatic subtitle selection completed.
   * M20 FontCollector-based subtitle font recovery and fallback completed.
+  * M21 Global parallel batch encoding with bounded job counts and pre-reserved output naming completed.
 
 ## Active assumptions
 
@@ -83,6 +84,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M18 slice assumes the generated default should reuse the current output-path extension when one is already present and otherwise fall back to `.mp4` until a dedicated container-selection surface exists.
 - The current M19 slice is limited to same-folder subtitle discovery with strict exact-stem and exact `.fx`-qualified matches; it intentionally avoids recursive search and loose partial-name guessing.
 - The current M20 slice is limited to explicit FontCollector-based recovery for ASS/SSA subtitle session preparation, staged into a job-scoped temporary font directory and applied through the existing subtitle renderer abstraction when available.
+- The current M21 slice is limited to global batch-level parallel scheduling, bounded per-job thread/buffer planning, and pre-reserved auto output naming; it does not add new per-queue tabs or broader encode-policy changes beyond those execution-planning surfaces.
 
 ## Architecture direction
 
@@ -790,10 +792,11 @@ Done criteria:
 
 ### M21 Add global parallel batch encoding with bounded job counts and pre-reserved output naming
 
-Status: Planned
+Status: Completed
 
 Scope:
   * Add parallel batch encoding as a global run-level feature rather than a per-queue setting.
+  * Keep parallel encoding turned off by default so the existing single-job behavior remains the normal startup path.
   * Detect total usable system threads and allow only parallel job counts that divide that total exactly.
   * Keep parallel controls out of the per-queue `Main | Encode | Special | Logs` area and place them in the top execution toolbar near process priority and start/stop controls.
   * Use a compact global `Parallel` control with hover summary behavior and a click-open settings window so the main layout and preview space stay unchanged.
@@ -801,6 +804,7 @@ Scope:
 
 UI behavior:
   * Add a global `Parallel` control near the priority selector.
+  * Parallel encoding is off by default on startup.
   * Hovering `Parallel` shows a short summary of current parallel state.
   * Clicking `Parallel` opens a small settings window for configuring the feature.
   * Do not place parallel controls inside per-queue tabs.
@@ -809,56 +813,21 @@ Scheduling rules:
   * Let `T` be the detected total usable thread count.
   * A parallel job count `N` is valid only when `T % N == 0`.
   * Per-job thread count is `T / N`.
-  * Parallel execution remains disabled when `N == 1`, unless the UI still uses `1` as the explicit non-parallel/default selection.
+  * When parallel encoding is off, retain the current single-job execution behavior.
+  * Pre-reserve auto-generated output names for the checked batch before starting any worker so parallel jobs cannot race on the same numeric suffix.
 
-Buffer policy:
-  * Keep the current single-job buffer behavior at `70` frames.
-  * When parallel encoding is enabled, use tiered per-job buffer values instead of trying to divide the original `70` evenly.
-  * Current intended policy:
-    * `1` job: `70`
-    * `2` to `3` jobs: `40`
-    * `4` to `T / 2` jobs: `20`
-    * more than `T / 2` jobs: `10`
-  * This policy should be computed from the selected valid job count and shown clearly in the UI.
-
-Automatic naming interaction:
-  * Automatic output numbering must be batch-safe under parallel execution.
-  * Output names for all queued jobs must be generated and reserved before any worker starts.
-  * Running workers must not lazily determine the next available number at execution time.
-
-Likely files/modules:
-  * `src/core/include/utsure/core/job/`
-  * `src/core/src/job/`
-  * `src/core/src/encode/`
-  * `src/core/src/process/`
-  * `src/app/`
-  * `src/app/widgets/`
-  * `tests/core/`
-  * `tests/app/`
-
-Risks:
-  * Thread-count detection may be straightforward, but the resulting allowed job counts may feel restrictive on some systems.
-  * Parallel state may become confusing if the UI does not clearly separate global scheduling controls from per-queue settings.
-  * Output numbering may collide unless name reservation happens before execution.
-  * Overly aggressive parallel counts may still be technically valid while performing poorly in practice.
+Current slice status:
+  * Completed: added a dedicated core `BatchParallelism` helper that detects usable threads, exposes only exact-divisor job counts, applies the tiered per-job buffer policy, and can inject planned thread/buffer overrides into encode jobs when global parallel mode is enabled.
+  * Completed: extended output naming with batch reservation so the checked run can pre-allocate unique auto-name sequence numbers before any worker starts, keeping numbered outputs collision-safe even when multiple workers launch together.
+  * Completed: rewired the desktop app queue runner from one active controller into global planned batch dispatch with multiple runner slots, stop-all cancellation, per-slot progress routing, and duplicate output-path rejection inside the batch plan so one failed job does not stop unrelated jobs.
+  * Completed: added a top-toolbar `Parallel` control beside priority, with default-off behavior, hover summary tooltip, and a compact modal dialog for enabling/disabling the feature and choosing one of the valid job counts.
+  * Completed: added focused core tests for divisor/job-count selection, thread allocation, buffer tiers, execution-setting injection, and batch output-name reservation, plus CMake/CI target wiring for the new parallel-planning test executable.
 
 Validation:
-  * Verify total usable thread detection on representative systems.
-  * Verify that only exact divisors of total usable threads are offered as valid parallel job counts.
-  * Verify that per-job thread allocation is computed exactly.
-  * Verify that per-job buffer values follow the intended tiered policy.
-  * Verify that hover summary reflects current parallel state accurately.
-  * Verify that the settings window opens from the top-bar control without shrinking preview space.
-  * Verify that automatic output names are reserved before execution and remain unique across the full batch.
-  * Verify that one failing job does not corrupt progress, naming, or reporting for unrelated jobs.
-
-Done criteria:
-  * The app supports global parallel batch encoding with exact-divisor job counts.
-  * Parallel settings are configured from a top-bar control instead of per-queue tabs.
-  * Hover summary and click-open settings window both work cleanly.
-  * Per-job thread allocation and per-job buffer policy are visible and predictable.
-  * Automatic output naming remains collision-safe under parallel execution.
+  * Verify that parallel mode stays off on startup and the existing single-job path remains the default until the user explicitly enables parallel batch encoding.
+  * Verify that the toolbar `Parallel` button opens the dialog, reports `On/Off`, `Jobs`, `Threads/job`, and `Buffer/job` through its tooltip summary, and leaves the preview/editor layout unchanged.
+  * Verify that only exact divisors of the detected usable thread count are offered and that the resulting threads/job and buffer/job values follow the documented tiers.
+  * Verify that the batch planner reserves auto-managed output paths before worker startup and rejects duplicate final output paths within the run.
+  * Local validation for this slice is limited to patch-level checks because compile/test validation is reserved for GitHub Actions in this repository.
 
 ## Immediate next milestone
-
-

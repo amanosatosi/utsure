@@ -88,6 +88,7 @@ struct EncodeJobOutputSettings final {
 struct EncodeJobExecutionSettings final {
     EncodeJobProcessPriority process_priority{EncodeJobProcessPriority::below_normal};
     media::TranscodeThreadingSettings threading{};
+    std::optional<std::size_t> video_frame_queue_depth_override{};
 };
 
 struct EncodeJob final {

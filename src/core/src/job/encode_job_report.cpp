@@ -31,6 +31,15 @@ std::string format_optional_path_leaf(const std::optional<std::filesystem::path>
     return format_path_leaf(*path);
 }
 
+media::streaming::PipelineQueueLimits resolve_pipeline_queue_limits(const EncodeJob &job) {
+    auto queue_limits = media::streaming::kDefaultPipelineQueueLimits;
+    if (job.execution.video_frame_queue_depth_override.has_value()) {
+        queue_limits.video_frame_queue_depth = *job.execution.video_frame_queue_depth_override;
+    }
+
+    return queue_limits;
+}
+
 std::string format_rational(const media::Rational &value) {
     if (!value.is_valid()) {
         return "unknown";
@@ -86,7 +95,10 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
     report << "decode.policy.audio_block_samples="
            << encode_job_summary.decode_normalization_policy.audio_block_samples << '\n';
     const auto runtime_behavior =
-        media::streaming::resolve_streaming_runtime_behavior(encode_job_summary.job.execution.threading);
+        media::streaming::resolve_streaming_runtime_behavior(
+            encode_job_summary.job.execution.threading,
+            resolve_pipeline_queue_limits(encode_job_summary.job)
+        );
     report << "streaming.encoder_threads="
            << media::streaming::format_encoder_threading_summary(
                   runtime_behavior,

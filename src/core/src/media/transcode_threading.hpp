@@ -136,19 +136,22 @@ inline std::size_t choose_video_processing_worker_count(
     const TranscodeThreadingSettings &settings,
     const std::uint32_t logical_core_count
 ) noexcept {
+    const std::uint32_t available_logical_core_count =
+        effective_logical_core_count(settings.logical_core_count_override.value_or(logical_core_count));
+
     switch (settings.cpu_usage_mode) {
     case CpuUsageMode::conservative:
         return 1U;
     case CpuUsageMode::aggressive:
         // Decoder and encoder already fan out inside libavcodec, so keep the host-side frame workers bounded.
-        return std::clamp<std::size_t>(std::max<std::uint32_t>(2U, logical_core_count / 4U), 1U, 4U);
+        return std::clamp<std::size_t>(std::max<std::uint32_t>(2U, available_logical_core_count / 4U), 1U, 4U);
     case CpuUsageMode::auto_select:
     default:
-        if (logical_core_count >= 12U) {
+        if (available_logical_core_count >= 12U) {
             return 3U;
         }
 
-        if (logical_core_count >= 8U) {
+        if (available_logical_core_count >= 8U) {
             return 2U;
         }
 
