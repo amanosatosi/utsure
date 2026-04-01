@@ -28,6 +28,7 @@ This file is the living execution plan for the repository. Update it when a mile
   * M20 FontCollector-based subtitle font recovery and fallback completed.
   * M21 Global parallel batch encoding with bounded job counts and pre-reserved output naming completed.
   * M22 FFMS2 preview latency investigation and responsiveness hardening completed.
+- [x] M23 Encode-throughput investigation and subtitle-free fast path completed.
 
 ## Active assumptions
 
@@ -87,6 +88,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M20 slice is limited to explicit FontCollector-based recovery for ASS/SSA subtitle session preparation, staged into a job-scoped temporary font directory and applied through the existing subtitle renderer abstraction when available.
 - The current M21 slice is limited to global batch-level parallel scheduling, bounded per-job thread/buffer planning, and pre-reserved auto output naming; it does not add new per-queue tabs or broader encode-policy changes beyond those execution-planning surfaces.
 - The current M22 slice is limited to FFMS2-based preview responsiveness: timing instrumentation, lower-latency interactive seek behavior, request coalescing hardening, and safer prefetch/session reuse without changing unrelated encode or GUI layout behavior.
+- The current M23 slice is limited to identifying streaming encode bottlenecks, surfacing stage timing/runtime diagnostics, removing subtitle-free RGBA normalization overhead where possible, and reusing video conversion buffers without changing output quality defaults or subtitle-enabled behavior.
 
 ## Architecture direction
 
@@ -850,4 +852,34 @@ Current slice status:
   * Completed: reduced unnecessary frame copying by avoiding a full decoded-frame copy on subtitle-free preview requests, and added focused core regression coverage for one-frame interactive seek plus reusable sequential preview-session playback.
   * Validation note: local runtime measurements and local C++ build/test execution were intentionally not run because this repository keeps compile/test validation in GitHub Actions; the local validation step for this slice was limited to code-path inspection, targeted regression-test updates, and `git diff --check`.
 
+### M23 Investigate encode throughput and add a subtitle-free fast path
+
+Status: Completed
+
+Scope:
+  * Surface end-of-encode timing breakdowns so total elapsed time, average output FPS, and decode/process/subtitle/encode stage costs are visible in logs and reports.
+  * Preserve the existing libassmod RGBA subtitle path for subtitle-enabled jobs.
+  * Add a subtitle-free fast path that keeps frames in decoder-native `AVFrame` form until the encoder-preparation step, instead of forcing a normalize-to-RGBA and convert-back-to-YUV round trip.
+  * Reduce avoidable per-frame allocations and copies by reusing swscale contexts, encoder input frames, and other working surfaces where practical.
+  * Keep intro/main/outro sequencing, timestamps, CFR behavior, mux behavior, and current x264/x265 preset+CRF defaults unchanged unless diagnostics prove encode settings are the dominant bottleneck.
+
+Current slice status:
+  * Completed: traced the streaming decode -> process -> subtitle -> encode path and confirmed that subtitle-free jobs were still paying for a native-frame clone, RGBA normalization into owned bytes, and a second conversion into encoder input.
+  * Completed: introduced an internal streaming frame representation so subtitle-disabled segments can stay in native `AVFrame` form until encoder handoff, while subtitle-enabled segments still materialize RGBA frames for libassmod composition.
+  * Completed: removed one extra subtitle-path copy by scaling directly into owned RGBA plane storage instead of allocating a temporary RGBA `AVFrame` and then copying it row by row.
+  * Completed: reused encoder input `AVFrame` storage and kept swscale contexts cached inside the output session so converted frames no longer allocate a fresh encoder surface every frame.
+  * Completed: added a direct native-frame handoff when the decoder already delivers the encoder pixel format, so subtitle-free jobs can skip both RGBA normalization and the final conversion step entirely.
+  * Completed: extended runtime logs and encode-job reports with total stage costs, percentages of wall-clock time, average output FPS, and effective decoder/encoder/worker/queue settings.
+  * Completed: updated focused core tests so subtitle-free jobs assert zero subtitle-compose time while subtitle-enabled jobs assert non-zero subtitle-compose time and observe the expected fast-path / RGBA-path runtime logs.
+  * Validation note: local C++ build/test execution and local before/after runtime measurements were intentionally not run because this repository reserves compile/test validation for GitHub Actions; the local validation step for this slice was limited to targeted test updates, code-path inspection, and `git diff --check`.
+
+Validation:
+  * Compare timing logs for one subtitle-free source and one ASS subtitle burn-in source before and after the patch.
+  * Verify that subtitle-disabled jobs no longer report meaningful subtitle-stage cost and avoid the RGBA-only processing path.
+  * Verify that subtitle-enabled jobs still preserve burn-in output correctness.
+  * Verify that intro/main/outro sequencing, audio mux behavior, output timestamps, and CFR cadence remain unchanged.
+  * Local validation for this slice remains limited to patch-level checks such as targeted test updates and `git diff --check`, because compile/test execution is reserved for GitHub Actions in this repository.
+
 ## Immediate next milestone
+
+No new milestone is selected yet.

@@ -54,6 +54,16 @@ struct CollectingObserver final : EncodeJobObserver {
     }
 };
 
+bool observer_logs_contain_text(const CollectingObserver &observer, std::string_view needle) {
+    for (const auto &message : observer.log_messages) {
+        if (message.message.find(needle) != std::string::npos) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 std::string format_rational(const Rational &value) {
     if (!value.is_valid()) {
         return "unknown";
@@ -206,6 +216,11 @@ int assert_observer_flow(
         if (log_message.level == EncodeJobLogLevel::error) {
             return fail("The subtitle burn-in observer reported an unexpected error log.");
         }
+    }
+
+    if (!observer_logs_contain_text(observer, "RGBA subtitle composition path") ||
+        !observer_logs_contain_text(observer, "Streaming performance: total_elapsed=")) {
+        return fail("The subtitle burn-in observer did not report the expected subtitle-path runtime logs.");
     }
 
     return 0;
@@ -390,6 +405,10 @@ int run_burn_in_assertion(
         return fail("Unexpected count of subtitled video frames in the burn-in summary.");
     }
 
+    if (burned_job_result.encode_job_summary->streaming_runtime.subtitle_compose_microseconds == 0U) {
+        return fail("Subtitle burn-in jobs should report non-zero subtitle composition time.");
+    }
+
     const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);
     const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
     if (!plain_output_decode.succeeded() || !burned_output_decode.succeeded()) {
@@ -482,6 +501,10 @@ int run_timeline_burn_in_assertion(
 
     if (summary.subtitled_video_frame_count != 11) {
         return fail("Unexpected count of subtitled video frames for the timeline burn-in path.");
+    }
+
+    if (summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
+        return fail("Timeline subtitle burn-in jobs should report non-zero subtitle composition time.");
     }
 
     const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);
@@ -586,6 +609,10 @@ int run_timeline_full_output_burn_in_assertion(
 
     if (summary.subtitled_video_frame_count != 11) {
         return fail("Unexpected count of subtitled video frames for the full-output timeline burn-in path.");
+    }
+
+    if (summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
+        return fail("Full-output subtitle burn-in jobs should report non-zero subtitle composition time.");
     }
 
     const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);

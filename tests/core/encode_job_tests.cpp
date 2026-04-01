@@ -371,13 +371,25 @@ int assert_runtime_visibility(
         return fail("Unexpected default encode-job CPU mode.");
     }
 
+    if (summary.streaming_runtime.total_elapsed_microseconds <= 0) {
+        return fail("The encode-job summary did not capture total streaming elapsed time.");
+    }
+
+    if (summary.streaming_runtime.subtitle_compose_microseconds != 0U) {
+        return fail("Subtitle-free encode jobs should not report subtitle composition time.");
+    }
+
     const auto report = format_encode_job_report(summary);
     if (!contains_text(report, "job.execution.priority=below_normal") ||
         !contains_text(report, "job.execution.cpu_mode=auto") ||
-        !contains_text(report, "streaming.encoder_threads=auto (") ||
+        !contains_text(report, "streaming.logical_cores.detected=") ||
+        !contains_text(report, "streaming.decoder_thread_count=") ||
+        !contains_text(report, "streaming.encoder_threads=") ||
         !contains_text(report, "streaming.video_workers=") ||
         !contains_text(report, "streaming.video_queue_frames=70") ||
-        !contains_text(report, "streaming.audio_queue_blocks=8")) {
+        !contains_text(report, "streaming.audio_queue_blocks=8") ||
+        !contains_text(report, "streaming.performance.total_elapsed_ms=") ||
+        !contains_text(report, "streaming.performance.video_encode_ms=")) {
         return fail("The encode-job report did not include the expected runtime settings.");
     }
 
@@ -386,7 +398,8 @@ int assert_runtime_visibility(
         !observer_logs_contain_text(observer, "priority Below Normal") ||
         !observer_logs_contain_text(observer, "Video encoder:") ||
         !observer_logs_contain_text(observer, "Video decoder (") ||
-        !observer_logs_contain_text(observer, "Stage timing:")) {
+        !observer_logs_contain_text(observer, "subtitle-free native-frame fast path") ||
+        !observer_logs_contain_text(observer, "Streaming performance: total_elapsed=")) {
         return fail("The encode-job observer logs did not include the expected runtime settings.");
     }
 

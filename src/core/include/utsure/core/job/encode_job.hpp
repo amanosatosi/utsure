@@ -4,6 +4,7 @@
 #include "utsure/core/media/media_info.hpp"
 #include "utsure/core/timeline/timeline.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -98,6 +99,25 @@ struct EncodeJob final {
     EncodeJobExecutionSettings execution{};
 };
 
+struct EncodeJobStreamingRuntimeSummary final {
+    std::uint32_t detected_logical_core_count{0};
+    std::uint32_t effective_logical_core_count{1};
+    media::CpuUsageMode cpu_usage_mode{media::CpuUsageMode::auto_select};
+    int selected_video_decoder_thread_count{0};
+    int selected_video_decoder_thread_type{0};
+    int selected_video_encoder_thread_count{0};
+    int selected_video_encoder_thread_type{0};
+    std::size_t video_processing_worker_count{1};
+    std::size_t video_frame_queue_depth{0};
+    std::size_t decoded_audio_block_queue_depth{0};
+    std::uint64_t video_decode_microseconds{0};
+    std::uint64_t video_process_microseconds{0};
+    std::uint64_t subtitle_compose_microseconds{0};
+    std::uint64_t video_encode_microseconds{0};
+    std::int64_t total_elapsed_microseconds{0};
+    double average_output_fps{0.0};
+};
+
 struct EncodeJobSummary final {
     EncodeJob job{};
     media::MediaSourceInfo inspected_input_info{};
@@ -106,6 +126,7 @@ struct EncodeJobSummary final {
     std::int64_t decoded_video_frame_count{0};
     std::int64_t decoded_audio_block_count{0};
     std::int64_t subtitled_video_frame_count{0};
+    EncodeJobStreamingRuntimeSummary streaming_runtime{};
     media::EncodedMediaSummary encoded_media_summary{};
 };
 

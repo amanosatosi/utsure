@@ -457,6 +457,39 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                 .decoded_video_frame_count = streaming_result.summary->decoded_video_frame_count,
                 .decoded_audio_block_count = streaming_result.summary->decoded_audio_block_count,
                 .subtitled_video_frame_count = streaming_result.summary->subtitled_video_frame_count,
+                .streaming_runtime = EncodeJobStreamingRuntimeSummary{
+                    .detected_logical_core_count =
+                        streaming_result.summary->runtime_behavior.detected_logical_core_count,
+                    .effective_logical_core_count =
+                        streaming_result.summary->runtime_behavior.effective_logical_core_count,
+                    .cpu_usage_mode = streaming_result.summary->runtime_behavior.cpu_usage_mode,
+                    .selected_video_decoder_thread_count =
+                        streaming_result.summary->runtime_behavior.selected_video_decoder_thread_count,
+                    .selected_video_decoder_thread_type =
+                        streaming_result.summary->runtime_behavior.selected_video_decoder_thread_type,
+                    .selected_video_encoder_thread_count =
+                        streaming_result.summary->runtime_behavior.selected_video_encoder_thread_count,
+                    .selected_video_encoder_thread_type =
+                        streaming_result.summary->runtime_behavior.selected_video_encoder_thread_type,
+                    .video_processing_worker_count =
+                        streaming_result.summary->runtime_behavior.video_processing_worker_count,
+                    .video_frame_queue_depth =
+                        streaming_result.summary->runtime_behavior.video_frame_queue_depth,
+                    .decoded_audio_block_queue_depth =
+                        streaming_result.summary->runtime_behavior.decoded_audio_block_queue_depth,
+                    .video_decode_microseconds =
+                        streaming_result.summary->performance_metrics.video_decode.total_microseconds,
+                    .video_process_microseconds =
+                        streaming_result.summary->performance_metrics.video_process.total_microseconds,
+                    .subtitle_compose_microseconds =
+                        streaming_result.summary->performance_metrics.subtitle_compose.total_microseconds,
+                    .video_encode_microseconds =
+                        streaming_result.summary->performance_metrics.video_encode.total_microseconds,
+                    .total_elapsed_microseconds =
+                        streaming_result.summary->performance_metrics.total_elapsed_microseconds,
+                    .average_output_fps =
+                        streaming_result.summary->performance_metrics.average_output_fps
+                },
                 .encoded_media_summary = streaming_result.summary->encoded_media_summary
             },
             .error = std::nullopt

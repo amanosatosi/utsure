@@ -1,8 +1,10 @@
 #include "utsure/core/job/encode_job_report.hpp"
 
 #include "../media/streaming_transcode_pipeline.hpp"
+#include "../media/transcode_threading.hpp"
 #include "utsure/core/media/decoded_media.hpp"
 
+#include <iomanip>
 #include <sstream>
 #include <string>
 
@@ -31,15 +33,6 @@ std::string format_optional_path_leaf(const std::optional<std::filesystem::path>
     return format_path_leaf(*path);
 }
 
-media::streaming::PipelineQueueLimits resolve_pipeline_queue_limits(const EncodeJob &job) {
-    auto queue_limits = media::streaming::kDefaultPipelineQueueLimits;
-    if (job.execution.video_frame_queue_depth_override.has_value()) {
-        queue_limits.video_frame_queue_depth = *job.execution.video_frame_queue_depth_override;
-    }
-
-    return queue_limits;
-}
-
 std::string format_rational(const media::Rational &value) {
     if (!value.is_valid()) {
         return "unknown";
@@ -48,10 +41,49 @@ std::string format_rational(const media::Rational &value) {
     return std::to_string(value.numerator) + "/" + std::to_string(value.denominator);
 }
 
+std::string format_decimal(const double value) {
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(2) << value;
+    return stream.str();
+}
+
+double microseconds_to_milliseconds(const std::uint64_t microseconds) noexcept {
+    return static_cast<double>(microseconds) / 1000.0;
+}
+
+double microseconds_to_milliseconds(const std::int64_t microseconds) noexcept {
+    return static_cast<double>(microseconds) / 1000.0;
+}
+
+double percentage_of_total(
+    const std::uint64_t stage_microseconds,
+    const std::int64_t total_elapsed_microseconds
+) noexcept {
+    if (stage_microseconds == 0U || total_elapsed_microseconds <= 0) {
+        return 0.0;
+    }
+
+    return (static_cast<double>(stage_microseconds) * 100.0) /
+        static_cast<double>(total_elapsed_microseconds);
+}
+
 }  // namespace
 
 std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary) {
     std::ostringstream report;
+    const auto &runtime = encode_job_summary.streaming_runtime;
+    const media::streaming::StreamingRuntimeBehavior runtime_behavior{
+        .detected_logical_core_count = runtime.detected_logical_core_count,
+        .effective_logical_core_count = runtime.effective_logical_core_count,
+        .cpu_usage_mode = runtime.cpu_usage_mode,
+        .selected_video_decoder_thread_count = runtime.selected_video_decoder_thread_count,
+        .selected_video_decoder_thread_type = runtime.selected_video_decoder_thread_type,
+        .selected_video_encoder_thread_count = runtime.selected_video_encoder_thread_count,
+        .selected_video_encoder_thread_type = runtime.selected_video_encoder_thread_type,
+        .video_processing_worker_count = runtime.video_processing_worker_count,
+        .video_frame_queue_depth = runtime.video_frame_queue_depth,
+        .decoded_audio_block_queue_depth = runtime.decoded_audio_block_queue_depth
+    };
 
     report << "job.input.intro.present=" << (encode_job_summary.job.input.intro_source_path.has_value() ? "yes" : "no") << '\n';
     if (encode_job_summary.job.input.intro_source_path.has_value()) {
@@ -94,20 +126,47 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
            << media::to_string(encode_job_summary.decode_normalization_policy.audio_sample_format) << '\n';
     report << "decode.policy.audio_block_samples="
            << encode_job_summary.decode_normalization_policy.audio_block_samples << '\n';
-    const auto runtime_behavior =
-        media::streaming::resolve_streaming_runtime_behavior(
-            encode_job_summary.job.execution.threading,
-            resolve_pipeline_queue_limits(encode_job_summary.job)
-        );
+    report << "streaming.logical_cores.detected=" << runtime.detected_logical_core_count << '\n';
+    report << "streaming.logical_cores.effective=" << runtime.effective_logical_core_count << '\n';
+    report << "streaming.cpu_mode=" << media::to_string(runtime.cpu_usage_mode) << '\n';
+    report << "streaming.decoder_thread_count=" << runtime.selected_video_decoder_thread_count << '\n';
+    report << "streaming.decoder_thread_type="
+           << media::detail::format_ffmpeg_thread_type_detail(runtime.selected_video_decoder_thread_type) << '\n';
     report << "streaming.encoder_threads="
            << media::streaming::format_encoder_threading_summary(
                   runtime_behavior,
                   encode_job_summary.job.output.video.codec
               )
            << '\n';
-    report << "streaming.video_workers=" << runtime_behavior.video_processing_worker_count << '\n';
-    report << "streaming.video_queue_frames=" << runtime_behavior.video_frame_queue_depth << '\n';
-    report << "streaming.audio_queue_blocks=" << runtime_behavior.decoded_audio_block_queue_depth << '\n';
+    report << "streaming.encoder_thread_count=" << runtime.selected_video_encoder_thread_count << '\n';
+    report << "streaming.encoder_thread_type="
+           << media::detail::format_ffmpeg_thread_type_detail(runtime.selected_video_encoder_thread_type) << '\n';
+    report << "streaming.video_workers=" << runtime.video_processing_worker_count << '\n';
+    report << "streaming.video_queue_frames=" << runtime.video_frame_queue_depth << '\n';
+    report << "streaming.audio_queue_blocks=" << runtime.decoded_audio_block_queue_depth << '\n';
+    report << "streaming.performance.total_elapsed_ms="
+           << format_decimal(microseconds_to_milliseconds(runtime.total_elapsed_microseconds)) << '\n';
+    report << "streaming.performance.average_output_fps=" << format_decimal(runtime.average_output_fps) << '\n';
+    report << "streaming.performance.video_decode_ms="
+           << format_decimal(microseconds_to_milliseconds(runtime.video_decode_microseconds)) << '\n';
+    report << "streaming.performance.video_decode_pct="
+           << format_decimal(percentage_of_total(runtime.video_decode_microseconds, runtime.total_elapsed_microseconds))
+           << '\n';
+    report << "streaming.performance.video_process_ms="
+           << format_decimal(microseconds_to_milliseconds(runtime.video_process_microseconds)) << '\n';
+    report << "streaming.performance.video_process_pct="
+           << format_decimal(percentage_of_total(runtime.video_process_microseconds, runtime.total_elapsed_microseconds))
+           << '\n';
+    report << "streaming.performance.subtitle_compose_ms="
+           << format_decimal(microseconds_to_milliseconds(runtime.subtitle_compose_microseconds)) << '\n';
+    report << "streaming.performance.subtitle_compose_pct="
+           << format_decimal(percentage_of_total(runtime.subtitle_compose_microseconds, runtime.total_elapsed_microseconds))
+           << '\n';
+    report << "streaming.performance.video_encode_ms="
+           << format_decimal(microseconds_to_milliseconds(runtime.video_encode_microseconds)) << '\n';
+    report << "streaming.performance.video_encode_pct="
+           << format_decimal(percentage_of_total(runtime.video_encode_microseconds, runtime.total_elapsed_microseconds))
+           << '\n';
     report << "input.container=" << encode_job_summary.inspected_input_info.container_format_name << '\n';
     report << "input.video.present="
            << (encode_job_summary.inspected_input_info.primary_video_stream.has_value() ? "yes" : "no") << '\n';
