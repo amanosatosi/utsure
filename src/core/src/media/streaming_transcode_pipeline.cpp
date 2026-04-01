@@ -266,12 +266,14 @@ struct PendingVideoFrameInput final {
 struct QueuedVideoFrameOutput final {
     StreamingVideoFrame frame{};
     ResolvedVideoFrameTiming timing{};
+    bool subtitles_applied{false};
 };
 
 struct ProcessedVideoFrameOutput final {
     std::uint64_t order_index{0};
     QueuedVideoFrameOutput output{};
     std::uint64_t process_microseconds{0};
+    std::uint64_t subtitle_compose_microseconds{0};
 };
 
 struct EncoderSelection final {
@@ -1387,11 +1389,21 @@ FrameHandle move_frame(AVFrame &source_frame) {
 struct VideoProcessTask final {
     std::uint64_t order_index{0};
     QueuedVideoFrameOutput output{};
+    std::optional<std::int64_t> subtitle_timestamp_microseconds{};
 };
 
 class ParallelVideoFrameProcessor final {
 public:
-    ParallelVideoFrameProcessor(const std::size_t worker_count, const std::size_t max_in_flight)
+    struct SubtitleWorkerSessionTemplate final {
+        subtitles::SubtitleRenderer *renderer{nullptr};
+        subtitles::PreparedSubtitleRenderSessionRequest prepared_request{};
+    };
+
+    ParallelVideoFrameProcessor(
+        const std::size_t worker_count,
+        const std::size_t max_in_flight,
+        std::optional<SubtitleWorkerSessionTemplate> subtitle_worker_session_template = std::nullopt
+    )
         : max_in_flight_(max_in_flight) {
         if (worker_count == 0U) {
             throw std::runtime_error("The streaming video processor requires at least one worker.");
@@ -1401,10 +1413,22 @@ public:
             throw std::runtime_error("The streaming video processor requires bounded in-flight capacity.");
         }
 
+        std::vector<std::unique_ptr<subtitles::SubtitleRenderSession>> worker_subtitle_sessions{};
+        if (subtitle_worker_session_template.has_value()) {
+            worker_subtitle_sessions.reserve(worker_count);
+            for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
+                worker_subtitle_sessions.push_back(
+                    create_worker_subtitle_session(*subtitle_worker_session_template)
+                );
+            }
+        }
+
         workers_.reserve(worker_count);
         for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
-            workers_.emplace_back([this]() {
-                worker_main();
+            workers_.emplace_back([this, subtitle_session = worker_subtitle_sessions.empty()
+                ? std::unique_ptr<subtitles::SubtitleRenderSession>{}
+                : std::move(worker_subtitle_sessions[worker_index])]() mutable {
+                worker_main(std::move(subtitle_session));
             });
         }
     }
@@ -1488,7 +1512,25 @@ public:
     }
 
 private:
-    void worker_main() {
+    [[nodiscard]] static std::unique_ptr<subtitles::SubtitleRenderSession> create_worker_subtitle_session(
+        const SubtitleWorkerSessionTemplate &session_template
+    ) {
+        if (session_template.renderer == nullptr) {
+            throw std::runtime_error("The streaming subtitle worker is missing its subtitle renderer.");
+        }
+
+        auto session_result = session_template.renderer->create_session(session_template.prepared_request.session_request);
+        if (!session_result.succeeded()) {
+            throw std::runtime_error(
+                "Streaming subtitle worker session creation failed. " + session_result.error->message +
+                " Hint: " + session_result.error->actionable_hint
+            );
+        }
+
+        return std::move(session_result.session);
+    }
+
+    void worker_main(std::unique_ptr<subtitles::SubtitleRenderSession> subtitle_session) {
         SwsContextHandle scale_context{};
         int scale_width = 0;
         int scale_height = 0;
@@ -1536,6 +1578,33 @@ private:
                     std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::steady_clock::now() - process_start
                     ).count();
+                long long subtitle_duration = 0;
+                if (task.subtitle_timestamp_microseconds.has_value()) {
+                    if (!subtitle_session) {
+                        throw std::runtime_error(
+                            "The streaming subtitle worker does not have an active subtitle render session."
+                        );
+                    }
+
+                    const auto subtitle_start = std::chrono::steady_clock::now();
+                    const auto compose_result = subtitle_session->compose_into_frame(
+                        task.output.frame.metadata,
+                        subtitles::SubtitleRenderRequest{
+                            .timestamp_microseconds = *task.subtitle_timestamp_microseconds
+                        }
+                    );
+                    if (!compose_result.succeeded()) {
+                        throw std::runtime_error(
+                            "Subtitle rendering failed during streaming burn-in. " + compose_result.error->message +
+                            " Hint: " + compose_result.error->actionable_hint
+                        );
+                    }
+
+                    task.output.subtitles_applied = compose_result.subtitles_applied;
+                    subtitle_duration = std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - subtitle_start
+                    ).count();
+                }
 
                 {
                     std::lock_guard<std::mutex> lock(mutex_);
@@ -1544,7 +1613,9 @@ private:
                         ProcessedVideoFrameOutput{
                             .order_index = task.order_index,
                             .output = std::move(task.output),
-                            .process_microseconds = static_cast<std::uint64_t>(std::max<long long>(process_duration, 0))
+                            .process_microseconds = static_cast<std::uint64_t>(std::max<long long>(process_duration, 0)),
+                            .subtitle_compose_microseconds =
+                                static_cast<std::uint64_t>(std::max<long long>(subtitle_duration, 0))
                         }
                     );
                 }
@@ -1677,46 +1748,6 @@ DecodedAudioSamples build_audio_block(
         .samples_per_channel = block_sample_count,
         .channel_samples = block_channels
     };
-}
-
-bool maybe_composite_subtitles(
-    DecodedVideoFrame &video_frame,
-    subtitles::SubtitleRenderSession *subtitle_session,
-    const std::optional<job::EncodeJobSubtitleSettings> &subtitle_settings,
-    const bool subtitles_enabled,
-    const std::int64_t subtitle_timestamp_microseconds
-) {
-    if (!subtitle_settings.has_value() || !subtitles_enabled) {
-        return false;
-    }
-
-    if (subtitle_session == nullptr) {
-        throw std::runtime_error("Streaming subtitle burn-in requires an active subtitle render session.");
-    }
-
-    if (!subtitles::detail::is_rgba_frame_layout_supported(video_frame)) {
-        throw std::runtime_error("Streaming subtitle burn-in requires rgba8 decoded frames with a single plane.");
-    }
-
-    const auto render_result = subtitle_session->render(subtitles::SubtitleRenderRequest{
-        .timestamp_microseconds = subtitle_timestamp_microseconds
-    });
-    if (!render_result.succeeded()) {
-        throw std::runtime_error(
-            "Subtitle rendering failed during streaming burn-in. " + render_result.error->message +
-            " Hint: " + render_result.error->actionable_hint
-        );
-    }
-
-    if (render_result.rendered_frame->bitmaps.empty()) {
-        return false;
-    }
-
-    for (const auto &bitmap : render_result.rendered_frame->bitmaps) {
-        subtitles::detail::composite_bitmap_into_frame(video_frame, bitmap);
-    }
-
-    return true;
 }
 
 EncoderSelection select_encoder(const OutputVideoCodec codec) {
@@ -2971,7 +3002,8 @@ SegmentProcessResult process_segment(
     const timeline::TimelinePlan &timeline_plan,
     const timeline::TimelineSegmentPlan &segment_plan,
     const std::optional<job::EncodeJobSubtitleSettings> &subtitle_settings,
-    subtitles::SubtitleRenderSession *subtitle_session,
+    subtitles::SubtitleRenderer *subtitle_renderer,
+    const subtitles::PreparedSubtitleRenderSessionRequest *prepared_subtitle_request,
     const VideoOutputPlan &video_output_plan,
     const DecodeNormalizationPolicy &normalization_policy,
     const PipelineQueueLimits &queue_limits,
@@ -3038,16 +3070,24 @@ SegmentProcessResult process_segment(
         log_callback,
         "Video path (" + std::string(timeline::to_string(segment_plan.kind)) + " segment): " +
             (segment_uses_subtitle_path
-                ? ("RGBA subtitle composition path with " +
+                ? ("RGBA subtitle composition path with worker-local subtitle sessions and " +
                    std::to_string(runtime_behavior.video_processing_worker_count) + " video worker(s).")
                 : "subtitle-free native-frame fast path.")
     );
 
     std::unique_ptr<ParallelVideoFrameProcessor> video_frame_processor{};
     if (segment_uses_subtitle_path) {
+        if (subtitle_renderer == nullptr || prepared_subtitle_request == nullptr) {
+            throw std::runtime_error("The streaming subtitle path is missing its prepared subtitle session state.");
+        }
+
         video_frame_processor = std::make_unique<ParallelVideoFrameProcessor>(
             runtime_behavior.video_processing_worker_count,
-            queue_limits.video_frame_queue_depth
+            queue_limits.video_frame_queue_depth,
+            ParallelVideoFrameProcessor::SubtitleWorkerSessionTemplate{
+                .renderer = subtitle_renderer,
+                .prepared_request = *prepared_subtitle_request
+            }
         );
     }
 
@@ -3360,25 +3400,8 @@ SegmentProcessResult process_segment(
             );
         }
 
-        std::int64_t subtitle_timestamp_microseconds = 0;
-        if (segment_uses_subtitle_path) {
-            subtitle_timestamp_microseconds =
-                subtitle_settings->timing_mode == timeline::SubtitleTimingMode::full_output_timeline
-                    ? rescale_to_microseconds(timing.output_pts, timeline_plan.output_video_time_base)
-                    : video_frame.metadata.timestamp.start_microseconds;
-        }
-
-        if (segment_uses_subtitle_path) {
-            const auto subtitle_start = std::chrono::steady_clock::now();
-            if (maybe_composite_subtitles(
-                    video_frame.metadata,
-                    subtitle_session,
-                    subtitle_settings,
-                    segment_plan.subtitles_enabled,
-                    subtitle_timestamp_microseconds)) {
-                ++result.subtitled_video_frame_count;
-            }
-            add_stage_timing(performance_metrics.subtitle_compose, std::chrono::steady_clock::now() - subtitle_start);
+        if (queued_video_frame.subtitles_applied) {
+            ++result.subtitled_video_frame_count;
         }
 
         const auto timing_origin = video_frame.metadata.timestamp.origin;
@@ -3421,6 +3444,8 @@ SegmentProcessResult process_segment(
         auto processed_frame = video_frame_processor->wait_for_next();
         performance_metrics.video_process.total_microseconds += processed_frame.process_microseconds;
         ++performance_metrics.video_process.sample_count;
+        performance_metrics.subtitle_compose.total_microseconds += processed_frame.subtitle_compose_microseconds;
+        ++performance_metrics.subtitle_compose.sample_count;
         send_video_frame_to_encoder(std::move(processed_frame.output));
     };
 
@@ -3437,6 +3462,8 @@ SegmentProcessResult process_segment(
 
             performance_metrics.video_process.total_microseconds += processed_frame->process_microseconds;
             ++performance_metrics.video_process.sample_count;
+            performance_metrics.subtitle_compose.total_microseconds += processed_frame->subtitle_compose_microseconds;
+            ++performance_metrics.subtitle_compose.sample_count;
             send_video_frame_to_encoder(std::move(processed_frame->output));
         }
     };
@@ -3455,6 +3482,14 @@ SegmentProcessResult process_segment(
 
         timing.output_duration_pts = output_duration_pts;
         if (video_frame_processor) {
+            std::optional<std::int64_t> subtitle_timestamp_microseconds{};
+            if (segment_uses_subtitle_path) {
+                subtitle_timestamp_microseconds =
+                    subtitle_settings->timing_mode == timeline::SubtitleTimingMode::full_output_timeline
+                        ? rescale_to_microseconds(timing.output_pts, timeline_plan.output_video_time_base)
+                        : video_frame.metadata.timestamp.start_microseconds;
+            }
+
             while (video_frame_processor->outstanding_count() >= video_frame_processor->max_in_flight()) {
                 drain_next_processed_video_frame();
             }
@@ -3464,7 +3499,8 @@ SegmentProcessResult process_segment(
                 .output = QueuedVideoFrameOutput{
                     .frame = std::move(video_frame),
                     .timing = std::move(timing)
-                }
+                },
+                .subtitle_timestamp_microseconds = subtitle_timestamp_microseconds
             });
             return;
         }
@@ -3918,7 +3954,6 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
         );
 
         std::optional<PreparedSubtitleSession> prepared_subtitle_session{};
-        std::unique_ptr<subtitles::SubtitleRenderSession> subtitle_session{};
         if (request.subtitle_settings != nullptr && request.subtitle_settings->has_value()) {
             prepared_subtitle_session = create_subtitle_session(
                 *request.subtitle_renderer,
@@ -3933,7 +3968,7 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
                 );
             }
 
-            subtitle_session = std::move(prepared_subtitle_session->session_result.session);
+            prepared_subtitle_session->session_result.session.reset();
         }
 
         timeline::TimelineCompositionSummary timeline_summary{
@@ -3964,7 +3999,10 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
                 request.subtitle_settings != nullptr
                     ? *request.subtitle_settings
                     : std::optional<job::EncodeJobSubtitleSettings>{},
-                subtitle_session.get(),
+                request.subtitle_renderer,
+                prepared_subtitle_session.has_value()
+                    ? &prepared_subtitle_session->prepared_request
+                    : nullptr,
                 video_output_plan,
                 request.normalization_policy,
                 request.queue_limits,

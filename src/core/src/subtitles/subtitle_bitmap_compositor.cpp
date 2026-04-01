@@ -31,26 +31,18 @@ bool is_rgba_frame_layout_supported(const media::DecodedVideoFrame &video_frame)
         video_frame.height > 0;
 }
 
-void composite_bitmap_into_frame(
+void composite_premultiplied_rgba_bitmap_into_frame(
     media::DecodedVideoFrame &video_frame,
-    const SubtitleBitmap &bitmap
+    const PremultipliedRgbaBitmapView &bitmap
 ) {
-    if (bitmap.pixel_format != SubtitleBitmapPixelFormat::rgba8_premultiplied) {
-        throw std::runtime_error("Only premultiplied rgba8 subtitle bitmaps are supported for burn-in.");
-    }
-
     auto &plane = video_frame.planes.front();
     const auto required_plane_bytes = minimum_rgba_buffer_size(
         video_frame.width,
         video_frame.height,
         plane.line_stride_bytes
     );
-    const auto required_bitmap_bytes = minimum_rgba_buffer_size(
-        bitmap.width,
-        bitmap.height,
-        bitmap.line_stride_bytes
-    );
-    if (plane.bytes.size() < required_plane_bytes || bitmap.bytes.size() < required_bitmap_bytes) {
+    minimum_rgba_buffer_size(bitmap.width, bitmap.height, bitmap.line_stride_bytes);
+    if (bitmap.bytes == nullptr || plane.bytes.size() < required_plane_bytes) {
         throw std::runtime_error("Premultiplied RGBA composition received a truncated frame or bitmap buffer.");
     }
 
@@ -66,7 +58,7 @@ void composite_bitmap_into_frame(
         const int source_y = destination_y - bitmap.origin_y;
         auto *destination_row = plane.bytes.data() +
             static_cast<std::size_t>(destination_y) * static_cast<std::size_t>(plane.line_stride_bytes);
-        const auto *source_row = bitmap.bytes.data() +
+        const auto *source_row = bitmap.bytes +
             static_cast<std::size_t>(source_y) * static_cast<std::size_t>(bitmap.line_stride_bytes);
 
         for (int destination_x = clipped_left; destination_x < clipped_right; ++destination_x) {
@@ -109,6 +101,36 @@ void composite_bitmap_into_frame(
             );
         }
     }
+}
+
+void composite_bitmap_into_frame(
+    media::DecodedVideoFrame &video_frame,
+    const SubtitleBitmap &bitmap
+) {
+    if (bitmap.pixel_format != SubtitleBitmapPixelFormat::rgba8_premultiplied) {
+        throw std::runtime_error("Only premultiplied rgba8 subtitle bitmaps are supported for burn-in.");
+    }
+
+    const auto required_bitmap_bytes = minimum_rgba_buffer_size(
+        bitmap.width,
+        bitmap.height,
+        bitmap.line_stride_bytes
+    );
+    if (bitmap.bytes.size() < required_bitmap_bytes) {
+        throw std::runtime_error("Premultiplied RGBA composition received a truncated frame or bitmap buffer.");
+    }
+
+    composite_premultiplied_rgba_bitmap_into_frame(
+        video_frame,
+        PremultipliedRgbaBitmapView{
+            .origin_x = bitmap.origin_x,
+            .origin_y = bitmap.origin_y,
+            .width = bitmap.width,
+            .height = bitmap.height,
+            .line_stride_bytes = bitmap.line_stride_bytes,
+            .bytes = bitmap.bytes.data()
+        }
+    );
 }
 
 }  // namespace utsure::core::subtitles::detail

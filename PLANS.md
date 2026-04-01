@@ -29,6 +29,7 @@ This file is the living execution plan for the repository. Update it when a mile
   * M21 Global parallel batch encoding with bounded job counts and pre-reserved output naming completed.
   * M22 FFMS2 preview latency investigation and responsiveness hardening completed.
 - [x] M23 Encode-throughput investigation and subtitle-free fast path completed.
+- [ ] M24 Subtitle-enabled encode-throughput investigation and optimization in progress.
 
 ## Active assumptions
 
@@ -89,6 +90,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M21 slice is limited to global batch-level parallel scheduling, bounded per-job thread/buffer planning, and pre-reserved auto output naming; it does not add new per-queue tabs or broader encode-policy changes beyond those execution-planning surfaces.
 - The current M22 slice is limited to FFMS2-based preview responsiveness: timing instrumentation, lower-latency interactive seek behavior, request coalescing hardening, and safer prefetch/session reuse without changing unrelated encode or GUI layout behavior.
 - The current M23 slice is limited to identifying streaming encode bottlenecks, surfacing stage timing/runtime diagnostics, removing subtitle-free RGBA normalization overhead where possible, and reusing video conversion buffers without changing output quality defaults or subtitle-enabled behavior.
+- The current M24 slice is limited to the subtitle-enabled streaming path: removing subtitle bitmap-copy overhead, moving subtitle render/composition off the ordered encode lane where practical, and preserving existing burn-in/timestamp/mux behavior without changing codec quality defaults.
 
 ## Architecture direction
 
@@ -880,6 +882,26 @@ Validation:
   * Verify that intro/main/outro sequencing, audio mux behavior, output timestamps, and CFR cadence remain unchanged.
   * Local validation for this slice remains limited to patch-level checks such as targeted test updates and `git diff --check`, because compile/test execution is reserved for GitHub Actions in this repository.
 
+### M24 Investigate subtitle-enabled encode throughput
+
+Status: In progress
+
+Scope:
+  * Focus on the real comparison workload: subtitle-enabled streaming encodes that keep libassmod burn-in active with the existing codec/CRF/preset defaults.
+  * Reduce subtitle composition cost by avoiding per-bitmap subtitle copies where the renderer can blend directly into the RGBA frame.
+  * Reduce pipeline serialization by moving subtitle render/composition work off the ordered encode lane and into the bounded video-worker stage while keeping output ordering unchanged.
+  * Preserve subtitle appearance, frame timing, intro/main/outro sequencing, audio mux behavior, and existing end-of-encode timing breakdown logs.
+
+Current slice status:
+  * Completed: traced the remaining subtitle-enabled bottleneck to two app-side costs that stayed on the ordered encode thread: libassmod RGBA tile copying into `SubtitleBitmap.bytes` and serial subtitle render/blend immediately before encoder handoff.
+  * Completed: extended the subtitle-session contract with a direct frame-composition hook so the default path still supports `render()` while renderer-specific fast paths can compose without materializing copied bitmap vectors.
+  * Completed: taught the libassmod adapter to blend premultiplied RGBA subtitle tiles directly into the target frame, removing the extra per-bitmap heap allocation/copy from the hot subtitle-enabled burn-in path.
+  * Completed: moved subtitle render/composition into worker-local subtitle sessions inside the existing bounded video processor so subtitle-enabled jobs no longer serialize render/blend on the main ordered encode handoff.
+  * Completed: kept `video_process` and `subtitle_compose` timing buckets separate after the worker move so logs and reports still show whether normalization or subtitle render/blend dominates a real subtitle-enabled encode.
+  * Completed: updated focused subtitle burn-in regression checks so runtime logs confirm the worker-local subtitle-session path is active.
+  * Pending: capture real before/after timing data for the requested subtitle-enabled comparison encode, because this repository does not allow local compile/run validation and the current workspace does not contain a prebuilt binary to execute.
+  * Validation note: local validation for this slice was limited to code-path inspection, focused test updates, and `git diff --check`; actual benchmark numbers and end-to-end encode verification still need a CI or otherwise prebuilt runtime environment.
+
 ## Immediate next milestone
 
-No new milestone is selected yet.
+Finish M24 by running the real subtitle-enabled before/after encode benchmark and confirming output/timing correctness in CI or another approved runtime environment.

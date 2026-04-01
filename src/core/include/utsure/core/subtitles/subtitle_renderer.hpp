@@ -1,6 +1,6 @@
 #pragma once
 
-#include "utsure/core/media/media_info.hpp"
+#include "utsure/core/media/decoded_media.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -52,6 +52,18 @@ struct SubtitleRendererError final {
     std::string actionable_hint{};
 };
 
+struct SubtitleFrameComposeError final {
+    std::string message{};
+    std::string actionable_hint{};
+};
+
+struct SubtitleFrameComposeResult final {
+    bool subtitles_applied{false};
+    std::optional<SubtitleFrameComposeError> error{};
+
+    [[nodiscard]] bool succeeded() const noexcept;
+};
+
 class SubtitleRenderSession;
 
 struct SubtitleRenderSessionResult final {
@@ -73,6 +85,10 @@ public:
     virtual ~SubtitleRenderSession() = default;
 
     [[nodiscard]] virtual SubtitleRenderResult render(const SubtitleRenderRequest &request) noexcept = 0;
+    [[nodiscard]] virtual SubtitleFrameComposeResult compose_into_frame(
+        media::DecodedVideoFrame &video_frame,
+        const SubtitleRenderRequest &request
+    ) noexcept;
 };
 
 class SubtitleRenderer {

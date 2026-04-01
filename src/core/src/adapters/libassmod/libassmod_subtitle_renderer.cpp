@@ -1,4 +1,5 @@
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
+#include "../../subtitles/subtitle_bitmap_compositor.hpp"
 
 extern "C" {
 #include <ass/ass.h>
@@ -54,6 +55,16 @@ struct TrackDeleter final {
 
 using TrackHandle = std::unique_ptr<ASS_Track, TrackDeleter>;
 
+struct ImageRgbaListDeleter final {
+    void operator()(ASS_ImageRGBA *images) const noexcept {
+        if (images != nullptr) {
+            ass_free_images_rgba(images);
+        }
+    }
+};
+
+using ImageRgbaListHandle = std::unique_ptr<ASS_ImageRGBA, ImageRgbaListDeleter>;
+
 struct ScriptFeatureScan final {
     bool references_tag_images{false};
 };
@@ -91,6 +102,16 @@ SubtitleRenderResult make_render_error(
         .rendered_frame = std::nullopt,
         .error = SubtitleRendererError{
             .subtitle_path = subtitle_path,
+            .message = std::move(message),
+            .actionable_hint = std::move(actionable_hint)
+        }
+    };
+}
+
+SubtitleFrameComposeResult make_compose_error(std::string message, std::string actionable_hint) {
+    return SubtitleFrameComposeResult{
+        .subtitles_applied = false,
+        .error = SubtitleFrameComposeError{
             .message = std::move(message),
             .actionable_hint = std::move(actionable_hint)
         }
@@ -260,12 +281,7 @@ public:
 
     [[nodiscard]] SubtitleRenderResult render(const SubtitleRenderRequest &request) noexcept override {
         try {
-            int detect_change = 0;
-            const long long timestamp_milliseconds = static_cast<long long>(request.timestamp_microseconds / 1000);
-            ASS_ImageRGBA *images_rgba =
-                ass_render_frame_rgba(renderer_.get(), track_.get(), timestamp_milliseconds, &detect_change);
-            std::vector<SubtitleBitmap> bitmaps = convert_ass_image_rgba_list(images_rgba);
-            ass_free_images_rgba(images_rgba);
+            std::vector<SubtitleBitmap> bitmaps = convert_ass_image_rgba_list(render_images_rgba(request).get());
 
             return SubtitleRenderResult{
                 .rendered_frame = RenderedSubtitleFrame{
@@ -285,7 +301,60 @@ public:
         }
     }
 
+    [[nodiscard]] SubtitleFrameComposeResult compose_into_frame(
+        media::DecodedVideoFrame &video_frame,
+        const SubtitleRenderRequest &request
+    ) noexcept override {
+        try {
+            if (!detail::is_rgba_frame_layout_supported(video_frame)) {
+                return make_compose_error(
+                    "Subtitle composition requires rgba8 decoded frames with a single plane.",
+                    "Keep the decoded video path normalized to single-plane rgba8 before requesting subtitle composition."
+                );
+            }
+
+            auto images_rgba = render_images_rgba(request);
+            bool subtitles_applied = false;
+            for (ASS_ImageRGBA *image = images_rgba.get(); image != nullptr; image = image->next) {
+                if (image->w <= 0 || image->h <= 0 || image->rgba == nullptr || image->stride < (image->w * 4)) {
+                    continue;
+                }
+
+                detail::composite_premultiplied_rgba_bitmap_into_frame(
+                    video_frame,
+                    detail::PremultipliedRgbaBitmapView{
+                        .origin_x = image->dst_x,
+                        .origin_y = image->dst_y,
+                        .width = image->w,
+                        .height = image->h,
+                        .line_stride_bytes = image->stride,
+                        .bytes = image->rgba
+                    }
+                );
+                subtitles_applied = true;
+            }
+
+            return SubtitleFrameComposeResult{
+                .subtitles_applied = subtitles_applied,
+                .error = std::nullopt
+            };
+        } catch (const std::exception &exception) {
+            return make_compose_error(
+                "libassmod subtitle composition aborted because an unexpected exception was raised.",
+                exception.what()
+            );
+        }
+    }
+
 private:
+    [[nodiscard]] ImageRgbaListHandle render_images_rgba(const SubtitleRenderRequest &request) const {
+        int detect_change = 0;
+        const long long timestamp_milliseconds = static_cast<long long>(request.timestamp_microseconds / 1000);
+        return ImageRgbaListHandle(
+            ass_render_frame_rgba(renderer_.get(), track_.get(), timestamp_milliseconds, &detect_change)
+        );
+    }
+
     SubtitleRenderSessionCreateRequest create_request_{};
     std::string subtitle_path_string_{};
     LibraryHandle library_{};

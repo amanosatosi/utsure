@@ -218,7 +218,7 @@ int assert_observer_flow(
         }
     }
 
-    if (!observer_logs_contain_text(observer, "RGBA subtitle composition path") ||
+    if (!observer_logs_contain_text(observer, "worker-local subtitle sessions") ||
         !observer_logs_contain_text(observer, "Streaming performance: total_elapsed=")) {
         return fail("The subtitle burn-in observer did not report the expected subtitle-path runtime logs.");
     }
