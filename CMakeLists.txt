@@ -17,8 +17,25 @@ if(UTSURE_ENABLE_ADDRESS_SANITIZER)
         message(FATAL_ERROR "UTSURE_ENABLE_ADDRESS_SANITIZER is not supported with MSVC in this repository.")
     endif()
 
+    if(WIN32 AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR
+            "UTSURE_ENABLE_ADDRESS_SANITIZER on Windows requires a clang* MSYS2 environment "
+            "with Clang and LLD. GCC-based mingw*/ucrt* environments do not ship the needed "
+            "sanitizer runtimes.")
+    endif()
+
+    if(WIN32 AND DEFINED ENV{MINGW_PREFIX} AND NOT "$ENV{MINGW_PREFIX}" MATCHES "^/clang")
+        message(FATAL_ERROR
+            "UTSURE_ENABLE_ADDRESS_SANITIZER on Windows requires a clang* MSYS2 environment. "
+            "Current MINGW_PREFIX is '$ENV{MINGW_PREFIX}', which does not provide the needed "
+            "sanitizer runtimes.")
+    endif()
+
     add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address)
+    if(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        add_link_options(-fuse-ld=lld)
+    endif()
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")

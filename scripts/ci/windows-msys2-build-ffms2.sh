@@ -14,6 +14,7 @@ ffms2_build_dir="${UTSURE_FFMS2_BUILD_DIR:-${ffms2_root}/build}"
 ffms2_prefix="${UTSURE_FFMS2_PREFIX:-${ffms2_root}/prefix}"
 ffms2_build_id="${UTSURE_FFMS2_BUILD_ID:-ffms2-${ffms2_ref}}"
 ffms2_stamp_file="${ffms2_prefix}/.utsure-ffms2-build-id"
+msys2_prefix="${UTSURE_MSYS2_PREFIX:-${MINGW_PREFIX:-/ucrt64}}"
 
 mkdir -p "${ffms2_root}"
 
@@ -44,8 +45,8 @@ fi
 rm -rf "${ffms2_build_dir}" "${ffms2_prefix}"
 mkdir -p "${ffms2_build_dir}" "${ffms2_prefix}"
 
-export PATH="${ffmpeg_prefix}/bin:/ucrt64/bin:${PATH}"
-export PKG_CONFIG_PATH="${ffmpeg_pcdir}:/ucrt64/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+export PATH="${ffmpeg_prefix}/bin:${msys2_prefix}/bin:${PATH}"
+export PKG_CONFIG_PATH="${ffmpeg_pcdir}:${msys2_prefix}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 pushd "${ffms2_source_dir}" >/dev/null
 # The pinned upstream FFMS2 snapshot's autogen.sh always runs configure in the

@@ -14,6 +14,7 @@ ffmpeg_prefix="${UTSURE_FFMPEG_PREFIX:-${ffmpeg_root}/prefix}"
 ffmpeg_configure_flags_string="${UTSURE_FFMPEG_CONFIGURE_FLAGS:---enable-gpl --enable-libx264 --enable-libx265 --enable-shared --disable-static --disable-debug --disable-doc --disable-ffplay --disable-programs --enable-ffmpeg --enable-ffprobe}"
 ffmpeg_build_id="${UTSURE_FFMPEG_BUILD_ID:-ffmpeg-${ffmpeg_version}}"
 ffmpeg_stamp_file="${ffmpeg_prefix}/.utsure-ffmpeg-build-id"
+msys2_prefix="${UTSURE_MSYS2_PREFIX:-${MINGW_PREFIX:-/ucrt64}}"
 
 mkdir -p "${ffmpeg_root}"
 
@@ -41,8 +42,8 @@ fi
 
 mv "${extracted_source_dir}" "${ffmpeg_source_dir}"
 
-export PATH="/ucrt64/bin:${PATH}"
-export PKG_CONFIG_PATH="/ucrt64/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+export PATH="${msys2_prefix}/bin:${PATH}"
+export PKG_CONFIG_PATH="${msys2_prefix}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 read -r -a ffmpeg_configure_flags <<< "${ffmpeg_configure_flags_string}"
 
 pushd "${ffmpeg_build_dir}" >/dev/null
