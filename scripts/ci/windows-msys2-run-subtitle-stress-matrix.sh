@@ -61,10 +61,65 @@ extract_stress_value() {
   grep -E "^stress\\.${key}=" "${log_file}" | tail -n 1 | sed -E "s/^stress\\.${key}=//" || true
 }
 
-extract_ctest_metadata() {
-  local label="$1"
+extract_iteration_reached() {
+  local log_file="$1"
+  local iteration
+
+  iteration="$(extract_stress_value "iteration" "${log_file}")"
+  if [[ -n "${iteration}" ]]; then
+    printf '%s' "${iteration}"
+    return
+  fi
+
+  iteration="$(extract_stress_value "iteration_begin" "${log_file}")"
+  if [[ -n "${iteration}" ]]; then
+    printf '%s' "${iteration}"
+    return
+  fi
+
+  printf '0'
+}
+
+extract_startup_stage_reached() {
+  local log_file="$1"
+  local stage
+
+  stage="$(extract_stress_value "startup_stage" "${log_file}")"
+  if [[ -n "${stage}" ]]; then
+    printf '%s' "${stage}"
+    return
+  fi
+
+  printf 'none'
+}
+
+test_launched() {
+  local log_file="$1"
+  if contains_fixed_string "stress.startup_stage=test_entry" "${log_file}"; then
+    printf 'yes'
+    return
+  fi
+
+  printf 'no'
+}
+
+check_test_exists() {
+  local test_name="$1"
   local log_file="$2"
-  grep -Eim 1 "^[[:space:]]*${label}:" "${log_file}" | sed -E "s/^[[:space:]]*${label}:[[:space:]]*//" || true
+  local exit_code
+
+  set +e
+  ctest --test-dir "${build_dir}" -N --no-tests=error -R "^${test_name}$" \
+    > "${log_file}" 2>&1
+  exit_code=$?
+  set -e
+
+  if [[ "${exit_code}" -eq 0 ]]; then
+    printf 'yes'
+    return
+  fi
+
+  printf 'no'
 }
 
 extract_asan_excerpt() {
@@ -160,54 +215,28 @@ read -r representative_bitmap_mode representative_composition_mode representativ
 representative_discovery_log="${results_dir}/${representative_mode_key}.discovery.log"
 representative_startup_log="${results_dir}/${representative_mode_key}.startup.log"
 
-set +e
-ctest --test-dir "${build_dir}" -N -V --no-tests=error -R "^${representative_test_name}$" \
-  2>&1 | tee "${representative_discovery_log}"
-representative_discovery_exit=${PIPESTATUS[0]}
-set -e
+representative_test_exists="$(check_test_exists "${representative_test_name}" "${representative_discovery_log}")"
+append_summary "- Discovery method: \`ctest -N --no-tests=error\`"
+append_summary "- Test exists: \`${representative_test_exists}\`"
 
-representative_test_command="$(extract_ctest_metadata "Test command" "${representative_discovery_log}")"
-representative_working_directory="$(extract_ctest_metadata "Working Directory" "${representative_discovery_log}")"
-append_summary "- Discovery exit code: \`${representative_discovery_exit}\`"
-if [[ -n "${representative_test_command}" ]]; then
-  append_summary "- Test command: \`$(sanitize_markdown_inline "${representative_test_command}")\`"
-fi
-if [[ -n "${representative_working_directory}" ]]; then
-  append_summary "- Working directory: \`$(sanitize_markdown_inline "${representative_working_directory}")\`"
-fi
-
-if [[ "${representative_discovery_exit}" -ne 0 ]]; then
+if [[ "${representative_test_exists}" != "yes" ]]; then
   representative_reason="$(extract_failure_reason "${representative_discovery_log}")"
+  if [[ -z "${representative_reason}" ]]; then
+    representative_reason="CTest did not find the representative stress test."
+  fi
   emit_github_annotation \
     error \
     "Subtitle stress discovery failed" \
-    "mode=${representative_mode_key}; stage=test_discovery; reason=$(truncate_annotation_text "${representative_reason:-ctest discovery failed}")"
-  append_summary "- Representative startup failed before execution at \`test_discovery\`: \`$(sanitize_markdown_inline "${representative_reason:-ctest discovery failed}")\`"
-  exit 1
-fi
-
-if [[ -z "${representative_test_command}" ]]; then
-  emit_github_annotation error "Subtitle stress discovery failed" "mode=${representative_mode_key}; stage=test_discovery; reason=CTest did not report a test command."
-  append_summary "- Representative startup failed before execution at \`test_discovery\`: \`CTest did not report a test command.\`"
-  exit 1
-fi
-
-if [[ "${representative_test_command}" == *" utsure_core_subtitle_burn_in_tests "* ]] || \
-   [[ "${representative_test_command}" == utsure_core_subtitle_burn_in_tests* ]] || \
-   [[ "${representative_test_command}" == *'"utsure_core_subtitle_burn_in_tests"'* ]]; then
-  emit_github_annotation \
-    error \
-    "Subtitle stress discovery failed" \
-    "mode=${representative_mode_key}; stage=test_discovery; reason=CTest resolved the stress executable as a bare token instead of a target file path."
-  append_summary "- Representative startup failed before execution at \`test_discovery\`: \`CTest resolved the stress executable as a bare token instead of a target file path.\`"
+    "mode=${representative_mode_key}; stage=test_discovery; reason=$(truncate_annotation_text "${representative_reason}")"
+  append_summary "- Representative startup failed before execution at \`test_discovery\`: \`$(sanitize_markdown_inline "${representative_reason}")\`"
   exit 1
 fi
 
 append_summary "- Representative startup discovery passed."
 append_summary ""
 
-append_summary "| Bitmap mode | Composition mode | Result | Time (ms) | Iteration | Failure stage | ASan |"
-append_summary "| --- | --- | --- | ---: | ---: | --- | --- |"
+append_summary "| Bitmap mode | Composition mode | Test exists | Launched | Result | Time (ms) | Startup stage | Iteration | Failure stage | ASan |"
+append_summary "| --- | --- | --- | --- | --- | ---: | --- | ---: | --- | --- |"
 
 echo "Running representative startup check for ${representative_mode_key}."
 set +e
@@ -224,6 +253,9 @@ set -e
 
 representative_startup_stage="$(extract_failure_stage "${representative_startup_log}")"
 representative_startup_reason="$(extract_failure_reason "${representative_startup_log}")"
+representative_startup_stage_reached="$(extract_startup_stage_reached "${representative_startup_log}")"
+representative_test_launched="$(test_launched "${representative_startup_log}")"
+representative_iteration_reached="$(extract_iteration_reached "${representative_startup_log}")"
 representative_startup_time_ms="$(extract_stress_value "time_to_failure_ms" "${representative_startup_log}")"
 if [[ -z "${representative_startup_time_ms}" ]]; then
   representative_startup_time_ms="$(extract_stress_value "total_elapsed_ms" "${representative_startup_log}")"
@@ -232,7 +264,7 @@ if [[ -z "${representative_startup_time_ms}" ]]; then
   representative_startup_time_ms="0"
 fi
 
-if [[ "${representative_startup_exit}" -ne 0 ]] || ! contains_fixed_string "stress.startup_stage=first_iteration_begin" "${representative_startup_log}" || ! contains_fixed_string "stress.iteration=1" "${representative_startup_log}"; then
+if [[ "${representative_startup_exit}" -ne 0 ]] || [[ "${representative_test_launched}" != "yes" ]] || ! contains_fixed_string "stress.startup_stage=first_iteration_begin" "${representative_startup_log}" || ! contains_fixed_string "stress.iteration=1" "${representative_startup_log}"; then
   if [[ -z "${representative_startup_reason}" ]]; then
     representative_startup_reason="Representative startup run never reached first_iteration_begin and iteration 1."
   fi
@@ -242,6 +274,9 @@ if [[ "${representative_startup_exit}" -ne 0 ]] || ! contains_fixed_string "stre
     "Subtitle stress startup failed" \
     "mode=${representative_mode_key}; stage=${representative_startup_stage}; time_ms=${representative_startup_time_ms}; reason=$(truncate_annotation_text "${representative_startup_reason}")"
   append_summary "- Representative startup failed at \`${representative_startup_stage}\` after \`${representative_startup_time_ms}ms\`: \`$(sanitize_markdown_inline "${representative_startup_reason}")\`"
+  append_summary "- Test launched: \`${representative_test_launched}\`"
+  append_summary "- Startup stage reached: \`${representative_startup_stage_reached}\`"
+  append_summary "- Iteration reached: \`${representative_iteration_reached}\`"
   while IFS= read -r line; do
     append_summary "- \`${line}\`"
   done < <(
@@ -253,16 +288,58 @@ fi
 
 append_summary "- Representative startup reached \`first_iteration_begin\` and completed iteration \`1\`."
 append_summary ""
-append_summary "| Bitmap mode | Composition mode | Result | Time (ms) | Iteration | Failure stage | ASan |"
-append_summary "| --- | --- | --- | ---: | ---: | --- | --- |"
+append_summary "| Bitmap mode | Composition mode | Test exists | Launched | Result | Time (ms) | Startup stage | Iteration | Failure stage | ASan |"
+append_summary "| --- | --- | --- | --- | --- | ---: | --- | ---: | --- | --- |"
 
 for entry in "${modes[@]}"; do
   read -r bitmap_mode composition_mode mode_key test_name <<< "${entry}"
 
+  discovery_log="${results_dir}/${mode_key}.discovery.log"
   log_file="${results_dir}/${mode_key}.log"
   start_time="$(date +%s)"
+  test_exists="$(check_test_exists "${test_name}" "${discovery_log}")"
 
   echo "Running ${mode_key} (${test_name}) with repeat count ${repeat_count}."
+
+  if [[ "${test_exists}" != "yes" ]]; then
+    failure_stage="test_discovery"
+    failure_reason="$(extract_failure_reason "${discovery_log}")"
+    if [[ -z "${failure_reason}" ]]; then
+      failure_reason="CTest did not find the requested stress test."
+    fi
+    result="FAIL"
+    elapsed_ms="0"
+    asan_status="clean"
+    launched="no"
+    startup_stage_reached="none"
+    iteration_reached="0"
+    overall_status=1
+    failed_modes+=("${mode_key}")
+    failed_bitmap_modes+=("${bitmap_mode}")
+    failed_composition_modes+=("${composition_mode}")
+    failed_stages+=("${failure_stage}")
+
+    append_summary "| \`${bitmap_mode}\` | \`${composition_mode}\` | ${test_exists} | ${launched} | ${result} | ${elapsed_ms} | \`${startup_stage_reached}\` | ${iteration_reached} | \`${failure_stage}\` | ${asan_status} |"
+    append_summary ""
+    append_summary "<details><summary>${mode_key}</summary>"
+    append_summary ""
+    append_summary "- Test: \`${test_name}\`"
+    append_summary "- Test exists: \`${test_exists}\`"
+    append_summary "- Test launched: \`${launched}\`"
+    append_summary "- Startup stage reached: \`${startup_stage_reached}\`"
+    append_summary "- Iteration reached: \`${iteration_reached}\`"
+    append_summary "- Failure stage: \`${failure_stage}\`"
+    append_summary "- Failure reason: \`$(sanitize_markdown_inline "${failure_reason}")\`"
+    append_summary ""
+    append_summary "</details>"
+    append_summary ""
+
+    emit_github_annotation \
+      error \
+      "Subtitle stress mode failed" \
+      "mode=${mode_key}; bitmap=${bitmap_mode}; composition=${composition_mode}; exists=${test_exists}; launched=${launched}; stage=${failure_stage}; asan=${asan_status}; reason=$(truncate_annotation_text "${failure_reason}")"
+    continue
+  fi
 
   set +e
   env \
@@ -281,6 +358,9 @@ for entry in "${modes[@]}"; do
   asan_excerpt="$(extract_asan_excerpt "${log_file}")"
   failure_stage="$(extract_failure_stage "${log_file}")"
   failure_reason="$(extract_failure_reason "${log_file}")"
+  startup_stage_reached="$(extract_startup_stage_reached "${log_file}")"
+  launched="$(test_launched "${log_file}")"
+  iteration_reached="$(extract_iteration_reached "${log_file}")"
   failed_iteration="$(extract_stress_value "failed_iteration" "${log_file}")"
   time_to_failure_ms="$(extract_stress_value "time_to_failure_ms" "${log_file}")"
   total_elapsed_ms="$(extract_stress_value "total_elapsed_ms" "${log_file}")"
@@ -297,7 +377,20 @@ for entry in "${modes[@]}"; do
   fi
 
   result="PASS"
-  if [[ "${exit_code}" -ne 0 ]]; then
+  if [[ "${launched}" != "yes" ]]; then
+    result="FAIL"
+    overall_status=1
+    if [[ "${failure_stage}" == "unstructured" || -z "${failure_stage}" ]]; then
+      failure_stage="test_launch"
+    fi
+    if [[ -z "${failure_reason}" ]]; then
+      failure_reason="CTest matched the stress test, but the process never reached test_entry."
+    fi
+    failed_modes+=("${mode_key}")
+    failed_bitmap_modes+=("${bitmap_mode}")
+    failed_composition_modes+=("${composition_mode}")
+    failed_stages+=("${failure_stage}")
+  elif [[ "${exit_code}" -ne 0 ]]; then
     result="FAIL"
     overall_status=1
     failed_modes+=("${mode_key}")
@@ -306,14 +399,18 @@ for entry in "${modes[@]}"; do
     failed_stages+=("${failure_stage}")
   fi
 
-  append_summary "| \`${bitmap_mode}\` | \`${composition_mode}\` | ${result} | ${elapsed_ms} | ${failed_iteration:-0} | \`${failure_stage}\` | ${asan_status} |"
+  append_summary "| \`${bitmap_mode}\` | \`${composition_mode}\` | ${test_exists} | ${launched} | ${result} | ${elapsed_ms} | \`${startup_stage_reached}\` | ${iteration_reached} | \`${failure_stage}\` | ${asan_status} |"
   append_summary ""
   append_summary "<details><summary>${mode_key}</summary>"
   append_summary ""
   append_summary "- Test: \`${test_name}\`"
+  append_summary "- Test exists: \`${test_exists}\`"
+  append_summary "- Test launched: \`${launched}\`"
   append_summary "- Exit code: \`${exit_code}\`"
   append_summary "- Wall time: \`${elapsed_seconds}s\`"
   append_summary "- Effective elapsed: \`${elapsed_ms}ms\`"
+  append_summary "- Startup stage reached: \`${startup_stage_reached}\`"
+  append_summary "- Iteration reached: \`${iteration_reached}\`"
   append_summary "- Failed iteration: \`${failed_iteration:-0}\`"
   append_summary "- Failure stage: \`${failure_stage}\`"
   if [[ -n "${failure_reason}" ]]; then
@@ -344,7 +441,7 @@ for entry in "${modes[@]}"; do
     emit_github_annotation \
       error \
       "Subtitle stress mode failed" \
-      "mode=${mode_key}; bitmap=${bitmap_mode}; composition=${composition_mode}; time_ms=${elapsed_ms}; iteration=${failed_iteration:-0}; stage=${failure_stage}; asan=${asan_status}; reason=${annotation_reason}"
+      "mode=${mode_key}; bitmap=${bitmap_mode}; composition=${composition_mode}; exists=${test_exists}; launched=${launched}; time_ms=${elapsed_ms}; startup=${startup_stage_reached}; iteration=${iteration_reached}; stage=${failure_stage}; asan=${asan_status}; reason=${annotation_reason}"
   fi
 done
 
