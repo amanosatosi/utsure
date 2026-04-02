@@ -85,7 +85,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-${{ steps.ffmpeg-cache-meta.outputs.configure_flags_hash }}-
             ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-
-            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-
 
       - name: Build FFmpeg
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
@@ -208,7 +207,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-${{ steps.ffmpeg-cache-meta.outputs.configure_flags_hash }}-
             ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-
-            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-
 
       - name: Build FFmpeg
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'

@@ -16,6 +16,27 @@ ffms2_build_id="${UTSURE_FFMS2_BUILD_ID:-ffms2-${ffms2_ref}}"
 ffms2_stamp_file="${ffms2_prefix}/.utsure-ffms2-build-id"
 msys2_prefix="${UTSURE_MSYS2_PREFIX:-${MINGW_PREFIX:-/ucrt64}}"
 
+select_msys2_toolchain() {
+  if [[ "${msys2_prefix}" == /clang* ]]; then
+    export CC="${CC:-clang}"
+    export CXX="${CXX:-clang++}"
+    export LD="${LD:-clang++}"
+    export AR="${AR:-llvm-ar}"
+    export NM="${NM:-llvm-nm}"
+    export RANLIB="${RANLIB:-llvm-ranlib}"
+    export STRIP="${STRIP:-llvm-strip}"
+    export LDFLAGS="${LDFLAGS:-} -fuse-ld=lld"
+  else
+    export CC="${CC:-gcc}"
+    export CXX="${CXX:-g++}"
+    export LD="${LD:-${CXX}}"
+    export AR="${AR:-ar}"
+    export NM="${NM:-nm}"
+    export RANLIB="${RANLIB:-ranlib}"
+    export STRIP="${STRIP:-strip}"
+  fi
+}
+
 mkdir -p "${ffms2_root}"
 
 echo "Using FFMS2 ref: ${ffms2_ref}"
@@ -47,6 +68,8 @@ mkdir -p "${ffms2_build_dir}" "${ffms2_prefix}"
 
 export PATH="${ffmpeg_prefix}/bin:${msys2_prefix}/bin:${PATH}"
 export PKG_CONFIG_PATH="${ffmpeg_pcdir}:${msys2_prefix}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+select_msys2_toolchain
+echo "Using FFMS2 toolchain: CC=${CC} CXX=${CXX} LD=${LD}"
 
 pushd "${ffms2_source_dir}" >/dev/null
 # The pinned upstream FFMS2 snapshot's autogen.sh always runs configure in the

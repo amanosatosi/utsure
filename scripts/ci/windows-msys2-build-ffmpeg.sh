@@ -16,6 +16,27 @@ ffmpeg_build_id="${UTSURE_FFMPEG_BUILD_ID:-ffmpeg-${ffmpeg_version}}"
 ffmpeg_stamp_file="${ffmpeg_prefix}/.utsure-ffmpeg-build-id"
 msys2_prefix="${UTSURE_MSYS2_PREFIX:-${MINGW_PREFIX:-/ucrt64}}"
 
+select_msys2_toolchain() {
+  if [[ "${msys2_prefix}" == /clang* ]]; then
+    export CC="${CC:-clang}"
+    export CXX="${CXX:-clang++}"
+    export LD="${LD:-clang}"
+    export AR="${AR:-llvm-ar}"
+    export NM="${NM:-llvm-nm}"
+    export RANLIB="${RANLIB:-llvm-ranlib}"
+    export STRIP="${STRIP:-llvm-strip}"
+    export LDFLAGS="${LDFLAGS:-} -fuse-ld=lld"
+  else
+    export CC="${CC:-gcc}"
+    export CXX="${CXX:-g++}"
+    export LD="${LD:-${CC}}"
+    export AR="${AR:-ar}"
+    export NM="${NM:-nm}"
+    export RANLIB="${RANLIB:-ranlib}"
+    export STRIP="${STRIP:-strip}"
+  fi
+}
+
 mkdir -p "${ffmpeg_root}"
 
 echo "Using FFmpeg version: ${ffmpeg_version}"
@@ -44,11 +65,20 @@ mv "${extracted_source_dir}" "${ffmpeg_source_dir}"
 
 export PATH="${msys2_prefix}/bin:${PATH}"
 export PKG_CONFIG_PATH="${msys2_prefix}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+select_msys2_toolchain
+echo "Using FFmpeg toolchain: CC=${CC} CXX=${CXX} LD=${LD}"
 read -r -a ffmpeg_configure_flags <<< "${ffmpeg_configure_flags_string}"
 
 pushd "${ffmpeg_build_dir}" >/dev/null
 "${ffmpeg_source_dir}/configure" \
   --prefix="${ffmpeg_prefix}" \
+  --cc="${CC}" \
+  --cxx="${CXX}" \
+  --ld="${LD}" \
+  --ar="${AR}" \
+  --nm="${NM}" \
+  --ranlib="${RANLIB}" \
+  --strip="${STRIP}" \
   "${ffmpeg_configure_flags[@]}" \
   --pkg-config=pkg-config
 make -j"$(nproc)"
