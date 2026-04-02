@@ -135,6 +135,8 @@ jobs:
         --enable-gpl --enable-libx264 --enable-libx265 --enable-shared --disable-static
         --disable-debug --disable-doc --disable-ffplay --disable-programs --enable-ffmpeg --enable-ffprobe
       UTSURE_LIBASSMOD_REF: "1.0"
+      UTSURE_FFMS2_PREFIX: "/clang64"
+      UTSURE_FFMS2_USE_SYSTEM_PACKAGE: "ON"
       UTSURE_BUILD_APP: "OFF"
       UTSURE_RUN_APP_SMOKE_TEST: "OFF"
       UTSURE_CMAKE_EXTRA_ARGS: "-DUTSURE_ENABLE_ADDRESS_SANITIZER=ON"
@@ -163,6 +165,7 @@ jobs:
             mingw-w64-clang-x86_64-compiler-rt
             mingw-w64-clang-x86_64-freetype
             mingw-w64-clang-x86_64-fribidi
+            mingw-w64-clang-x86_64-ffms2
             mingw-w64-clang-x86_64-harfbuzz
             mingw-w64-clang-x86_64-libx264
             mingw-w64-clang-x86_64-libtool

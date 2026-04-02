@@ -15,6 +15,7 @@ ffms2_prefix="${UTSURE_FFMS2_PREFIX:-${ffms2_root}/prefix}"
 ffms2_build_id="${UTSURE_FFMS2_BUILD_ID:-ffms2-${ffms2_ref}}"
 ffms2_stamp_file="${ffms2_prefix}/.utsure-ffms2-build-id"
 msys2_prefix="${UTSURE_MSYS2_PREFIX:-${MINGW_PREFIX:-/ucrt64}}"
+use_system_package="${UTSURE_FFMS2_USE_SYSTEM_PACKAGE:-OFF}"
 
 select_msys2_toolchain() {
   if [[ "${msys2_prefix}" == /clang* ]]; then
@@ -41,6 +42,19 @@ mkdir -p "${ffms2_root}"
 
 echo "Using FFMS2 ref: ${ffms2_ref}"
 echo "Using FFMS2 build id: ${ffms2_build_id}"
+
+if [[ "${use_system_package}" == "ON" ]]; then
+  echo "Using system FFMS2 package from ${ffms2_prefix}"
+  if [[ ! -f "${ffms2_prefix}/lib/pkgconfig/ffms2.pc" ]]; then
+    echo "Expected system FFMS2 pkg-config file at '${ffms2_prefix}/lib/pkgconfig/ffms2.pc'."
+    exit 1
+  fi
+  if [[ ! -f "${ffms2_prefix}/lib/libffms2.dll.a" ]]; then
+    echo "Expected system FFMS2 import library at '${ffms2_prefix}/lib/libffms2.dll.a'."
+    exit 1
+  fi
+  exit 0
+fi
 
 if [ -f "${ffms2_stamp_file}" ] && [ "$(cat "${ffms2_stamp_file}")" = "${ffms2_build_id}" ]; then
   echo "Pinned FFMS2 build '${ffms2_build_id}' is already installed at ${ffms2_prefix}"
