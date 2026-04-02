@@ -6,6 +6,7 @@
 #include <array>
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -99,6 +100,26 @@ std::string current_subtitle_composition_mode() {
     return (normalized == "worker" || normalized == "worker_local" || normalized == "worker-local" || normalized == "parallel")
         ? "worker_local"
         : "serialized";
+}
+
+std::size_t current_subtitle_stress_repeat_count() {
+    const char *value = std::getenv("UTSURE_SUBTITLE_STRESS_REPEAT");
+    if (value == nullptr || value[0] == '\0') {
+        return 1U;
+    }
+
+    char *end = nullptr;
+    const auto parsed = std::strtoull(value, &end, 10);
+    if (end == value || (end != nullptr && *end != '\0') || parsed == 0ULL) {
+        return 1U;
+    }
+
+    constexpr auto kMaxStressRepeatCount = 256ULL;
+    return static_cast<std::size_t>(std::min(parsed, kMaxStressRepeatCount));
+}
+
+std::string current_subtitle_mode_label() {
+    return current_subtitle_bitmap_mode() + "+" + current_subtitle_composition_mode();
 }
 
 std::string format_rational(const Rational &value) {
@@ -747,8 +768,12 @@ int run_stress_burn_in_assertion(
     const std::filesystem::path &burned_output_path
 ) {
     constexpr std::size_t kExpectedFrameCount = 480U;
+    const auto suite_started_at = std::chrono::steady_clock::now();
+    const auto repeat_count = current_subtitle_stress_repeat_count();
+    const auto bitmap_mode = current_subtitle_bitmap_mode();
+    const auto composition_mode = current_subtitle_composition_mode();
+    const auto mode_label = current_subtitle_mode_label();
 
-    CollectingObserver observer{};
     const EncodeJob plain_job{
         .input = {
             .main_source_path = sample_path
@@ -781,62 +806,118 @@ int run_stress_burn_in_assertion(
         }
     };
 
+    const auto emit_failure_metadata = [&](const std::size_t iteration) {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - suite_started_at
+        );
+        std::cout << "stress.status=failed\n";
+        std::cout << "stress.mode=" << mode_label << '\n';
+        std::cout << "stress.bitmap_mode=" << bitmap_mode << '\n';
+        std::cout << "stress.composition_mode=" << composition_mode << '\n';
+        std::cout << "stress.repeat_count=" << repeat_count << '\n';
+        std::cout << "stress.failed_iteration=" << iteration << '\n';
+        std::cout << "stress.time_to_failure_ms=" << elapsed.count() << '\n';
+    };
+
+    std::error_code cleanup_error{};
+    std::filesystem::remove(plain_output_path, cleanup_error);
+    cleanup_error.clear();
+    std::filesystem::remove(burned_output_path, cleanup_error);
+
+    std::cout << "stress.mode=" << mode_label << '\n';
+    std::cout << "stress.bitmap_mode=" << bitmap_mode << '\n';
+    std::cout << "stress.composition_mode=" << composition_mode << '\n';
+    std::cout << "stress.repeat_count=" << repeat_count << '\n';
+
     const EncodeJobResult plain_job_result = EncodeJobRunner::run(plain_job);
     if (!plain_job_result.succeeded()) {
+        emit_failure_metadata(0U);
         return fail("Plain stress encode failed unexpectedly before subtitle comparison.");
     }
 
-    const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job, EncodeJobRunOptions{
-        .decode_normalization_policy = {},
-        .observer = &observer
-    });
-    if (!burned_job_result.succeeded()) {
-        return fail("Subtitle stress encode failed unexpectedly.");
-    }
-
-    const auto &summary = *burned_job_result.encode_job_summary;
-    if (summary.timeline_summary.output_video_frame_count != static_cast<std::int64_t>(kExpectedFrameCount) ||
-        summary.subtitled_video_frame_count != static_cast<std::int64_t>(kExpectedFrameCount) ||
-        summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
-        return fail("Unexpected summary counts for the subtitle stress encode.");
-    }
-
     const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);
-    const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
-    if (!plain_output_decode.succeeded() || !burned_output_decode.succeeded()) {
-        return fail("Subtitle stress output decode failed unexpectedly.");
+    if (!plain_output_decode.succeeded()) {
+        emit_failure_metadata(0U);
+        return fail("Plain stress output decode failed unexpectedly before subtitle comparison.");
     }
 
-    if (assert_decoded_output(*plain_output_decode.decoded_media_source, kExpectedFrameCount, true) != 0 ||
-        assert_decoded_output(*burned_output_decode.decoded_media_source, kExpectedFrameCount, true) != 0) {
+    if (assert_decoded_output(*plain_output_decode.decoded_media_source, kExpectedFrameCount, true) != 0) {
+        emit_failure_metadata(0U);
         return 1;
     }
 
-    if (!frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U) ||
-        !frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 240U) ||
-        !frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 479U)) {
-        return fail("Subtitle stress burn-in did not visibly alter the expected sampled frames.");
+    for (std::size_t iteration = 0; iteration < repeat_count; ++iteration) {
+        cleanup_error.clear();
+        std::filesystem::remove(burned_output_path, cleanup_error);
+
+        CollectingObserver observer{};
+        const auto iteration_started_at = std::chrono::steady_clock::now();
+        const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job, EncodeJobRunOptions{
+            .decode_normalization_policy = {},
+            .observer = &observer
+        });
+        const auto iteration_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - iteration_started_at
+        );
+        if (!burned_job_result.succeeded()) {
+            emit_failure_metadata(iteration + 1U);
+            return fail("Subtitle stress encode failed unexpectedly.");
+        }
+
+        const auto &summary = *burned_job_result.encode_job_summary;
+        if (summary.timeline_summary.output_video_frame_count != static_cast<std::int64_t>(kExpectedFrameCount) ||
+            summary.subtitled_video_frame_count != static_cast<std::int64_t>(kExpectedFrameCount) ||
+            summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
+            emit_failure_metadata(iteration + 1U);
+            return fail("Unexpected summary counts for the subtitle stress encode.");
+        }
+
+        const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
+        if (!burned_output_decode.succeeded()) {
+            emit_failure_metadata(iteration + 1U);
+            return fail("Subtitle stress output decode failed unexpectedly.");
+        }
+
+        if (assert_decoded_output(*burned_output_decode.decoded_media_source, kExpectedFrameCount, true) != 0) {
+            emit_failure_metadata(iteration + 1U);
+            return 1;
+        }
+
+        if (!frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U) ||
+            !frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 240U) ||
+            !frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 479U)) {
+            emit_failure_metadata(iteration + 1U);
+            return fail("Subtitle stress burn-in did not visibly alter the expected sampled frames.");
+        }
+
+        const auto observer_result = assert_observer_flow(observer, 1);
+        if (observer_result != 0) {
+            emit_failure_metadata(iteration + 1U);
+            return observer_result;
+        }
+
+        const auto runtime_result = assert_subtitle_runtime_visibility(
+            observer,
+            summary,
+            bitmap_mode,
+            composition_mode
+        );
+        if (runtime_result != 0) {
+            emit_failure_metadata(iteration + 1U);
+            return runtime_result;
+        }
+
+        std::cout << "stress.iteration=" << (iteration + 1U) << '\n';
+        std::cout << "stress.iteration_elapsed_ms=" << iteration_elapsed.count() << '\n';
+        std::cout << "stress.subtitle_workers=" << summary.streaming_runtime.subtitle_processing_worker_count << '\n';
+        std::cout << "stress.subtitled_frames=" << summary.subtitled_video_frame_count << '\n';
     }
 
-    const auto observer_result = assert_observer_flow(observer, 1);
-    if (observer_result != 0) {
-        return observer_result;
-    }
-
-    const auto runtime_result = assert_subtitle_runtime_visibility(
-        observer,
-        summary,
-        current_subtitle_bitmap_mode(),
-        current_subtitle_composition_mode()
+    const auto total_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - suite_started_at
     );
-    if (runtime_result != 0) {
-        return runtime_result;
-    }
-
-    std::cout << "stress.bitmap_mode=" << current_subtitle_bitmap_mode() << '\n';
-    std::cout << "stress.composition_mode=" << current_subtitle_composition_mode() << '\n';
-    std::cout << "stress.subtitle_workers=" << summary.streaming_runtime.subtitle_processing_worker_count << '\n';
-    std::cout << "stress.subtitled_frames=" << summary.subtitled_video_frame_count << '\n';
+    std::cout << "stress.status=passed\n";
+    std::cout << "stress.total_elapsed_ms=" << total_elapsed.count() << '\n';
     std::cout << "stress.sample_frame0.changed=yes\n";
     std::cout << "stress.sample_frame240.changed=yes\n";
     std::cout << "stress.sample_frame479.changed=yes\n";

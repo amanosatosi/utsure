@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - codex/**
   pull_request:
 
 jobs:
@@ -138,7 +139,8 @@ jobs:
       UTSURE_BUILD_APP: "OFF"
       UTSURE_RUN_APP_SMOKE_TEST: "OFF"
       UTSURE_CMAKE_EXTRA_ARGS: "-DUTSURE_ENABLE_ADDRESS_SANITIZER=ON"
-      UTSURE_CTEST_REGEX: "utsure\\.core\\.subtitles\\.(compositor\\.|burn_in\\.stress\\.)"
+      UTSURE_CTEST_REGEX: "utsure\\.core\\.subtitles\\.compositor\\."
+      UTSURE_SUBTITLE_STRESS_REPEAT: "8"
 
     defaults:
       run:
@@ -231,5 +233,16 @@ jobs:
       - name: Audit dependencies
         run: ./scripts/ci/windows-msys2-dependency-audit.sh
 
-      - name: Build and run subtitle ASan stress coverage
+      - name: Build and run subtitle ASan compositor coverage
         run: ./scripts/ci/windows-msys2-build.sh
+
+      - name: Run subtitle ASan isolation matrix
+        run: ./scripts/ci/windows-msys2-run-subtitle-stress-matrix.sh
+
+      - name: Upload subtitle ASan stress logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subtitle-asan-stress
+          if-no-files-found: error
+          path: artifacts/subtitle-asan-stress
