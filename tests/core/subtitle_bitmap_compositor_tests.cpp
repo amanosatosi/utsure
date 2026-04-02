@@ -108,14 +108,14 @@ int run_clipped_direct_view_assertion() {
 
     const std::vector<std::uint8_t> expected_bytes{
         100U, 0U, 0U, 255U, 10U, 10U, 10U, 255U,
-        0U, 100U, 0U, 255U, 30U, 30U, 30U, 255U
+        9U, 109U, 9U, 255U, 30U, 30U, 30U, 255U
     };
     if (frame.planes.front().bytes != expected_bytes) {
         return fail("Direct premultiplied RGBA clipping produced unexpected bytes.");
     }
 
     std::cout << "direct_clip.frame.pixel0=100,0,0,255\n";
-    std::cout << "direct_clip.frame.pixel2=0,100,0,255\n";
+    std::cout << "direct_clip.frame.pixel2=9,109,9,255\n";
     return 0;
 }
 

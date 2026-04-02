@@ -34,6 +34,15 @@ append_summary() {
   fi
 }
 
+emit_github_annotation() {
+  local level="$1"
+  local title="$2"
+  local message="$3"
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    printf '::%s title=%s::%s\n' "${level}" "${title}" "${message}"
+  fi
+}
+
 sanitize_markdown_inline() {
   local value="$1"
   value="${value//\`/\'}"
@@ -131,6 +140,13 @@ for entry in "${modes[@]}"; do
   append_summary ""
   append_summary "</details>"
   append_summary ""
+
+  if [[ "${exit_code}" -ne 0 ]]; then
+    emit_github_annotation \
+      error \
+      "Subtitle stress mode failed" \
+      "mode=${mode_key}; bitmap=${bitmap_mode}; composition=${composition_mode}; wall_time=${elapsed_seconds}s; asan=${asan_status}"
+  fi
 done
 
 suspect_message="No failing mode observed."
@@ -166,6 +182,12 @@ append_summary "### Interpretation"
 append_summary ""
 append_summary "- ${suspect_message}"
 append_summary "- Safe default remains \`copied + serialized\` until a faster mode is proven stable."
+
+if [[ "${overall_status}" -ne 0 ]]; then
+  emit_github_annotation error "Subtitle stress suspect" "${suspect_message}"
+else
+  emit_github_annotation notice "Subtitle stress suspect" "${suspect_message}"
+fi
 
 if [[ "${overall_status}" -ne 0 ]]; then
   echo "At least one subtitle stress isolation mode failed."
