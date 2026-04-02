@@ -52,22 +52,7 @@ sanitize_markdown_inline() {
 
 escape_ctest_regex() {
   local value="$1"
-  local escaped=""
-  local character
-  local index
-  for ((index = 0; index < ${#value}; ++index)); do
-    character="${value:index:1}"
-    case "${character}" in
-      [][(){}.^$*+?|\\-])
-        escaped+="\\${character}"
-        ;;
-      *)
-        escaped+="${character}"
-        ;;
-    esac
-  done
-
-  printf '%s' "${escaped}"
+  printf '%s' "${value}" | sed -E 's/[][(){}.^$*+?|\\-]/\\&/g'
 }
 
 format_command_for_log() {

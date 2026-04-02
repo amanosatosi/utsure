@@ -241,11 +241,15 @@ jobs:
         continue-on-error: true
         run: ./scripts/ci/windows-msys2-build.sh
 
+      - name: Syntax check subtitle stress matrix
+        if: always()
+        run: bash -n ./scripts/ci/windows-msys2-run-subtitle-stress-matrix.sh
+
       - name: Run subtitle ASan isolation matrix
         id: subtitle_asan_matrix
         if: always()
         continue-on-error: true
-        run: ./scripts/ci/windows-msys2-run-subtitle-stress-matrix.sh
+        run: bash ./scripts/ci/windows-msys2-run-subtitle-stress-matrix.sh
 
       - name: Upload subtitle ASan stress logs
         if: always()
