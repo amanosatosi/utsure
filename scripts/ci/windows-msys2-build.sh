@@ -32,7 +32,7 @@ if [[ -n "${UTSURE_CTEST_REGEX:-}" ]]; then
 fi
 
 export PATH="${ffmpeg_prefix}/bin:${ffms2_prefix}/bin:${libassmod_prefix}/bin:${msys2_prefix}/bin:${PATH}"
-export PKG_CONFIG_PATH="${ffmpeg_pcdir}:${ffms2_pcdir}:${libassmod_pcdir}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+export PKG_CONFIG_PATH="${libassmod_pcdir}:${ffmpeg_pcdir}:${ffms2_pcdir}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 cmake -S . -B "${build_dir}" -G Ninja \
   -DCMAKE_BUILD_TYPE="${cmake_build_type}" \

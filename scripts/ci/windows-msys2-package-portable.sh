@@ -28,7 +28,7 @@ non_qt_runtime_manifest="${bundle_dir}/non-qt-runtime-dependencies.txt"
 bundle_manifest="${bundle_dir}/bundle-file-manifest.txt"
 
 export PATH="${ffmpeg_prefix}/bin:${ffms2_prefix}/bin:${libassmod_prefix}/bin:${msys2_bin_dir}:${PATH}"
-export PKG_CONFIG_PATH="${ffmpeg_pcdir}:${ffms2_pcdir}:${libassmod_pcdir}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+export PKG_CONFIG_PATH="${libassmod_pcdir}:${ffmpeg_pcdir}:${ffms2_pcdir}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 find_windeployqt() {
   local candidates=(
