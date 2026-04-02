@@ -37,7 +37,7 @@ pacman -S --needed \
 From a clean repository checkout:
 
 ```bash
-export UTSURE_LIBASSMOD_REF=1.0
+export UTSURE_LIBASSMOD_REF=88a338192faf50505eb4cedfe7d1320265f1081f
 export UTSURE_FFMPEG_VERSION=7.1.2
 export UTSURE_FFMS2_REF=25cef14386fcaaa58ee547065deee8f6e82c56a2
 ./scripts/ci/windows-msys2-build-ffmpeg.sh

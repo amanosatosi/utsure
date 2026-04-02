@@ -82,7 +82,7 @@ The active transcode path does not depend on `libavfilter`.
 - Install Qt 6 Widgets, the FFmpeg build prerequisites, `libx264`, `libx265`, and the `libassmod` build prerequisites from MSYS2 UCRT64.
 - Download and build FFmpeg `7.1.2` from the official release tarball into `.deps/ffmpeg/prefix`.
 - Clone and build FFMS2 from the upstream repository, pinned to commit `25cef14386fcaaa58ee547065deee8f6e82c56a2`, against that FFmpeg prefix.
-- Clone and build `libassmod` from the upstream repository, pinned to tag `1.0`.
+- Clone and build `libassmod` from the upstream repository, pinned to commit `88a338192faf50505eb4cedfe7d1320265f1081f`.
 - Put the FFmpeg, FFMS2, and `libassmod` prefixes ahead of the default pkg-config search path.
 - Run configure-time dependency audit.
 - Fail configure if any required FFmpeg or FFMS2 pkg-config module resolves outside the pinned prefix, or if the pinned `ffmpeg` executable reports a release outside the `7.1.x` series.

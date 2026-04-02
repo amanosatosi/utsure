@@ -17,7 +17,7 @@ jobs:
       UTSURE_FFMPEG_CONFIGURE_FLAGS: >-
         --enable-gpl --enable-libx264 --enable-libx265 --enable-shared --disable-static
         --disable-debug --disable-doc --disable-ffplay --disable-programs --enable-ffmpeg --enable-ffprobe
-      UTSURE_LIBASSMOD_REF: "1.0"
+      UTSURE_LIBASSMOD_REF: "88a338192faf50505eb4cedfe7d1320265f1081f"
       UTSURE_PORTABLE_BUNDLE_NAME: encoder-windows-x64-portable
 
     defaults:
@@ -134,7 +134,7 @@ jobs:
       UTSURE_FFMPEG_CONFIGURE_FLAGS: >-
         --enable-gpl --enable-libx264 --enable-libx265 --enable-shared --disable-static
         --disable-debug --disable-doc --disable-ffplay --disable-programs --enable-ffmpeg --enable-ffprobe
-      UTSURE_LIBASSMOD_REF: "1.0"
+      UTSURE_LIBASSMOD_REF: "88a338192faf50505eb4cedfe7d1320265f1081f"
       UTSURE_BUILD_APP: "OFF"
       UTSURE_RUN_APP_SMOKE_TEST: "OFF"
       UTSURE_CMAKE_EXTRA_ARGS: "-DUTSURE_ENABLE_ADDRESS_SANITIZER=ON"
