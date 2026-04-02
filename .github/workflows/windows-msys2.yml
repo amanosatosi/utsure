@@ -165,6 +165,7 @@ jobs:
             mingw-w64-clang-x86_64-fribidi
             mingw-w64-clang-x86_64-harfbuzz
             mingw-w64-clang-x86_64-libx264
+            mingw-w64-clang-x86_64-libtool
             mingw-w64-clang-x86_64-lld
             mingw-w64-clang-x86_64-meson
             mingw-w64-clang-x86_64-nasm
@@ -176,7 +177,6 @@ jobs:
             mingw-w64-clang-x86_64-x265
             mingw-w64-clang-x86_64-zlib
             curl
-            libtool
             make
 
       - name: Capture FFmpeg cache metadata
