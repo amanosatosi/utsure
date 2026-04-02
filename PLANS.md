@@ -90,7 +90,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M21 slice is limited to global batch-level parallel scheduling, bounded per-job thread/buffer planning, and pre-reserved auto output naming; it does not add new per-queue tabs or broader encode-policy changes beyond those execution-planning surfaces.
 - The current M22 slice is limited to FFMS2-based preview responsiveness: timing instrumentation, lower-latency interactive seek behavior, request coalescing hardening, and safer prefetch/session reuse without changing unrelated encode or GUI layout behavior.
 - The current M23 slice is limited to identifying streaming encode bottlenecks, surfacing stage timing/runtime diagnostics, removing subtitle-free RGBA normalization overhead where possible, and reusing video conversion buffers without changing output quality defaults or subtitle-enabled behavior.
-- The current M24 slice is limited to the subtitle-enabled streaming path: removing subtitle bitmap-copy overhead, moving subtitle render/composition off the ordered encode lane where practical, and preserving existing burn-in/timestamp/mux behavior without changing codec quality defaults.
+- The current M24 slice is limited to the subtitle-enabled streaming path: removing subtitle bitmap-copy overhead, moving subtitle render/composition off the ordered encode lane where practical, then hardening that path with diagnostics, isolation switches, and safer defaults when crash risk appears, all while preserving existing burn-in/timestamp/mux behavior without changing codec quality defaults.
 
 ## Architecture direction
 

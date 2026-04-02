@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -25,8 +26,20 @@ struct SubtitleRenderSessionCreateRequest final {
     std::optional<std::filesystem::path> font_search_directory{};
 };
 
+struct SubtitleCompositionDebugContext final {
+    std::int64_t decoded_frame_index{-1};
+    std::optional<std::int64_t> decoded_frame_pts{};
+    std::optional<std::int64_t> output_pts{};
+    std::int64_t subtitle_timestamp_microseconds{0};
+    int worker_id{-1};
+    int session_id{-1};
+    bool log_bitmap_details{false};
+    std::function<void(const std::string &)> log_callback{};
+};
+
 struct SubtitleRenderRequest final {
     std::int64_t timestamp_microseconds{0};
+    const SubtitleCompositionDebugContext *debug_context{nullptr};
 };
 
 struct SubtitleBitmap final {
