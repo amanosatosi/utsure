@@ -49,10 +49,22 @@ sanitize_markdown_inline() {
   printf '%s' "${value}"
 }
 
+contains_fixed_string() {
+  local needle="$1"
+  local file="$2"
+  grep -Fq "${needle}" "${file}" 2>/dev/null
+}
+
 extract_stress_value() {
   local key="$1"
   local log_file="$2"
   grep -E "^stress\\.${key}=" "${log_file}" | tail -n 1 | sed -E "s/^stress\\.${key}=//" || true
+}
+
+extract_ctest_metadata() {
+  local label="$1"
+  local log_file="$2"
+  grep -Eim 1 "^[[:space:]]*${label}:" "${log_file}" | sed -E "s/^[[:space:]]*${label}:[[:space:]]*//" || true
 }
 
 extract_asan_excerpt() {
@@ -73,7 +85,7 @@ extract_failure_reason() {
   fi
 
   grep -Eim 1 \
-    'No tests were found!!!|Could not find executable|The system cannot find the file specified|The system cannot find the path specified|failed unexpectedly|unexpectedly|unexpected bytes|Unexpected .*subtitle|Unexpected .*frame count|AddressSanitizer' \
+    'No tests were found!!!|Process not started|Could not find executable|The system cannot find the file specified|The system cannot find the path specified|failed unexpectedly|unexpectedly|unexpected bytes|Unexpected .*subtitle|Unexpected .*frame count|AddressSanitizer' \
     "${log_file}" || true
 }
 
@@ -88,12 +100,19 @@ extract_failure_stage() {
   fi
 
   if grep -Eq 'No tests were found!!!' "${log_file}"; then
-    printf 'ctest_selection'
+    printf 'test_discovery'
     return
   fi
 
-  if grep -Eq 'Could not find executable|The system cannot find the file specified|The system cannot find the path specified' "${log_file}"; then
-    printf 'launch'
+  if grep -Eq 'Process not started|Could not find executable|The system cannot find the file specified|The system cannot find the path specified' "${log_file}"; then
+    printf 'dependency_resolve'
+    return
+  fi
+
+  local startup_stage
+  startup_stage="$(extract_stress_value "startup_stage" "${log_file}")"
+  if [[ -n "${startup_stage}" ]]; then
+    printf '%s' "${startup_stage}"
     return
   fi
 
@@ -104,7 +123,7 @@ truncate_annotation_text() {
   local value="$1"
   local max_length="${2:-220}"
   if (( ${#value} > max_length )); then
-    printf '%s…' "${value:0:max_length}"
+    printf '%s...' "${value:0:max_length}"
     return
   fi
 
@@ -117,6 +136,7 @@ modes=(
   "direct serialized direct_serialized utsure.core.subtitles.burn_in.stress.direct_serialized.h264"
   "direct worker_local direct_worker utsure.core.subtitles.burn_in.stress.direct_worker.h264"
 )
+representative_entry="${modes[0]}"
 
 failed_modes=()
 failed_bitmap_modes=()
@@ -133,6 +153,106 @@ append_summary "- FFmpeg prefix: \`${ffmpeg_prefix}\`"
 append_summary "- FFMS2 prefix: \`${ffms2_prefix}\`"
 append_summary "- libassmod prefix: \`${libassmod_prefix}\`"
 append_summary ""
+append_summary "### Representative Startup Check"
+append_summary ""
+
+read -r representative_bitmap_mode representative_composition_mode representative_mode_key representative_test_name <<< "${representative_entry}"
+representative_discovery_log="${results_dir}/${representative_mode_key}.discovery.log"
+representative_startup_log="${results_dir}/${representative_mode_key}.startup.log"
+
+set +e
+ctest --test-dir "${build_dir}" -N -V --no-tests=error -R "^${representative_test_name}$" \
+  2>&1 | tee "${representative_discovery_log}"
+representative_discovery_exit=${PIPESTATUS[0]}
+set -e
+
+representative_test_command="$(extract_ctest_metadata "Test command" "${representative_discovery_log}")"
+representative_working_directory="$(extract_ctest_metadata "Working Directory" "${representative_discovery_log}")"
+append_summary "- Discovery exit code: \`${representative_discovery_exit}\`"
+if [[ -n "${representative_test_command}" ]]; then
+  append_summary "- Test command: \`$(sanitize_markdown_inline "${representative_test_command}")\`"
+fi
+if [[ -n "${representative_working_directory}" ]]; then
+  append_summary "- Working directory: \`$(sanitize_markdown_inline "${representative_working_directory}")\`"
+fi
+
+if [[ "${representative_discovery_exit}" -ne 0 ]]; then
+  representative_reason="$(extract_failure_reason "${representative_discovery_log}")"
+  emit_github_annotation \
+    error \
+    "Subtitle stress discovery failed" \
+    "mode=${representative_mode_key}; stage=test_discovery; reason=$(truncate_annotation_text "${representative_reason:-ctest discovery failed}")"
+  append_summary "- Representative startup failed before execution at \`test_discovery\`: \`$(sanitize_markdown_inline "${representative_reason:-ctest discovery failed}")\`"
+  exit 1
+fi
+
+if [[ -z "${representative_test_command}" ]]; then
+  emit_github_annotation error "Subtitle stress discovery failed" "mode=${representative_mode_key}; stage=test_discovery; reason=CTest did not report a test command."
+  append_summary "- Representative startup failed before execution at \`test_discovery\`: \`CTest did not report a test command.\`"
+  exit 1
+fi
+
+if [[ "${representative_test_command}" == *" utsure_core_subtitle_burn_in_tests "* ]] || \
+   [[ "${representative_test_command}" == utsure_core_subtitle_burn_in_tests* ]] || \
+   [[ "${representative_test_command}" == *'"utsure_core_subtitle_burn_in_tests"'* ]]; then
+  emit_github_annotation \
+    error \
+    "Subtitle stress discovery failed" \
+    "mode=${representative_mode_key}; stage=test_discovery; reason=CTest resolved the stress executable as a bare token instead of a target file path."
+  append_summary "- Representative startup failed before execution at \`test_discovery\`: \`CTest resolved the stress executable as a bare token instead of a target file path.\`"
+  exit 1
+fi
+
+append_summary "- Representative startup discovery passed."
+append_summary ""
+
+append_summary "| Bitmap mode | Composition mode | Result | Time (ms) | Iteration | Failure stage | ASan |"
+append_summary "| --- | --- | --- | ---: | ---: | --- | --- |"
+
+echo "Running representative startup check for ${representative_mode_key}."
+set +e
+env \
+  UTSURE_SUBTITLE_STRESS_REPEAT=1 \
+  UTSURE_SUBTITLE_DIAGNOSTICS="${diagnostics_mode}" \
+  UTSURE_FFMPEG_PREFIX="${ffmpeg_prefix}" \
+  UTSURE_FFMS2_PREFIX="${ffms2_prefix}" \
+  UTSURE_LIBASSMOD_PREFIX="${libassmod_prefix}" \
+  ctest --test-dir "${build_dir}" --output-on-failure -V --no-tests=error -R "^${representative_test_name}$" \
+  2>&1 | tee "${representative_startup_log}"
+representative_startup_exit=${PIPESTATUS[0]}
+set -e
+
+representative_startup_stage="$(extract_failure_stage "${representative_startup_log}")"
+representative_startup_reason="$(extract_failure_reason "${representative_startup_log}")"
+representative_startup_time_ms="$(extract_stress_value "time_to_failure_ms" "${representative_startup_log}")"
+if [[ -z "${representative_startup_time_ms}" ]]; then
+  representative_startup_time_ms="$(extract_stress_value "total_elapsed_ms" "${representative_startup_log}")"
+fi
+if [[ -z "${representative_startup_time_ms}" ]]; then
+  representative_startup_time_ms="0"
+fi
+
+if [[ "${representative_startup_exit}" -ne 0 ]] || ! contains_fixed_string "stress.startup_stage=first_iteration_begin" "${representative_startup_log}" || ! contains_fixed_string "stress.iteration=1" "${representative_startup_log}"; then
+  if [[ -z "${representative_startup_reason}" ]]; then
+    representative_startup_reason="Representative startup run never reached first_iteration_begin and iteration 1."
+  fi
+
+  emit_github_annotation \
+    error \
+    "Subtitle stress startup failed" \
+    "mode=${representative_mode_key}; stage=${representative_startup_stage}; time_ms=${representative_startup_time_ms}; reason=$(truncate_annotation_text "${representative_startup_reason}")"
+  append_summary "- Representative startup failed at \`${representative_startup_stage}\` after \`${representative_startup_time_ms}ms\`: \`$(sanitize_markdown_inline "${representative_startup_reason}")\`"
+  while IFS= read -r line; do
+    append_summary "- \`${line}\`"
+  done < <(
+    grep -E '^stress\.(startup_stage|failure_stage|failure_reason|source\.|subtitle\.|output\.|prefix\.|iteration_begin|iteration|time_to_failure_ms|total_elapsed_ms)=' "${representative_startup_log}" \
+      | tail -n 40 || true
+  )
+  exit 1
+fi
+
+append_summary "- Representative startup reached \`first_iteration_begin\` and completed iteration \`1\`."
+append_summary ""
 append_summary "| Bitmap mode | Composition mode | Result | Time (ms) | Iteration | Failure stage | ASan |"
 append_summary "| --- | --- | --- | ---: | ---: | --- | --- |"
 
@@ -148,6 +268,9 @@ for entry in "${modes[@]}"; do
   env \
     UTSURE_SUBTITLE_STRESS_REPEAT="${repeat_count}" \
     UTSURE_SUBTITLE_DIAGNOSTICS="${diagnostics_mode}" \
+    UTSURE_FFMPEG_PREFIX="${ffmpeg_prefix}" \
+    UTSURE_FFMS2_PREFIX="${ffms2_prefix}" \
+    UTSURE_LIBASSMOD_PREFIX="${libassmod_prefix}" \
     ctest --test-dir "${build_dir}" --output-on-failure -V --no-tests=error -R "^${test_name}$" \
     2>&1 | tee "${log_file}"
   exit_code=${PIPESTATUS[0]}
@@ -208,8 +331,8 @@ for entry in "${modes[@]}"; do
   while IFS= read -r line; do
     append_summary "- \`${line}\`"
   done < <(
-    grep -E '^stress\.(mode|bitmap_mode|composition_mode|repeat_count|iteration|iteration_elapsed_ms|failed_iteration|failure_stage|failure_reason|time_to_failure_ms|total_elapsed_ms|status|subtitle_workers|subtitled_frames)=' "${log_file}" \
-      | tail -n 20 || true
+    grep -E '^stress\.(mode|bitmap_mode|composition_mode|repeat_count|startup_stage|iteration_begin|iteration|iteration_elapsed_ms|failed_iteration|failure_stage|failure_reason|time_to_failure_ms|total_elapsed_ms|status|subtitle_workers|subtitled_frames|source\.|subtitle\.|output\.|prefix\.)=' "${log_file}" \
+      | tail -n 40 || true
   )
 
   append_summary ""

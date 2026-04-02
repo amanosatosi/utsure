@@ -1,6 +1,8 @@
 #include "utsure/core/job/encode_job.hpp"
+#include "utsure/core/job/encode_job_preflight.hpp"
 #include "utsure/core/job/encode_job_report.hpp"
 #include "utsure/core/media/media_decoder.hpp"
+#include "utsure/core/media/media_inspector.hpp"
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 
 #include <array>
@@ -22,6 +24,8 @@ using utsure::core::job::EncodeJob;
 using utsure::core::job::EncodeJobLogLevel;
 using utsure::core::job::EncodeJobLogMessage;
 using utsure::core::job::EncodeJobObserver;
+using utsure::core::job::EncodeJobPreflight;
+using utsure::core::job::EncodeJobPreflightIssue;
 using utsure::core::job::EncodeJobProgress;
 using utsure::core::job::EncodeJobResult;
 using utsure::core::job::EncodeJobRunner;
@@ -32,6 +36,8 @@ using utsure::core::job::format_encode_job_report;
 using utsure::core::media::DecodedMediaSource;
 using utsure::core::media::MediaDecodeResult;
 using utsure::core::media::MediaDecoder;
+using utsure::core::media::MediaInspectionResult;
+using utsure::core::media::MediaInspector;
 using utsure::core::media::OutputVideoCodec;
 using utsure::core::media::Rational;
 using utsure::core::subtitles::SubtitleRenderRequest;
@@ -78,6 +84,70 @@ std::string lowercase_ascii(std::string value) {
         }
     );
     return value;
+}
+
+std::string yes_no(const bool value) {
+    return value ? "yes" : "no";
+}
+
+std::string path_for_log(const std::filesystem::path &path) {
+    if (path.empty()) {
+        return "<empty>";
+    }
+
+    std::error_code error{};
+    const auto absolute_path = std::filesystem::absolute(path, error);
+    if (!error) {
+        return absolute_path.lexically_normal().string();
+    }
+
+    return path.lexically_normal().string();
+}
+
+bool path_exists(const std::filesystem::path &path) {
+    std::error_code error{};
+    return !path.empty() && std::filesystem::exists(path, error) && !error;
+}
+
+bool directory_exists(const std::filesystem::path &path) {
+    std::error_code error{};
+    return !path.empty() && std::filesystem::is_directory(path, error) && !error;
+}
+
+std::string environment_value_or_unset(const char *name) {
+    const char *value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return "<unset>";
+    }
+
+    return value;
+}
+
+std::string join_message_and_hint(const std::string &message, const std::string &hint) {
+    if (hint.empty()) {
+        return message;
+    }
+
+    return message + " Hint: " + hint;
+}
+
+std::string describe_preflight_issue(const EncodeJobPreflightIssue &issue) {
+    return std::string(utsure::core::job::to_string(issue.code)) + ": " +
+        join_message_and_hint(issue.message, issue.actionable_hint);
+}
+
+std::string first_preflight_error(const utsure::core::job::EncodeJobPreflightResult &result) {
+    for (const auto &issue : result.issues) {
+        if (issue.severity == utsure::core::job::EncodeJobPreflightIssueSeverity::error) {
+            return describe_preflight_issue(issue);
+        }
+    }
+
+    if (!result.issues.empty()) {
+        return describe_preflight_issue(result.issues.front());
+    }
+
+    return "Encode preflight failed without a reported issue.";
 }
 
 std::string current_subtitle_bitmap_mode() {
@@ -817,6 +887,8 @@ int run_stress_burn_in_assertion(
     const auto bitmap_mode = current_subtitle_bitmap_mode();
     const auto composition_mode = current_subtitle_composition_mode();
     const auto mode_label = current_subtitle_mode_label();
+    const auto plain_output_parent = plain_output_path.parent_path();
+    const auto burned_output_parent = burned_output_path.parent_path();
 
     const EncodeJob plain_job{
         .input = {
@@ -878,6 +950,40 @@ int run_stress_burn_in_assertion(
         return fail(reason);
     };
 
+    const auto emit_stress_value = [](const std::string_view key, const std::string &value) {
+        std::cout << "stress." << key << '=' << value << '\n';
+        std::cout.flush();
+    };
+
+    const auto emit_stage = [&](const std::string_view stage) {
+        emit_stress_value("startup_stage", std::string(stage));
+    };
+
+    const auto emit_path_details = [&](const std::string_view key, const std::filesystem::path &path) {
+        emit_stress_value(std::string(key) + ".path", path_for_log(path));
+        emit_stress_value(std::string(key) + ".exists", yes_no(path_exists(path)));
+    };
+
+    const auto emit_prefix_details = [&](const std::string_view key, const char *environment_name) {
+        const auto value = environment_value_or_unset(environment_name);
+        emit_stress_value(std::string("prefix.") + std::string(key) + ".path", value);
+        emit_stress_value(
+            std::string("prefix.") + std::string(key) + ".exists",
+            value == "<unset>" ? std::string("unknown") : yes_no(path_exists(value))
+        );
+    };
+
+    emit_stage("test_entry");
+    emit_path_details("source", sample_path);
+    emit_path_details("subtitle", subtitle_path);
+    emit_path_details("output.plain", plain_output_path);
+    emit_path_details("output.burned", burned_output_path);
+    emit_path_details("output.plain.parent", plain_output_parent);
+    emit_path_details("output.burned.parent", burned_output_parent);
+    emit_prefix_details("ffmpeg", "UTSURE_FFMPEG_PREFIX");
+    emit_prefix_details("ffms2", "UTSURE_FFMS2_PREFIX");
+    emit_prefix_details("libassmod", "UTSURE_LIBASSMOD_PREFIX");
+
     std::error_code cleanup_error{};
     std::filesystem::remove(plain_output_path, cleanup_error);
     cleanup_error.clear();
@@ -887,6 +993,163 @@ int run_stress_burn_in_assertion(
     std::cout << "stress.bitmap_mode=" << bitmap_mode << '\n';
     std::cout << "stress.composition_mode=" << composition_mode << '\n';
     std::cout << "stress.repeat_count=" << repeat_count << '\n';
+    std::cout.flush();
+
+    emit_stage("asset_resolve");
+    if (sample_path.empty()) {
+        return fail_with_metadata(0U, "asset_resolve", "The representative source asset path is empty.");
+    }
+
+    if (subtitle_path.empty()) {
+        return fail_with_metadata(0U, "asset_resolve", "The representative subtitle asset path is empty.");
+    }
+
+    if (!path_exists(sample_path)) {
+        return fail_with_metadata(
+            0U,
+            "asset_resolve",
+            "The representative source asset does not exist at " + path_for_log(sample_path) + '.'
+        );
+    }
+
+    if (!path_exists(subtitle_path)) {
+        return fail_with_metadata(
+            0U,
+            "asset_resolve",
+            "The representative subtitle asset does not exist at " + path_for_log(subtitle_path) + '.'
+        );
+    }
+
+    emit_stage("output_prepare");
+    if (!plain_output_parent.empty() && !directory_exists(plain_output_parent)) {
+        std::error_code create_error{};
+        std::filesystem::create_directories(plain_output_parent, create_error);
+        if (create_error || !directory_exists(plain_output_parent)) {
+            return fail_with_metadata(
+                0U,
+                "output_prepare",
+                "Failed to prepare the plain-output directory at " + path_for_log(plain_output_parent) + '.'
+            );
+        }
+    }
+
+    if (!burned_output_parent.empty() && !directory_exists(burned_output_parent)) {
+        std::error_code create_error{};
+        std::filesystem::create_directories(burned_output_parent, create_error);
+        if (create_error || !directory_exists(burned_output_parent)) {
+            return fail_with_metadata(
+                0U,
+                "output_prepare",
+                "Failed to prepare the subtitle-output directory at " + path_for_log(burned_output_parent) + '.'
+            );
+        }
+    }
+
+    emit_stage("dependency_resolve");
+    for (const auto &[label, environment_name] : std::array<std::pair<std::string_view, const char *>, 3>{
+             std::pair<std::string_view, const char *>{"ffmpeg", "UTSURE_FFMPEG_PREFIX"},
+             std::pair<std::string_view, const char *>{"ffms2", "UTSURE_FFMS2_PREFIX"},
+             std::pair<std::string_view, const char *>{"libassmod", "UTSURE_LIBASSMOD_PREFIX"}}) {
+        const auto value = environment_value_or_unset(environment_name);
+        if (value != "<unset>" && !path_exists(value)) {
+            return fail_with_metadata(
+                0U,
+                "dependency_resolve",
+                "The " + std::string(label) + " prefix does not exist at " + value + '.'
+            );
+        }
+    }
+
+    emit_stage("source_open");
+    const MediaInspectionResult source_inspection_result = MediaInspector::inspect(sample_path);
+    if (!source_inspection_result.succeeded()) {
+        return fail_with_metadata(
+            0U,
+            "source_open",
+            join_message_and_hint(
+                "Failed to inspect the representative source asset. " + source_inspection_result.error->message,
+                source_inspection_result.error->actionable_hint
+            )
+        );
+    }
+
+    if (!source_inspection_result.media_source_info->primary_video_stream.has_value()) {
+        return fail_with_metadata(
+            0U,
+            "source_open",
+            "The representative source asset does not expose a readable video stream."
+        );
+    }
+
+    const auto &source_video_stream = *source_inspection_result.media_source_info->primary_video_stream;
+
+    emit_stage("renderer_create");
+    auto subtitle_renderer = create_default_subtitle_renderer();
+    if (!subtitle_renderer) {
+        return fail_with_metadata(
+            0U,
+            "renderer_create",
+            "The default subtitle renderer could not be created during startup preflight."
+        );
+    }
+
+    emit_stage("session_create");
+    auto session_result = subtitle_renderer->create_session(SubtitleRenderSessionCreateRequest{
+        .subtitle_path = subtitle_path,
+        .format_hint = "ass",
+        .canvas_width = source_video_stream.width,
+        .canvas_height = source_video_stream.height,
+        .sample_aspect_ratio = source_video_stream.sample_aspect_ratio
+    });
+    if (!session_result.succeeded()) {
+        return fail_with_metadata(
+            0U,
+            "session_create",
+            join_message_and_hint(
+                "Failed to create the representative subtitle session. " + session_result.error->message,
+                session_result.error->actionable_hint
+            )
+        );
+    }
+
+    const SubtitleRenderResult render_probe = session_result.session->render(SubtitleRenderRequest{
+        .timestamp_microseconds = 0
+    });
+    if (!render_probe.succeeded()) {
+        return fail_with_metadata(
+            0U,
+            "session_create",
+            join_message_and_hint(
+                "Failed to render the representative subtitle frame during startup preflight. " +
+                    render_probe.error->message,
+                render_probe.error->actionable_hint
+            )
+        );
+    }
+
+    emit_stage("first_frame_request");
+    const auto first_frame_result = MediaDecoder::decode_video_frame_at_time(sample_path, 0);
+    if (!first_frame_result.succeeded()) {
+        return fail_with_metadata(
+            0U,
+            "first_frame_request",
+            join_message_and_hint(
+                "Failed to decode the representative source's first frame. " + first_frame_result.error->message,
+                first_frame_result.error->actionable_hint
+            )
+        );
+    }
+
+    emit_stage("pipeline_start");
+    const auto plain_preflight_result = EncodeJobPreflight::inspect(plain_job);
+    if (!plain_preflight_result.can_start_encode()) {
+        return fail_with_metadata(0U, "pipeline_start", first_preflight_error(plain_preflight_result));
+    }
+
+    const auto burned_preflight_result = EncodeJobPreflight::inspect(burned_job);
+    if (!burned_preflight_result.can_start_encode()) {
+        return fail_with_metadata(0U, "pipeline_start", first_preflight_error(burned_preflight_result));
+    }
 
     const EncodeJobResult plain_job_result = EncodeJobRunner::run(plain_job);
     if (!plain_job_result.succeeded()) {
@@ -913,6 +1176,8 @@ int run_stress_burn_in_assertion(
     }
 
     for (std::size_t iteration = 0; iteration < repeat_count; ++iteration) {
+        emit_stage("first_iteration_begin");
+        emit_stress_value("iteration_begin", std::to_string(iteration + 1U));
         cleanup_error.clear();
         std::filesystem::remove(burned_output_path, cleanup_error);
 

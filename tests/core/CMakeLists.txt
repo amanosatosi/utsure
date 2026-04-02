@@ -698,7 +698,7 @@ add_test(
     COMMAND "${CMAKE_COMMAND}" -E env
         UTSURE_SUBTITLE_BITMAP_MODE=copied
         UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
-        utsure_core_subtitle_burn_in_tests --stress-h264
+        "$<TARGET_FILE:utsure_core_subtitle_burn_in_tests>" --stress-h264
             "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
             "${UTSURE_SUBTITLE_STRESS_SAMPLE_FILE}"
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-plain-copied-serialized-h264.mp4"
@@ -710,7 +710,7 @@ add_test(
     COMMAND "${CMAKE_COMMAND}" -E env
         UTSURE_SUBTITLE_BITMAP_MODE=direct
         UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
-        utsure_core_subtitle_burn_in_tests --stress-h264
+        "$<TARGET_FILE:utsure_core_subtitle_burn_in_tests>" --stress-h264
             "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
             "${UTSURE_SUBTITLE_STRESS_SAMPLE_FILE}"
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-plain-direct-serialized-h264.mp4"
@@ -722,7 +722,7 @@ add_test(
     COMMAND "${CMAKE_COMMAND}" -E env
         UTSURE_SUBTITLE_BITMAP_MODE=copied
         UTSURE_SUBTITLE_COMPOSITION_MODE=worker_local
-        utsure_core_subtitle_burn_in_tests --stress-h264
+        "$<TARGET_FILE:utsure_core_subtitle_burn_in_tests>" --stress-h264
             "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
             "${UTSURE_SUBTITLE_STRESS_SAMPLE_FILE}"
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-plain-copied-worker-h264.mp4"
@@ -734,7 +734,7 @@ add_test(
     COMMAND "${CMAKE_COMMAND}" -E env
         UTSURE_SUBTITLE_BITMAP_MODE=direct
         UTSURE_SUBTITLE_COMPOSITION_MODE=worker_local
-        utsure_core_subtitle_burn_in_tests --stress-h264
+        "$<TARGET_FILE:utsure_core_subtitle_burn_in_tests>" --stress-h264
             "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
             "${UTSURE_SUBTITLE_STRESS_SAMPLE_FILE}"
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-plain-direct-worker-h264.mp4"
