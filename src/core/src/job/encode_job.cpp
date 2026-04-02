@@ -219,8 +219,12 @@ std::string format_encode_runtime_log_message(const EncodeJob &job) {
         ", encoder threads " +
         media::streaming::format_encoder_threading_summary(runtime_behavior, job.output.video.codec) +
         ", video workers " + std::to_string(runtime_behavior.video_processing_worker_count) +
-        ", video queue " + std::to_string(runtime_behavior.video_frame_queue_depth) +
-        " frames, priority " + std::string(to_display_string(job.execution.process_priority)) + '.';
+        ", subtitle workers " + std::to_string(runtime_behavior.subtitle_processing_worker_count) +
+        ", video queue " + std::to_string(runtime_behavior.video_frame_queue_depth) + " frames" +
+        ", subtitle bitmap mode " + runtime_behavior.subtitle_bitmap_mode +
+        ", subtitle composition mode " + runtime_behavior.subtitle_composition_mode +
+        ", subtitle diagnostics " + runtime_behavior.subtitle_diagnostics_mode +
+        ", priority " + std::string(to_display_string(job.execution.process_priority)) + '.';
 }
 
 }  // namespace
@@ -473,10 +477,18 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                         streaming_result.summary->runtime_behavior.selected_video_encoder_thread_type,
                     .video_processing_worker_count =
                         streaming_result.summary->runtime_behavior.video_processing_worker_count,
+                    .subtitle_processing_worker_count =
+                        streaming_result.summary->runtime_behavior.subtitle_processing_worker_count,
                     .video_frame_queue_depth =
                         streaming_result.summary->runtime_behavior.video_frame_queue_depth,
                     .decoded_audio_block_queue_depth =
                         streaming_result.summary->runtime_behavior.decoded_audio_block_queue_depth,
+                    .subtitle_bitmap_mode =
+                        streaming_result.summary->runtime_behavior.subtitle_bitmap_mode,
+                    .subtitle_composition_mode =
+                        streaming_result.summary->runtime_behavior.subtitle_composition_mode,
+                    .subtitle_diagnostics_mode =
+                        streaming_result.summary->runtime_behavior.subtitle_diagnostics_mode,
                     .video_decode_microseconds =
                         streaming_result.summary->performance_metrics.video_decode.total_microseconds,
                     .video_process_microseconds =

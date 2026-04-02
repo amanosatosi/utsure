@@ -386,15 +386,23 @@ int assert_runtime_visibility(
         !contains_text(report, "streaming.decoder_thread_count=") ||
         !contains_text(report, "streaming.encoder_threads=") ||
         !contains_text(report, "streaming.video_workers=") ||
+        !contains_text(report, "streaming.subtitle_workers=1") ||
         !contains_text(report, "streaming.video_queue_frames=70") ||
         !contains_text(report, "streaming.audio_queue_blocks=8") ||
+        !contains_text(report, "streaming.subtitle.bitmap_mode=copied") ||
+        !contains_text(report, "streaming.subtitle.composition_mode=serialized") ||
+        !contains_text(report, "streaming.subtitle.diagnostics_mode=off") ||
         !contains_text(report, "streaming.performance.total_elapsed_ms=") ||
         !contains_text(report, "streaming.performance.video_encode_ms=")) {
         return fail("The encode-job report did not include the expected runtime settings.");
     }
 
     if (!observer_logs_contain_text(observer, "Encoding runtime request: CPU mode auto, encoder threads auto (") ||
+        !observer_logs_contain_text(observer, "subtitle workers 1") ||
         !observer_logs_contain_text(observer, "video queue 70 frames") ||
+        !observer_logs_contain_text(observer, "subtitle bitmap mode copied") ||
+        !observer_logs_contain_text(observer, "subtitle composition mode serialized") ||
+        !observer_logs_contain_text(observer, "subtitle diagnostics off") ||
         !observer_logs_contain_text(observer, "priority Below Normal") ||
         !observer_logs_contain_text(observer, "Video encoder:") ||
         !observer_logs_contain_text(observer, "Video decoder (") ||

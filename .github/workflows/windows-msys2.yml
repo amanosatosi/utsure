@@ -123,3 +123,113 @@ jobs:
           name: encoder-windows-x64-portable
           if-no-files-found: error
           path: artifacts/encoder-windows-x64-portable.zip
+
+  subtitle-asan:
+    runs-on: windows-latest
+    env:
+      UTSURE_CMAKE_BUILD_TYPE: Debug
+      UTSURE_FFMPEG_SERIES: "7.1"
+      UTSURE_FFMPEG_VERSION: "7.1.2"
+      UTSURE_FFMS2_REF: "25cef14386fcaaa58ee547065deee8f6e82c56a2"
+      UTSURE_FFMPEG_CONFIGURE_FLAGS: >-
+        --enable-gpl --enable-libx264 --enable-libx265 --enable-shared --disable-static
+        --disable-debug --disable-doc --disable-ffplay --disable-programs --enable-ffmpeg --enable-ffprobe
+      UTSURE_LIBASSMOD_REF: "1.0"
+      UTSURE_BUILD_APP: "OFF"
+      UTSURE_RUN_APP_SMOKE_TEST: "OFF"
+      UTSURE_CMAKE_EXTRA_ARGS: "-DUTSURE_ENABLE_ADDRESS_SANITIZER=ON"
+      UTSURE_CTEST_REGEX: "utsure\\.core\\.subtitles\\.(compositor\\.|burn_in\\.stress\\.)"
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            autoconf
+            automake
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-freetype
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-fribidi
+            mingw-w64-ucrt-x86_64-harfbuzz
+            mingw-w64-ucrt-x86_64-libx264
+            mingw-w64-ucrt-x86_64-meson
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-multimedia
+            mingw-w64-ucrt-x86_64-qt6-svg
+            mingw-w64-ucrt-x86_64-x265
+            mingw-w64-ucrt-x86_64-zlib
+            curl
+            libtool
+            make
+
+      - name: Capture FFmpeg cache metadata
+        id: ffmpeg-cache-meta
+        env:
+          UTSURE_FFMPEG_RECIPE_HASH: ${{ hashFiles('.github/workflows/windows-msys2.yml', 'scripts/ci/windows-msys2-build-ffmpeg.sh') }}
+        run: |
+          compiler_version="$(c++ -dumpfullversion 2>/dev/null || c++ -dumpversion)"
+          toolchain_id="ucrt64-gcc-${compiler_version}"
+          configure_flags_hash="$(printf '%s' "${UTSURE_FFMPEG_CONFIGURE_FLAGS}" | sha256sum | cut -c1-16)"
+          build_id="ffmpeg-${UTSURE_FFMPEG_VERSION}-${toolchain_id}-${configure_flags_hash}-${UTSURE_FFMPEG_RECIPE_HASH}"
+          {
+            echo "toolchain_id=${toolchain_id}"
+            echo "configure_flags_hash=${configure_flags_hash}"
+            echo "recipe_hash=${UTSURE_FFMPEG_RECIPE_HASH}"
+            echo "build_id=${build_id}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Restore FFmpeg cache
+        id: ffmpeg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .deps/ffmpeg/prefix
+            .deps/ffmpeg/ffmpeg-${{ env.UTSURE_FFMPEG_VERSION }}.tar.xz
+          key: >-
+            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-${{ steps.ffmpeg-cache-meta.outputs.configure_flags_hash }}-${{ steps.ffmpeg-cache-meta.outputs.recipe_hash }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-${{ steps.ffmpeg-cache-meta.outputs.configure_flags_hash }}-
+            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-
+            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-
+
+      - name: Build FFmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        env:
+          UTSURE_FFMPEG_BUILD_ID: ${{ steps.ffmpeg-cache-meta.outputs.build_id }}
+        run: ./scripts/ci/windows-msys2-build-ffmpeg.sh
+
+      - name: Save FFmpeg cache
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .deps/ffmpeg/prefix
+            .deps/ffmpeg/ffmpeg-${{ env.UTSURE_FFMPEG_VERSION }}.tar.xz
+          key: >-
+            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-${{ steps.ffmpeg-cache-meta.outputs.configure_flags_hash }}-${{ steps.ffmpeg-cache-meta.outputs.recipe_hash }}
+
+      - name: Build libassmod
+        run: ./scripts/ci/windows-msys2-build-libassmod.sh
+
+      - name: Build FFMS2
+        run: ./scripts/ci/windows-msys2-build-ffms2.sh
+
+      - name: Audit dependencies
+        run: ./scripts/ci/windows-msys2-dependency-audit.sh
+
+      - name: Build and run subtitle ASan stress coverage
+        run: ./scripts/ci/windows-msys2-build.sh

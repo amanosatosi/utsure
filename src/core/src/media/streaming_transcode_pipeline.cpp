@@ -3,6 +3,7 @@
 #include "ffmpeg_media_support.hpp"
 #include "transcode_threading.hpp"
 #include "../subtitles/subtitle_bitmap_compositor.hpp"
+#include "../subtitles/subtitle_runtime_options.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 #include "utsure/core/subtitles/subtitle_font_recovery.hpp"
 
@@ -15,6 +16,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -571,6 +573,7 @@ StreamingRuntimeBehavior resolve_streaming_runtime_behavior(
     const PipelineQueueLimits &queue_limits,
     const std::optional<std::uint32_t> logical_core_count_override
 ) noexcept {
+    const auto subtitle_runtime_options = subtitles::runtime::resolve_subtitle_runtime_options();
     const auto detected_logical_core_count =
         logical_core_count_override
             .value_or(threading.logical_core_count_override.value_or(detail::detect_logical_core_count()));
@@ -583,6 +586,11 @@ StreamingRuntimeBehavior resolve_streaming_runtime_behavior(
     const int requested_encoder_thread_count = detail::sanitize_thread_override(threading.encoder_thread_count_override) > 0
         ? detail::sanitize_thread_override(threading.encoder_thread_count_override)
         : default_thread_count;
+    const auto video_worker_count = detail::choose_video_processing_worker_count(threading, effective_core_count);
+    const auto subtitle_worker_count =
+        subtitle_runtime_options.composition_mode == subtitles::runtime::SubtitleCompositionMode::worker_local
+            ? video_worker_count
+            : 1U;
     return StreamingRuntimeBehavior{
         .detected_logical_core_count = detected_logical_core_count,
         .effective_logical_core_count = effective_core_count,
@@ -591,9 +599,13 @@ StreamingRuntimeBehavior resolve_streaming_runtime_behavior(
         .selected_video_decoder_thread_type = 0,
         .selected_video_encoder_thread_count = requested_encoder_thread_count,
         .selected_video_encoder_thread_type = 0,
-        .video_processing_worker_count = detail::choose_video_processing_worker_count(threading, effective_core_count),
+        .video_processing_worker_count = video_worker_count,
+        .subtitle_processing_worker_count = subtitle_worker_count,
         .video_frame_queue_depth = queue_limits.video_frame_queue_depth,
-        .decoded_audio_block_queue_depth = queue_limits.decoded_audio_block_queue_depth
+        .decoded_audio_block_queue_depth = queue_limits.decoded_audio_block_queue_depth,
+        .subtitle_bitmap_mode = subtitles::runtime::to_string(subtitle_runtime_options.bitmap_transfer_mode),
+        .subtitle_composition_mode = subtitles::runtime::to_string(subtitle_runtime_options.composition_mode),
+        .subtitle_diagnostics_mode = subtitles::runtime::to_string(subtitle_runtime_options.diagnostics_mode)
     };
 }
 
@@ -1399,12 +1411,25 @@ public:
         subtitles::PreparedSubtitleRenderSessionRequest prepared_request{};
     };
 
+    struct SubtitleDiagnosticSettings final {
+        bool log_frame_details{false};
+        bool log_bitmap_details{false};
+        std::function<void(const std::string &)> log_callback{};
+    };
+
+    struct WorkerSubtitleSession final {
+        int session_id{-1};
+        std::unique_ptr<subtitles::SubtitleRenderSession> session{};
+    };
+
     ParallelVideoFrameProcessor(
         const std::size_t worker_count,
         const std::size_t max_in_flight,
-        std::optional<SubtitleWorkerSessionTemplate> subtitle_worker_session_template = std::nullopt
+        std::optional<SubtitleWorkerSessionTemplate> subtitle_worker_session_template = std::nullopt,
+        std::optional<SubtitleDiagnosticSettings> subtitle_diagnostics = std::nullopt
     )
-        : max_in_flight_(max_in_flight) {
+        : max_in_flight_(max_in_flight),
+          subtitle_diagnostics_(std::move(subtitle_diagnostics)) {
         if (worker_count == 0U) {
             throw std::runtime_error("The streaming video processor requires at least one worker.");
         }
@@ -1413,7 +1438,7 @@ public:
             throw std::runtime_error("The streaming video processor requires bounded in-flight capacity.");
         }
 
-        std::vector<std::unique_ptr<subtitles::SubtitleRenderSession>> worker_subtitle_sessions{};
+        std::vector<WorkerSubtitleSession> worker_subtitle_sessions{};
         if (subtitle_worker_session_template.has_value()) {
             worker_subtitle_sessions.reserve(worker_count);
             for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
@@ -1425,10 +1450,10 @@ public:
 
         workers_.reserve(worker_count);
         for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
-            workers_.emplace_back([this, subtitle_session = worker_subtitle_sessions.empty()
-                ? std::unique_ptr<subtitles::SubtitleRenderSession>{}
+            workers_.emplace_back([this, worker_id = static_cast<int>(worker_index), subtitle_session = worker_subtitle_sessions.empty()
+                ? WorkerSubtitleSession{}
                 : std::move(worker_subtitle_sessions[worker_index])]() mutable {
-                worker_main(std::move(subtitle_session));
+                worker_main(worker_id, std::move(subtitle_session));
             });
         }
     }
@@ -1512,7 +1537,12 @@ public:
     }
 
 private:
-    [[nodiscard]] static std::unique_ptr<subtitles::SubtitleRenderSession> create_worker_subtitle_session(
+    [[nodiscard]] static int next_subtitle_session_id() noexcept {
+        static std::atomic<int> next_session_id{1};
+        return next_session_id.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] static WorkerSubtitleSession create_worker_subtitle_session(
         const SubtitleWorkerSessionTemplate &session_template
     ) {
         if (session_template.renderer == nullptr) {
@@ -1527,10 +1557,13 @@ private:
             );
         }
 
-        return std::move(session_result.session);
+        return WorkerSubtitleSession{
+            .session_id = next_subtitle_session_id(),
+            .session = std::move(session_result.session)
+        };
     }
 
-    void worker_main(std::unique_ptr<subtitles::SubtitleRenderSession> subtitle_session) {
+    void worker_main(const int worker_id, WorkerSubtitleSession subtitle_session) {
         SwsContextHandle scale_context{};
         int scale_width = 0;
         int scale_height = 0;
@@ -1580,17 +1613,34 @@ private:
                     ).count();
                 long long subtitle_duration = 0;
                 if (task.subtitle_timestamp_microseconds.has_value()) {
-                    if (!subtitle_session) {
+                    if (!subtitle_session.session) {
                         throw std::runtime_error(
                             "The streaming subtitle worker does not have an active subtitle render session."
                         );
                     }
 
+                    subtitles::SubtitleCompositionDebugContext debug_context{
+                        .decoded_frame_index = task.output.frame.metadata.frame_index,
+                        .decoded_frame_pts = task.output.frame.metadata.timestamp.source_pts,
+                        .output_pts = std::optional<std::int64_t>(task.output.timing.output_pts),
+                        .subtitle_timestamp_microseconds = *task.subtitle_timestamp_microseconds,
+                        .worker_id = worker_id,
+                        .session_id = subtitle_session.session_id,
+                        .log_frame_details = subtitle_diagnostics_.has_value() &&
+                            subtitle_diagnostics_->log_frame_details,
+                        .log_bitmap_details = subtitle_diagnostics_.has_value() &&
+                            subtitle_diagnostics_->log_bitmap_details,
+                        .log_callback = subtitle_diagnostics_.has_value()
+                            ? subtitle_diagnostics_->log_callback
+                            : std::function<void(const std::string &)>{}
+                    };
+
                     const auto subtitle_start = std::chrono::steady_clock::now();
-                    const auto compose_result = subtitle_session->compose_into_frame(
+                    const auto compose_result = subtitle_session.session->compose_into_frame(
                         task.output.frame.metadata,
                         subtitles::SubtitleRenderRequest{
-                            .timestamp_microseconds = *task.subtitle_timestamp_microseconds
+                            .timestamp_microseconds = *task.subtitle_timestamp_microseconds,
+                            .debug_context = &debug_context
                         }
                     );
                     if (!compose_result.succeeded()) {
@@ -1651,6 +1701,7 @@ private:
     std::exception_ptr failure_{};
     std::size_t outstanding_count_{0};
     std::uint64_t next_ready_order_index_{0};
+    std::optional<SubtitleDiagnosticSettings> subtitle_diagnostics_{};
     bool closing_{false};
 };
 
@@ -2443,6 +2494,11 @@ private:
             throw std::runtime_error("The streaming encoder requires either a native decoded frame or an rgba8 subtitle frame.");
         }
 
+        subtitles::detail::validate_rgba_frame_surface(
+            video_frame.metadata,
+            "The streaming encoder subtitle handoff"
+        );
+
         ensure_video_scale_context(video_frame.metadata.width, video_frame.metadata.height, AV_PIX_FMT_RGBA);
 
         const std::uint8_t *source_data[4] = {
@@ -3070,8 +3126,12 @@ SegmentProcessResult process_segment(
         log_callback,
         "Video path (" + std::string(timeline::to_string(segment_plan.kind)) + " segment): " +
             (segment_uses_subtitle_path
-                ? ("RGBA subtitle composition path with worker-local subtitle sessions and " +
-                   std::to_string(runtime_behavior.video_processing_worker_count) + " video worker(s).")
+                ? ("RGBA subtitle composition path with bitmap mode " +
+                   runtime_behavior.subtitle_bitmap_mode +
+                   ", composition mode " + runtime_behavior.subtitle_composition_mode +
+                   ", diagnostics " + runtime_behavior.subtitle_diagnostics_mode +
+                   ", subtitle worker(s) " + std::to_string(runtime_behavior.subtitle_processing_worker_count) +
+                   ", video worker(s) " + std::to_string(runtime_behavior.video_processing_worker_count) + '.')
                 : "subtitle-free native-frame fast path.")
     );
 
@@ -3082,11 +3142,16 @@ SegmentProcessResult process_segment(
         }
 
         video_frame_processor = std::make_unique<ParallelVideoFrameProcessor>(
-            runtime_behavior.video_processing_worker_count,
+            runtime_behavior.subtitle_processing_worker_count,
             queue_limits.video_frame_queue_depth,
             ParallelVideoFrameProcessor::SubtitleWorkerSessionTemplate{
                 .renderer = subtitle_renderer,
                 .prepared_request = *prepared_subtitle_request
+            },
+            ParallelVideoFrameProcessor::SubtitleDiagnosticSettings{
+                .log_frame_details = runtime_behavior.subtitle_diagnostics_mode != "off",
+                .log_bitmap_details = runtime_behavior.subtitle_diagnostics_mode == "verbose",
+                .log_callback = log_callback
             }
         );
     }
@@ -3897,8 +3962,12 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
                 " logical cores, effective " + std::to_string(runtime_behavior.effective_logical_core_count) +
                 " logical cores, CPU mode " + std::string(to_string(runtime_behavior.cpu_usage_mode)) +
                 ", video processing workers " + std::to_string(runtime_behavior.video_processing_worker_count) +
+                ", subtitle workers " + std::to_string(runtime_behavior.subtitle_processing_worker_count) +
                 ", video queue " + std::to_string(runtime_behavior.video_frame_queue_depth) +
-                ", audio queue " + std::to_string(runtime_behavior.decoded_audio_block_queue_depth) + '.'
+                ", audio queue " + std::to_string(runtime_behavior.decoded_audio_block_queue_depth) +
+                ", subtitle bitmap mode " + runtime_behavior.subtitle_bitmap_mode +
+                ", subtitle composition mode " + runtime_behavior.subtitle_composition_mode +
+                ", subtitle diagnostics " + runtime_behavior.subtitle_diagnostics_mode + '.'
         );
 
         const VideoOutputPlan video_output_plan = build_video_output_plan(timeline_plan);

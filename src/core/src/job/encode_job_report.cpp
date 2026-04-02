@@ -81,8 +81,12 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
         .selected_video_encoder_thread_count = runtime.selected_video_encoder_thread_count,
         .selected_video_encoder_thread_type = runtime.selected_video_encoder_thread_type,
         .video_processing_worker_count = runtime.video_processing_worker_count,
+        .subtitle_processing_worker_count = runtime.subtitle_processing_worker_count,
         .video_frame_queue_depth = runtime.video_frame_queue_depth,
-        .decoded_audio_block_queue_depth = runtime.decoded_audio_block_queue_depth
+        .decoded_audio_block_queue_depth = runtime.decoded_audio_block_queue_depth,
+        .subtitle_bitmap_mode = runtime.subtitle_bitmap_mode,
+        .subtitle_composition_mode = runtime.subtitle_composition_mode,
+        .subtitle_diagnostics_mode = runtime.subtitle_diagnostics_mode
     };
 
     report << "job.input.intro.present=" << (encode_job_summary.job.input.intro_source_path.has_value() ? "yes" : "no") << '\n';
@@ -142,8 +146,12 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
     report << "streaming.encoder_thread_type="
            << media::detail::format_ffmpeg_thread_type_detail(runtime.selected_video_encoder_thread_type) << '\n';
     report << "streaming.video_workers=" << runtime.video_processing_worker_count << '\n';
+    report << "streaming.subtitle_workers=" << runtime.subtitle_processing_worker_count << '\n';
     report << "streaming.video_queue_frames=" << runtime.video_frame_queue_depth << '\n';
     report << "streaming.audio_queue_blocks=" << runtime.decoded_audio_block_queue_depth << '\n';
+    report << "streaming.subtitle.bitmap_mode=" << runtime.subtitle_bitmap_mode << '\n';
+    report << "streaming.subtitle.composition_mode=" << runtime.subtitle_composition_mode << '\n';
+    report << "streaming.subtitle.diagnostics_mode=" << runtime.subtitle_diagnostics_mode << '\n';
     report << "streaming.performance.total_elapsed_ms="
            << format_decimal(microseconds_to_milliseconds(runtime.total_elapsed_microseconds)) << '\n';
     report << "streaming.performance.average_output_fps=" << format_decimal(runtime.average_output_fps) << '\n';

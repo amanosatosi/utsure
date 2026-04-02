@@ -4,8 +4,11 @@
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 
 #include <array>
+#include <algorithm>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -62,6 +65,40 @@ bool observer_logs_contain_text(const CollectingObserver &observer, std::string_
     }
 
     return false;
+}
+
+std::string lowercase_ascii(std::string value) {
+    std::transform(
+        value.begin(),
+        value.end(),
+        value.begin(),
+        [](const unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        }
+    );
+    return value;
+}
+
+std::string current_subtitle_bitmap_mode() {
+    const char *value = std::getenv("UTSURE_SUBTITLE_BITMAP_MODE");
+    if (value == nullptr || value[0] == '\0') {
+        return "copied";
+    }
+
+    const auto normalized = lowercase_ascii(std::string(value));
+    return (normalized == "direct" || normalized == "raw") ? "direct" : "copied";
+}
+
+std::string current_subtitle_composition_mode() {
+    const char *value = std::getenv("UTSURE_SUBTITLE_COMPOSITION_MODE");
+    if (value == nullptr || value[0] == '\0') {
+        return "serialized";
+    }
+
+    const auto normalized = lowercase_ascii(std::string(value));
+    return (normalized == "worker" || normalized == "worker_local" || normalized == "worker-local" || normalized == "parallel")
+        ? "worker_local"
+        : "serialized";
 }
 
 std::string format_rational(const Rational &value) {
@@ -218,9 +255,37 @@ int assert_observer_flow(
         }
     }
 
-    if (!observer_logs_contain_text(observer, "worker-local subtitle sessions") ||
-        !observer_logs_contain_text(observer, "Streaming performance: total_elapsed=")) {
+    if (!observer_logs_contain_text(observer, "Streaming performance: total_elapsed=")) {
         return fail("The subtitle burn-in observer did not report the expected subtitle-path runtime logs.");
+    }
+
+    return 0;
+}
+
+int assert_subtitle_runtime_visibility(
+    const CollectingObserver &observer,
+    const EncodeJobSummary &summary,
+    const std::string_view expected_bitmap_mode,
+    const std::string_view expected_composition_mode
+) {
+    if (summary.streaming_runtime.subtitle_bitmap_mode != expected_bitmap_mode ||
+        summary.streaming_runtime.subtitle_composition_mode != expected_composition_mode) {
+        return fail("The subtitle runtime summary did not record the expected isolation mode.");
+    }
+
+    const std::size_t expected_subtitle_workers = expected_composition_mode == "worker_local"
+        ? summary.streaming_runtime.video_processing_worker_count
+        : 1U;
+    if (summary.streaming_runtime.subtitle_processing_worker_count != expected_subtitle_workers) {
+        return fail("The subtitle runtime summary reported an unexpected subtitle-worker count.");
+    }
+
+    const auto report = format_encode_job_report(summary);
+    if (!observer_logs_contain_text(observer, std::string("subtitle bitmap mode ") + std::string(expected_bitmap_mode)) ||
+        !observer_logs_contain_text(observer, std::string("composition mode ") + std::string(expected_composition_mode)) ||
+        report.find("streaming.subtitle.bitmap_mode=" + std::string(expected_bitmap_mode)) == std::string::npos ||
+        report.find("streaming.subtitle.composition_mode=" + std::string(expected_composition_mode)) == std::string::npos) {
+        return fail("The subtitle runtime logs/report did not expose the active isolation mode.");
     }
 
     return 0;
@@ -429,6 +494,16 @@ int run_burn_in_assertion(
         return observer_result;
     }
 
+    const auto runtime_result = assert_subtitle_runtime_visibility(
+        observer,
+        *burned_job_result.encode_job_summary,
+        current_subtitle_bitmap_mode(),
+        current_subtitle_composition_mode()
+    );
+    if (runtime_result != 0) {
+        return runtime_result;
+    }
+
     std::cout << build_validation_report(
         *burned_job_result.encode_job_summary,
         *plain_output_decode.decoded_media_source,
@@ -537,6 +612,16 @@ int run_timeline_burn_in_assertion(
         return observer_result;
     }
 
+    const auto runtime_result = assert_subtitle_runtime_visibility(
+        observer,
+        summary,
+        current_subtitle_bitmap_mode(),
+        current_subtitle_composition_mode()
+    );
+    if (runtime_result != 0) {
+        return runtime_result;
+    }
+
     std::cout << "timeline.intro.frame0.changed=no\n";
     std::cout << "timeline.main.changed=yes\n";
     std::cout << "timeline.outro.scope=not_asserted_after_encode\n";
@@ -639,9 +724,122 @@ int run_timeline_full_output_burn_in_assertion(
         return observer_result;
     }
 
+    const auto runtime_result = assert_subtitle_runtime_visibility(
+        observer,
+        summary,
+        current_subtitle_bitmap_mode(),
+        current_subtitle_composition_mode()
+    );
+    if (runtime_result != 0) {
+        return runtime_result;
+    }
+
     std::cout << "timeline.full_output.frame0.changed=yes\n";
     std::cout << "timeline.full_output.subtitled_frames=" << summary.subtitled_video_frame_count << '\n';
     std::cout << "timeline.full_output.segment_scope=intro:yes,main:yes,outro:yes\n";
+    return 0;
+}
+
+int run_stress_burn_in_assertion(
+    const std::filesystem::path &sample_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &plain_output_path,
+    const std::filesystem::path &burned_output_path
+) {
+    constexpr std::size_t kExpectedFrameCount = 480U;
+
+    CollectingObserver observer{};
+    const EncodeJob plain_job{
+        .input = {
+            .main_source_path = sample_path
+        },
+        .output = {
+            .output_path = plain_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJob burned_job{
+        .input = {
+            .main_source_path = sample_path
+        },
+        .subtitles = utsure::core::job::EncodeJobSubtitleSettings{
+            .subtitle_path = subtitle_path,
+            .format_hint = "ass"
+        },
+        .output = {
+            .output_path = burned_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJobResult plain_job_result = EncodeJobRunner::run(plain_job);
+    if (!plain_job_result.succeeded()) {
+        return fail("Plain stress encode failed unexpectedly before subtitle comparison.");
+    }
+
+    const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!burned_job_result.succeeded()) {
+        return fail("Subtitle stress encode failed unexpectedly.");
+    }
+
+    const auto &summary = *burned_job_result.encode_job_summary;
+    if (summary.timeline_summary.output_video_frame_count != static_cast<std::int64_t>(kExpectedFrameCount) ||
+        summary.subtitled_video_frame_count != static_cast<std::int64_t>(kExpectedFrameCount) ||
+        summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
+        return fail("Unexpected summary counts for the subtitle stress encode.");
+    }
+
+    const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);
+    const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
+    if (!plain_output_decode.succeeded() || !burned_output_decode.succeeded()) {
+        return fail("Subtitle stress output decode failed unexpectedly.");
+    }
+
+    if (assert_decoded_output(*plain_output_decode.decoded_media_source, kExpectedFrameCount, true) != 0 ||
+        assert_decoded_output(*burned_output_decode.decoded_media_source, kExpectedFrameCount, true) != 0) {
+        return 1;
+    }
+
+    if (!frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U) ||
+        !frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 240U) ||
+        !frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 479U)) {
+        return fail("Subtitle stress burn-in did not visibly alter the expected sampled frames.");
+    }
+
+    const auto observer_result = assert_observer_flow(observer, 1);
+    if (observer_result != 0) {
+        return observer_result;
+    }
+
+    const auto runtime_result = assert_subtitle_runtime_visibility(
+        observer,
+        summary,
+        current_subtitle_bitmap_mode(),
+        current_subtitle_composition_mode()
+    );
+    if (runtime_result != 0) {
+        return runtime_result;
+    }
+
+    std::cout << "stress.bitmap_mode=" << current_subtitle_bitmap_mode() << '\n';
+    std::cout << "stress.composition_mode=" << current_subtitle_composition_mode() << '\n';
+    std::cout << "stress.subtitle_workers=" << summary.streaming_runtime.subtitle_processing_worker_count << '\n';
+    std::cout << "stress.subtitled_frames=" << summary.subtitled_video_frame_count << '\n';
+    std::cout << "stress.sample_frame0.changed=yes\n";
+    std::cout << "stress.sample_frame240.changed=yes\n";
+    std::cout << "stress.sample_frame479.changed=yes\n";
     return 0;
 }
 
@@ -654,6 +852,7 @@ int main(int argc, char *argv[]) {
             "[--render <subtitle>|--render-gradient <subtitle>|--render-unsupported-img <subtitle>|"
             "--h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--h265 <input> <subtitle> <plain-output> <burned-output>|"
+            "--stress-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--timeline-h264 <intro> <main> <outro> <subtitle> <plain-output> <burned-output>|"
             "--timeline-full-h264 <intro> <main> <outro> <subtitle> <plain-output> <burned-output>]"
         );
@@ -690,6 +889,15 @@ int main(int argc, char *argv[]) {
             std::filesystem::path(argv[4]),
             std::filesystem::path(argv[5]),
             OutputVideoCodec::h265
+        );
+    }
+
+    if (mode == "--stress-h264" && argc == 6) {
+        return run_stress_burn_in_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4]),
+            std::filesystem::path(argv[5])
         );
     }
 

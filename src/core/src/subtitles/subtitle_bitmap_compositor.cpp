@@ -28,13 +28,19 @@ std::string describe_bitmap_surface(const PremultipliedRgbaBitmapView &bitmap) {
     return message.str();
 }
 
+}  // namespace
+
 std::size_t required_rgba_buffer_size(
     const int width,
     const int height,
     const int stride_bytes,
     const char *label
 ) {
-    if (width <= 0 || height <= 0 || stride_bytes < (width * 4)) {
+    const std::int64_t minimum_stride = static_cast<std::int64_t>(width) * 4LL;
+    if (width <= 0 || height <= 0 ||
+        minimum_stride > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+        stride_bytes <= 0 ||
+        static_cast<std::int64_t>(stride_bytes) < minimum_stride) {
         std::ostringstream message;
         message << "Premultiplied RGBA composition received an invalid " << label
                 << " surface: width=" << width
@@ -58,8 +64,6 @@ std::size_t required_rgba_buffer_size(
     return static_cast<std::size_t>(buffer_size);
 }
 
-}  // namespace
-
 bool is_rgba_frame_layout_supported(const media::DecodedVideoFrame &video_frame) noexcept {
     return video_frame.pixel_format == media::NormalizedVideoPixelFormat::rgba8 &&
         video_frame.planes.size() == 1 &&
@@ -67,26 +71,38 @@ bool is_rgba_frame_layout_supported(const media::DecodedVideoFrame &video_frame)
         video_frame.height > 0;
 }
 
-void composite_premultiplied_rgba_bitmap_into_frame(
-    media::DecodedVideoFrame &video_frame,
-    const PremultipliedRgbaBitmapView &bitmap
-) {
+void validate_rgba_frame_surface(const media::DecodedVideoFrame &video_frame, const char *context) {
     if (!is_rgba_frame_layout_supported(video_frame)) {
         throw std::runtime_error(
-            "Premultiplied RGBA composition requires a valid destination frame layout: " +
+            std::string(context) + " requires a valid destination frame layout: " +
             describe_destination_surface(video_frame)
         );
     }
 
-    auto &plane = video_frame.planes.front();
+    const auto &plane = video_frame.planes.front();
     const auto required_plane_bytes = required_rgba_buffer_size(
         video_frame.width,
         video_frame.height,
         plane.line_stride_bytes,
         "destination"
     );
+    if (plane.bytes.size() < required_plane_bytes) {
+        throw std::runtime_error(
+            std::string(context) + " received a truncated destination frame buffer: " +
+            describe_destination_surface(video_frame)
+        );
+    }
+}
+
+void composite_premultiplied_rgba_bitmap_into_frame(
+    media::DecodedVideoFrame &video_frame,
+    const PremultipliedRgbaBitmapView &bitmap
+) {
+    validate_rgba_frame_surface(video_frame, "Premultiplied RGBA composition");
+
+    auto &plane = video_frame.planes.front();
     required_rgba_buffer_size(bitmap.width, bitmap.height, bitmap.line_stride_bytes, "bitmap");
-    if (bitmap.bytes == nullptr || plane.bytes.size() < required_plane_bytes) {
+    if (bitmap.bytes == nullptr) {
         throw std::runtime_error(
             "Premultiplied RGBA composition received a truncated frame or bitmap buffer. " +
             describe_destination_surface(video_frame) + "; bitmap=" + describe_bitmap_surface(bitmap)

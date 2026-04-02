@@ -3,6 +3,7 @@
 #include "utsure/core/media/decoded_media.hpp"
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 
+#include <cstddef>
 #include <cstdint>
 
 namespace utsure::core::subtitles::detail {
@@ -17,6 +18,13 @@ struct PremultipliedRgbaBitmapView final {
 };
 
 [[nodiscard]] bool is_rgba_frame_layout_supported(const media::DecodedVideoFrame &video_frame) noexcept;
+[[nodiscard]] std::size_t required_rgba_buffer_size(
+    int width,
+    int height,
+    int stride_bytes,
+    const char *label
+);
+void validate_rgba_frame_surface(const media::DecodedVideoFrame &video_frame, const char *context);
 
 void composite_premultiplied_rgba_bitmap_into_frame(
     media::DecodedVideoFrame &video_frame,

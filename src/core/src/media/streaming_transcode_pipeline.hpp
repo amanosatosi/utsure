@@ -30,8 +30,12 @@ struct StreamingRuntimeBehavior final {
     int selected_video_encoder_thread_count{0};
     int selected_video_encoder_thread_type{0};
     std::size_t video_processing_worker_count{1};
+    std::size_t subtitle_processing_worker_count{1};
     std::size_t video_frame_queue_depth{0};
     std::size_t decoded_audio_block_queue_depth{0};
+    std::string subtitle_bitmap_mode{"copied"};
+    std::string subtitle_composition_mode{"serialized"};
+    std::string subtitle_diagnostics_mode{"off"};
 };
 
 struct StreamingStageTiming final {

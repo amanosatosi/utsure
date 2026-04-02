@@ -33,6 +33,7 @@ struct SubtitleCompositionDebugContext final {
     std::int64_t subtitle_timestamp_microseconds{0};
     int worker_id{-1};
     int session_id{-1};
+    bool log_frame_details{false};
     bool log_bitmap_details{false};
     std::function<void(const std::string &)> log_callback{};
 };

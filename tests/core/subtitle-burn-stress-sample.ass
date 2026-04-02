@@ -1,0 +1,39 @@
+[Script Info]
+Title: Subtitle Burn Stress Sample
+ScriptType: v4.00+
+PlayResX: 320
+PlayResY: 180
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+YCbCr Matrix: TV.601
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Main,Arial,22,&H00FFFFFF,&H000000FF,&H00000000,&H50000000,-1,0,0,0,100,100,0,0,1,2,1,2,16,16,14,1
+Style: Top,Arial,20,&H0000FFFF,&H000000FF,&H00000000,&H40000000,-1,0,0,0,100,100,0,0,1,2,1,8,16,16,14,1
+Style: Tick,Arial,18,&H0080FF80,&H00000000,&H00000000,&H28000000,-1,0,0,0,100,100,0,0,1,1.5,0.5,7,18,18,18,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:20.00,Main,,0,0,0,,Stress subtitle burn-in baseline
+Dialogue: 1,0:00:00.50,0:00:19.50,Top,,0,0,0,,Worker/session isolation check
+Dialogue: 2,0:00:00.00,0:00:01.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 01
+Dialogue: 2,0:00:01.00,0:00:02.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 02
+Dialogue: 2,0:00:02.00,0:00:03.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 03
+Dialogue: 2,0:00:03.00,0:00:04.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 04
+Dialogue: 2,0:00:04.00,0:00:05.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 05
+Dialogue: 2,0:00:05.00,0:00:06.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 06
+Dialogue: 2,0:00:06.00,0:00:07.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 07
+Dialogue: 2,0:00:07.00,0:00:08.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 08
+Dialogue: 2,0:00:08.00,0:00:09.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 09
+Dialogue: 2,0:00:09.00,0:00:10.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 10
+Dialogue: 2,0:00:10.00,0:00:11.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 11
+Dialogue: 2,0:00:11.00,0:00:12.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 12
+Dialogue: 2,0:00:12.00,0:00:13.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 13
+Dialogue: 2,0:00:13.00,0:00:14.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 14
+Dialogue: 2,0:00:14.00,0:00:15.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 15
+Dialogue: 2,0:00:15.00,0:00:16.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 16
+Dialogue: 2,0:00:16.00,0:00:17.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 17
+Dialogue: 2,0:00:17.00,0:00:18.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 18
+Dialogue: 2,0:00:18.00,0:00:19.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 19
+Dialogue: 2,0:00:19.00,0:00:20.00,Tick,,0,0,0,,{\pos(160,92)\fad(40,40)}tick 20

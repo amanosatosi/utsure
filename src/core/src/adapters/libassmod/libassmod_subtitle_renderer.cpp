@@ -1,11 +1,14 @@
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 #include "../../subtitles/subtitle_bitmap_compositor.hpp"
+#include "../../subtitles/subtitle_composition_diagnostics.hpp"
+#include "../../subtitles/subtitle_runtime_options.hpp"
 
 extern "C" {
 #include <ass/ass.h>
 }
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -13,8 +16,10 @@ extern "C" {
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -216,16 +221,64 @@ TrackHandle load_track(
     return track;
 }
 
-std::optional<SubtitleBitmap> convert_ass_image_rgba(const ASS_ImageRGBA &image) {
-    if (image.w <= 0 || image.h <= 0 || image.rgba == nullptr || image.stride < (image.w * 4)) {
-        return std::nullopt;
+void require_valid_ass_image_rgba(
+    const ASS_ImageRGBA &image,
+    const std::size_t bitmap_index,
+    const std::string &subtitle_path_string,
+    const int session_instance_id
+) {
+    if (image.w <= 0 || image.h <= 0) {
+        std::ostringstream message;
+        message << "libassmod produced an invalid RGBA subtitle bitmap with a non-positive size"
+                << " for '" << subtitle_path_string << "'"
+                << " (session " << session_instance_id << ", bitmap " << bitmap_index << "): origin="
+                << image.dst_x << ',' << image.dst_y
+                << ", width=" << image.w << ", height=" << image.h << '.';
+        throw std::runtime_error(message.str());
     }
 
+    const auto minimum_stride = static_cast<std::int64_t>(image.w) * 4LL;
+    if (minimum_stride > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
+        std::ostringstream message;
+        message << "libassmod produced a subtitle bitmap whose row size overflowed the host stride range"
+                << " for '" << subtitle_path_string << "'"
+                << " (session " << session_instance_id << ", bitmap " << bitmap_index << "): origin="
+                << image.dst_x << ',' << image.dst_y
+                << ", width=" << image.w << ", height=" << image.h << '.';
+        throw std::runtime_error(message.str());
+    }
+
+    if (image.stride <= 0 || static_cast<std::int64_t>(image.stride) < minimum_stride) {
+        std::ostringstream message;
+        message << "libassmod produced an invalid RGBA subtitle bitmap stride"
+                << " for '" << subtitle_path_string << "'"
+                << " (session " << session_instance_id << ", bitmap " << bitmap_index << "): origin="
+                << image.dst_x << ',' << image.dst_y
+                << ", width=" << image.w << ", height=" << image.h
+                << ", stride=" << image.stride << '.';
+        throw std::runtime_error(message.str());
+    }
+
+    if (image.rgba == nullptr) {
+        std::ostringstream message;
+        message << "libassmod produced a subtitle bitmap with null RGBA bytes"
+                << " for '" << subtitle_path_string << "'"
+                << " (session " << session_instance_id << ", bitmap " << bitmap_index << "): origin="
+                << image.dst_x << ',' << image.dst_y
+                << ", width=" << image.w << ", height=" << image.h
+                << ", stride=" << image.stride << '.';
+        throw std::runtime_error(message.str());
+    }
+}
+
+SubtitleBitmap copy_ass_image_rgba(const ASS_ImageRGBA &image) {
     const int line_stride_bytes = image.w * 4;
-    std::vector<std::uint8_t> bytes(
-        static_cast<std::size_t>(line_stride_bytes) * static_cast<std::size_t>(image.h),
-        0U
-    );
+    std::vector<std::uint8_t> bytes(detail::required_rgba_buffer_size(
+        image.w,
+        image.h,
+        line_stride_bytes,
+        "bitmap"
+    ), 0U);
 
     for (int row = 0; row < image.h; ++row) {
         const auto *source_row = image.rgba + static_cast<std::size_t>(row) * static_cast<std::size_t>(image.stride);
@@ -245,13 +298,21 @@ std::optional<SubtitleBitmap> convert_ass_image_rgba(const ASS_ImageRGBA &image)
     };
 }
 
-std::vector<SubtitleBitmap> convert_ass_image_rgba_list(ASS_ImageRGBA *images) {
-    std::vector<SubtitleBitmap> bitmaps{};
+detail::PremultipliedRgbaBitmapView make_ass_image_rgba_view(const ASS_ImageRGBA &image) {
+    return detail::PremultipliedRgbaBitmapView{
+        .origin_x = image.dst_x,
+        .origin_y = image.dst_y,
+        .width = image.w,
+        .height = image.h,
+        .line_stride_bytes = image.stride,
+        .bytes = image.rgba
+    };
+}
+
+std::vector<ASS_ImageRGBA *> collect_ass_image_rgba_nodes(ASS_ImageRGBA *images) {
+    std::vector<ASS_ImageRGBA *> bitmaps{};
     for (ASS_ImageRGBA *image = images; image != nullptr; image = image->next) {
-        const auto bitmap = convert_ass_image_rgba(*image);
-        if (bitmap.has_value()) {
-            bitmaps.push_back(*bitmap);
-        }
+        bitmaps.push_back(image);
     }
 
     return bitmaps;
@@ -270,10 +331,13 @@ public:
           subtitle_path_string_(std::move(subtitle_path_string)),
           library_(std::move(library)),
           renderer_(std::move(renderer)),
-          track_(std::move(track)) {
+          track_(std::move(track)),
+          runtime_options_(runtime::resolve_subtitle_runtime_options()),
+          session_instance_id_(next_session_instance_id()) {
     }
 
     ~LibassmodSubtitleRenderSession() override {
+        destroyed_.store(true, std::memory_order_release);
         if (renderer_) {
             ass_clear_tag_images(renderer_.get());
         }
@@ -281,7 +345,16 @@ public:
 
     [[nodiscard]] SubtitleRenderResult render(const SubtitleRenderRequest &request) noexcept override {
         try {
-            std::vector<SubtitleBitmap> bitmaps = convert_ass_image_rgba_list(render_images_rgba(request).get());
+            [[maybe_unused]] const auto access_guard = begin_session_access("render");
+            auto images_rgba = render_images_rgba(request);
+            const auto image_nodes = collect_ass_image_rgba_nodes(images_rgba.get());
+            std::vector<SubtitleBitmap> bitmaps{};
+            bitmaps.reserve(image_nodes.size());
+            for (std::size_t bitmap_index = 0; bitmap_index < image_nodes.size(); ++bitmap_index) {
+                const ASS_ImageRGBA &image = *image_nodes[bitmap_index];
+                require_valid_ass_image_rgba(image, bitmap_index, subtitle_path_string_, session_instance_id_);
+                bitmaps.push_back(copy_ass_image_rgba(image));
+            }
 
             return SubtitleRenderResult{
                 .rendered_frame = RenderedSubtitleFrame{
@@ -306,31 +379,40 @@ public:
         const SubtitleRenderRequest &request
     ) noexcept override {
         try {
-            if (!detail::is_rgba_frame_layout_supported(video_frame)) {
-                return make_compose_error(
-                    "Subtitle composition requires rgba8 decoded frames with a single plane.",
-                    "Keep the decoded video path normalized to single-plane rgba8 before requesting subtitle composition."
-                );
-            }
+            [[maybe_unused]] const auto access_guard = begin_session_access("compose");
+            detail::validate_rgba_frame_surface(video_frame, "Subtitle composition");
 
             auto images_rgba = render_images_rgba(request);
+            const auto image_nodes = collect_ass_image_rgba_nodes(images_rgba.get());
+            detail::maybe_log_subtitle_frame_diagnostics(
+                request,
+                video_frame,
+                image_nodes.size(),
+                runtime::to_string(runtime_options_.bitmap_transfer_mode)
+            );
             bool subtitles_applied = false;
-            for (ASS_ImageRGBA *image = images_rgba.get(); image != nullptr; image = image->next) {
-                if (image->w <= 0 || image->h <= 0 || image->rgba == nullptr || image->stride < (image->w * 4)) {
-                    continue;
-                }
-
-                detail::composite_premultiplied_rgba_bitmap_into_frame(
-                    video_frame,
-                    detail::PremultipliedRgbaBitmapView{
-                        .origin_x = image->dst_x,
-                        .origin_y = image->dst_y,
-                        .width = image->w,
-                        .height = image->h,
-                        .line_stride_bytes = image->stride,
-                        .bytes = image->rgba
-                    }
+            for (std::size_t bitmap_index = 0; bitmap_index < image_nodes.size(); ++bitmap_index) {
+                const ASS_ImageRGBA &image = *image_nodes[bitmap_index];
+                require_valid_ass_image_rgba(image, bitmap_index, subtitle_path_string_, session_instance_id_);
+                detail::maybe_log_subtitle_bitmap_diagnostics(
+                    request,
+                    bitmap_index,
+                    image.dst_x,
+                    image.dst_y,
+                    image.w,
+                    image.h,
+                    image.stride,
+                    runtime::to_string(runtime_options_.bitmap_transfer_mode)
                 );
+
+                if (runtime_options_.bitmap_transfer_mode == runtime::SubtitleBitmapTransferMode::direct) {
+                    detail::composite_premultiplied_rgba_bitmap_into_frame(
+                        video_frame,
+                        make_ass_image_rgba_view(image)
+                    );
+                } else {
+                    detail::composite_bitmap_into_frame(video_frame, copy_ass_image_rgba(image));
+                }
                 subtitles_applied = true;
             }
 
@@ -341,12 +423,92 @@ public:
         } catch (const std::exception &exception) {
             return make_compose_error(
                 "libassmod subtitle composition aborted because an unexpected exception was raised.",
-                exception.what()
+                std::string(exception.what()) + " Context: " +
+                    detail::format_subtitle_frame_diagnostics(
+                        request,
+                        video_frame,
+                        0U,
+                        runtime::to_string(runtime_options_.bitmap_transfer_mode)
+                    )
             );
         }
     }
 
 private:
+    class SessionAccessGuard final {
+    public:
+        explicit SessionAccessGuard(std::atomic<bool> &in_use) noexcept
+            : in_use_(&in_use) {
+        }
+
+        SessionAccessGuard(const SessionAccessGuard &) = delete;
+        SessionAccessGuard &operator=(const SessionAccessGuard &) = delete;
+
+        SessionAccessGuard(SessionAccessGuard &&other) noexcept
+            : in_use_(std::exchange(other.in_use_, nullptr)) {
+        }
+
+        SessionAccessGuard &operator=(SessionAccessGuard &&other) noexcept {
+            if (this == &other) {
+                return *this;
+            }
+
+            release();
+            in_use_ = std::exchange(other.in_use_, nullptr);
+            return *this;
+        }
+
+        ~SessionAccessGuard() {
+            release();
+        }
+
+    private:
+        void release() noexcept {
+            if (in_use_ != nullptr) {
+                in_use_->store(false, std::memory_order_release);
+                in_use_ = nullptr;
+            }
+        }
+
+        std::atomic<bool> *in_use_{nullptr};
+    };
+
+    [[nodiscard]] static int next_session_instance_id() noexcept {
+        static std::atomic<int> next_session_id{1};
+        return next_session_id.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] SessionAccessGuard begin_session_access(const char *operation) {
+        if (destroyed_.load(std::memory_order_acquire)) {
+            throw std::runtime_error(
+                "Attempted to " + std::string(operation) + " with a destroyed libassmod subtitle session " +
+                std::to_string(session_instance_id_) + '.'
+            );
+        }
+
+        bool expected = false;
+        if (!in_use_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            throw std::runtime_error(
+                "Concurrent " + std::string(operation) + " attempted against libassmod subtitle session " +
+                std::to_string(session_instance_id_) + " for '" + subtitle_path_string_ + "'."
+            );
+        }
+
+        try {
+            if (!library_ || !renderer_ || !track_) {
+                throw std::runtime_error(
+                    "libassmod subtitle session " + std::to_string(session_instance_id_) +
+                    " is missing active renderer state for '" + subtitle_path_string_ + "'."
+                );
+            }
+        } catch (...) {
+            in_use_.store(false, std::memory_order_release);
+            throw;
+        }
+
+        return SessionAccessGuard(in_use_);
+    }
+
     [[nodiscard]] ImageRgbaListHandle render_images_rgba(const SubtitleRenderRequest &request) const {
         int detect_change = 0;
         const long long timestamp_milliseconds = static_cast<long long>(request.timestamp_microseconds / 1000);
@@ -360,6 +522,10 @@ private:
     LibraryHandle library_{};
     RendererHandle renderer_{};
     TrackHandle track_{};
+    runtime::SubtitleRuntimeOptions runtime_options_{};
+    int session_instance_id_{0};
+    std::atomic<bool> in_use_{false};
+    std::atomic<bool> destroyed_{false};
 };
 
 class LibassmodSubtitleRenderer final : public SubtitleRenderer {

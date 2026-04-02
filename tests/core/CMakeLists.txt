@@ -12,6 +12,8 @@ set(UTSURE_IRREGULAR_TIMESTAMP_FILE "${UTSURE_TEST_MEDIA_DIR}/irregular-timestam
 set(UTSURE_SUBTITLE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-sample.ass")
 set(UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-gradient-sample.ass")
 set(UTSURE_SUBTITLE_IMG_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-img-sample.ass")
+set(UTSURE_SUBTITLE_STRESS_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-stress-sample.ass")
+set(UTSURE_SUBTITLE_STRESS_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-main.mp4")
 
 file(MAKE_DIRECTORY "${UTSURE_TEST_MEDIA_DIR}")
 configure_file(
@@ -27,6 +29,11 @@ configure_file(
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-img-sample.ass"
     "${UTSURE_SUBTITLE_IMG_SAMPLE_FILE}"
+    COPYONLY
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-stress-sample.ass"
+    "${UTSURE_SUBTITLE_STRESS_SAMPLE_FILE}"
     COPYONLY
 )
 
@@ -144,6 +151,22 @@ add_custom_command(
     VERBATIM
 )
 
+add_custom_command(
+    OUTPUT "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "testsrc2=size=320x180:rate=24"
+        -f lavfi -i "sine=frequency=880:sample_rate=48000:duration=20"
+        -t 20
+        -c:v libx264
+        -preset ultrafast
+        -pix_fmt yuv420p
+        -c:a aac
+        -b:a 128k
+        -shortest
+        "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
+    VERBATIM
+)
+
 add_custom_target(
     utsure_generate_sample_media
     DEPENDS
@@ -155,6 +178,7 @@ add_custom_target(
         "${UTSURE_TIMELINE_BAD_FPS_FILE}"
         "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
         "${UTSURE_IRREGULAR_TIMESTAMP_FILE}"
+        "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
 )
 
 add_executable(utsure_core_media_inspection_tests
@@ -580,6 +604,16 @@ add_test(
     COMMAND utsure_core_subtitle_bitmap_compositor_tests --premultiplied
 )
 
+add_test(
+    NAME utsure.core.subtitles.compositor.direct_clipped_rgba
+    COMMAND utsure_core_subtitle_bitmap_compositor_tests --direct-clipped
+)
+
+add_test(
+    NAME utsure.core.subtitles.compositor.invalid_bitmap
+    COMMAND utsure_core_subtitle_bitmap_compositor_tests --invalid-bitmap
+)
+
 add_executable(utsure_core_subtitle_burn_in_tests
     subtitle_burn_in_tests.cpp
 )
@@ -657,4 +691,52 @@ add_test(
         "${UTSURE_SUBTITLE_SAMPLE_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/timeline-full-subtitle-plain-h264.mp4"
         "${UTSURE_TEST_MEDIA_DIR}/timeline-full-subtitle-burn-h264.mp4"
+)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.stress.copied_serialized.h264
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_BITMAP_MODE=copied
+        UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
+        utsure_core_subtitle_burn_in_tests --stress-h264
+            "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
+            "${UTSURE_SUBTITLE_STRESS_SAMPLE_FILE}"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-plain-copied-serialized-h264.mp4"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-burn-copied-serialized-h264.mp4"
+)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.stress.direct_serialized.h264
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_BITMAP_MODE=direct
+        UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
+        utsure_core_subtitle_burn_in_tests --stress-h264
+            "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
+            "${UTSURE_SUBTITLE_STRESS_SAMPLE_FILE}"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-plain-direct-serialized-h264.mp4"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-burn-direct-serialized-h264.mp4"
+)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.stress.copied_worker.h264
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_BITMAP_MODE=copied
+        UTSURE_SUBTITLE_COMPOSITION_MODE=worker_local
+        utsure_core_subtitle_burn_in_tests --stress-h264
+            "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
+            "${UTSURE_SUBTITLE_STRESS_SAMPLE_FILE}"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-plain-copied-worker-h264.mp4"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-burn-copied-worker-h264.mp4"
+)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.stress.direct_worker.h264
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_BITMAP_MODE=direct
+        UTSURE_SUBTITLE_COMPOSITION_MODE=worker_local
+        utsure_core_subtitle_burn_in_tests --stress-h264
+            "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
+            "${UTSURE_SUBTITLE_STRESS_SAMPLE_FILE}"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-plain-direct-worker-h264.mp4"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-burn-direct-worker-h264.mp4"
 )
