@@ -890,6 +890,12 @@ int run_stress_burn_in_assertion(
     const auto plain_output_parent = plain_output_path.parent_path();
     const auto burned_output_parent = burned_output_path.parent_path();
 
+    // Emit a marker before any heavy startup so the CI harness can distinguish
+    // "test executable launched" from failures that happen before the test body runs.
+    std::cout << "stress.startup_marker=entered\n";
+    std::cout << "stress.startup_stage=test_entry\n";
+    std::cout.flush();
+
     const EncodeJob plain_job{
         .input = {
             .main_source_path = sample_path
@@ -973,7 +979,6 @@ int run_stress_burn_in_assertion(
         );
     };
 
-    emit_stage("test_entry");
     emit_path_details("source", sample_path);
     emit_path_details("subtitle", subtitle_path);
     emit_path_details("output.plain", plain_output_path);

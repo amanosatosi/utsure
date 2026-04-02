@@ -49,6 +49,48 @@ sanitize_markdown_inline() {
   printf '%s' "${value}"
 }
 
+escape_ctest_regex() {
+  local value="$1"
+  local escaped=""
+  local character
+  local index
+  for ((index = 0; index < ${#value}; ++index)); do
+    character="${value:index:1}"
+    case "${character}" in
+      [][(){}.^$*+?|\\-])
+        escaped+="\\${character}"
+        ;;
+      *)
+        escaped+="${character}"
+        ;;
+    esac
+  done
+
+  printf '%s' "${escaped}"
+}
+
+format_command_for_log() {
+  local formatted=""
+  local argument
+  for argument in "$@"; do
+    if [[ -n "${formatted}" ]]; then
+      formatted+=" "
+    fi
+    formatted+="$(printf '%q' "${argument}")"
+  done
+
+  printf '%s' "${formatted}"
+}
+
+append_file_as_code_block() {
+  local log_file="$1"
+  append_summary '```text'
+  while IFS= read -r line; do
+    append_summary "${line//\`/\'}"
+  done < "${log_file}"
+  append_summary '```'
+}
+
 contains_fixed_string() {
   local needle="$1"
   local file="$2"
@@ -95,7 +137,22 @@ extract_startup_stage_reached() {
 
 test_launched() {
   local log_file="$1"
-  if contains_fixed_string "stress.startup_stage=test_entry" "${log_file}"; then
+  if contains_fixed_string "stress.startup_marker=entered" "${log_file}"; then
+    printf 'yes'
+    return
+  fi
+
+  printf 'no'
+}
+
+run_matched_tests() {
+  local log_file="$1"
+  if grep -Eq 'No tests were found!!!' "${log_file}"; then
+    printf 'no'
+    return
+  fi
+
+  if grep -Eq '^[[:space:]]*Start[[:space:]]+[0-9]+:' "${log_file}"; then
     printf 'yes'
     return
   fi
@@ -106,10 +163,11 @@ test_launched() {
 check_test_exists() {
   local test_name="$1"
   local log_file="$2"
+  local exact_regex="$3"
   local exit_code
 
   set +e
-  ctest --test-dir "${build_dir}" -N --no-tests=error -R "^${test_name}$" \
+  ctest --test-dir "${build_dir}" -N "${ctest_config_args[@]}" --no-tests=error -R "${exact_regex}" \
     > "${log_file}" 2>&1
   exit_code=$?
   set -e
@@ -214,9 +272,27 @@ append_summary ""
 read -r representative_bitmap_mode representative_composition_mode representative_mode_key representative_test_name <<< "${representative_entry}"
 representative_discovery_log="${results_dir}/${representative_mode_key}.discovery.log"
 representative_startup_log="${results_dir}/${representative_mode_key}.startup.log"
+representative_exact_regex="^$(escape_ctest_regex "${representative_test_name}")$"
+ctest_config="${UTSURE_CTEST_CONFIG:-${UTSURE_CMAKE_BUILD_TYPE:-}}"
+ctest_config_args=()
+if [[ -n "${ctest_config}" ]]; then
+  ctest_config_args=(-C "${ctest_config}")
+fi
+representative_run_command=(
+  ctest
+  --test-dir "${build_dir}"
+  "${ctest_config_args[@]}"
+  --output-on-failure
+  -V
+  --no-tests=error
+  -R "${representative_exact_regex}"
+)
 
-representative_test_exists="$(check_test_exists "${representative_test_name}" "${representative_discovery_log}")"
+representative_test_exists="$(check_test_exists "${representative_test_name}" "${representative_discovery_log}" "${representative_exact_regex}")"
 append_summary "- Discovery method: \`ctest -N --no-tests=error\`"
+append_summary "- Exact test name: \`${representative_test_name}\`"
+append_summary "- Escaped exact regex: \`${representative_exact_regex}\`"
+append_summary "- CTest config: \`${ctest_config:-<default>}\`"
 append_summary "- Test exists: \`${representative_test_exists}\`"
 
 if [[ "${representative_test_exists}" != "yes" ]]; then
@@ -239,6 +315,10 @@ append_summary "| Bitmap mode | Composition mode | Test exists | Launched | Resu
 append_summary "| --- | --- | --- | --- | --- | ---: | --- | ---: | --- | --- |"
 
 echo "Running representative startup check for ${representative_mode_key}."
+echo "Representative exact test name: ${representative_test_name}"
+echo "Representative escaped regex: ${representative_exact_regex}"
+echo "Representative ctest command: $(format_command_for_log "${representative_run_command[@]}")"
+append_summary "- Representative ctest command: \`$(sanitize_markdown_inline "$(format_command_for_log "${representative_run_command[@]}")")\`"
 set +e
 env \
   UTSURE_SUBTITLE_STRESS_REPEAT=1 \
@@ -246,7 +326,7 @@ env \
   UTSURE_FFMPEG_PREFIX="${ffmpeg_prefix}" \
   UTSURE_FFMS2_PREFIX="${ffms2_prefix}" \
   UTSURE_LIBASSMOD_PREFIX="${libassmod_prefix}" \
-  ctest --test-dir "${build_dir}" --output-on-failure -V --no-tests=error -R "^${representative_test_name}$" \
+  "${representative_run_command[@]}" \
   2>&1 | tee "${representative_startup_log}"
 representative_startup_exit=${PIPESTATUS[0]}
 set -e
@@ -255,6 +335,7 @@ representative_startup_stage="$(extract_failure_stage "${representative_startup_
 representative_startup_reason="$(extract_failure_reason "${representative_startup_log}")"
 representative_startup_stage_reached="$(extract_startup_stage_reached "${representative_startup_log}")"
 representative_test_launched="$(test_launched "${representative_startup_log}")"
+representative_run_matched="$(run_matched_tests "${representative_startup_log}")"
 representative_iteration_reached="$(extract_iteration_reached "${representative_startup_log}")"
 representative_startup_time_ms="$(extract_stress_value "time_to_failure_ms" "${representative_startup_log}")"
 if [[ -z "${representative_startup_time_ms}" ]]; then
@@ -264,29 +345,52 @@ if [[ -z "${representative_startup_time_ms}" ]]; then
   representative_startup_time_ms="0"
 fi
 
-if [[ "${representative_startup_exit}" -ne 0 ]] || [[ "${representative_test_launched}" != "yes" ]] || ! contains_fixed_string "stress.startup_stage=first_iteration_begin" "${representative_startup_log}" || ! contains_fixed_string "stress.iteration=1" "${representative_startup_log}"; then
+if [[ "${representative_run_matched}" != "yes" ]]; then
+  representative_startup_stage="test_selection_run"
+  representative_startup_reason="CTest found the representative test during discovery, but the execution command matched zero tests."
+elif [[ "${representative_test_launched}" != "yes" ]]; then
+  representative_startup_stage="test_launch"
   if [[ -z "${representative_startup_reason}" ]]; then
-    representative_startup_reason="Representative startup run never reached first_iteration_begin and iteration 1."
+    representative_startup_reason="CTest matched the representative test, but the process never reached the test startup marker."
   fi
+elif [[ "${representative_startup_exit}" -ne 0 ]] || ! contains_fixed_string "stress.startup_stage=first_iteration_begin" "${representative_startup_log}" || ! contains_fixed_string "stress.iteration=1" "${representative_startup_log}"; then
+  if [[ -z "${representative_startup_reason}" ]]; then
+    representative_startup_reason="Representative startup run entered the test body but never reached first_iteration_begin and iteration 1."
+  fi
+fi
 
+if [[ "${representative_run_matched}" != "yes" ]] || [[ "${representative_test_launched}" != "yes" ]] || [[ "${representative_startup_exit}" -ne 0 ]] || ! contains_fixed_string "stress.startup_stage=first_iteration_begin" "${representative_startup_log}" || ! contains_fixed_string "stress.iteration=1" "${representative_startup_log}"; then
   emit_github_annotation \
     error \
     "Subtitle stress startup failed" \
     "mode=${representative_mode_key}; stage=${representative_startup_stage}; time_ms=${representative_startup_time_ms}; reason=$(truncate_annotation_text "${representative_startup_reason}")"
   append_summary "- Representative startup failed at \`${representative_startup_stage}\` after \`${representative_startup_time_ms}ms\`: \`$(sanitize_markdown_inline "${representative_startup_reason}")\`"
+  append_summary "- Run matched tests: \`${representative_run_matched}\`"
   append_summary "- Test launched: \`${representative_test_launched}\`"
   append_summary "- Startup stage reached: \`${representative_startup_stage_reached}\`"
   append_summary "- Iteration reached: \`${representative_iteration_reached}\`"
+  append_summary ""
+  append_summary "<details><summary>Representative Raw Output</summary>"
+  append_summary ""
+  append_file_as_code_block "${representative_startup_log}"
+  append_summary "</details>"
   while IFS= read -r line; do
     append_summary "- \`${line}\`"
   done < <(
-    grep -E '^stress\.(startup_stage|failure_stage|failure_reason|source\.|subtitle\.|output\.|prefix\.|iteration_begin|iteration|time_to_failure_ms|total_elapsed_ms)=' "${representative_startup_log}" \
+    grep -E '^stress\.(startup_marker|startup_stage|failure_stage|failure_reason|source\.|subtitle\.|output\.|prefix\.|iteration_begin|iteration|time_to_failure_ms|total_elapsed_ms)=' "${representative_startup_log}" \
       | tail -n 40 || true
   )
   exit 1
 fi
 
 append_summary "- Representative startup reached \`first_iteration_begin\` and completed iteration \`1\`."
+append_summary "- Run matched tests: \`${representative_run_matched}\`"
+append_summary "- Test launched: \`${representative_test_launched}\`"
+append_summary ""
+append_summary "<details><summary>Representative Raw Output</summary>"
+append_summary ""
+append_file_as_code_block "${representative_startup_log}"
+append_summary "</details>"
 append_summary ""
 append_summary "| Bitmap mode | Composition mode | Test exists | Launched | Result | Time (ms) | Startup stage | Iteration | Failure stage | ASan |"
 append_summary "| --- | --- | --- | --- | --- | ---: | --- | ---: | --- | --- |"
@@ -297,9 +401,22 @@ for entry in "${modes[@]}"; do
   discovery_log="${results_dir}/${mode_key}.discovery.log"
   log_file="${results_dir}/${mode_key}.log"
   start_time="$(date +%s)"
-  test_exists="$(check_test_exists "${test_name}" "${discovery_log}")"
+  exact_regex="^$(escape_ctest_regex "${test_name}")$"
+  test_exists="$(check_test_exists "${test_name}" "${discovery_log}" "${exact_regex}")"
+  run_command=(
+    ctest
+    --test-dir "${build_dir}"
+    "${ctest_config_args[@]}"
+    --output-on-failure
+    -V
+    --no-tests=error
+    -R "${exact_regex}"
+  )
 
   echo "Running ${mode_key} (${test_name}) with repeat count ${repeat_count}."
+  echo "Mode exact test name: ${test_name}"
+  echo "Mode escaped regex: ${exact_regex}"
+  echo "Mode ctest command: $(format_command_for_log "${run_command[@]}")"
 
   if [[ "${test_exists}" != "yes" ]]; then
     failure_stage="test_discovery"
@@ -348,7 +465,7 @@ for entry in "${modes[@]}"; do
     UTSURE_FFMPEG_PREFIX="${ffmpeg_prefix}" \
     UTSURE_FFMS2_PREFIX="${ffms2_prefix}" \
     UTSURE_LIBASSMOD_PREFIX="${libassmod_prefix}" \
-    ctest --test-dir "${build_dir}" --output-on-failure -V --no-tests=error -R "^${test_name}$" \
+    "${run_command[@]}" \
     2>&1 | tee "${log_file}"
   exit_code=${PIPESTATUS[0]}
   set -e
@@ -360,6 +477,7 @@ for entry in "${modes[@]}"; do
   failure_reason="$(extract_failure_reason "${log_file}")"
   startup_stage_reached="$(extract_startup_stage_reached "${log_file}")"
   launched="$(test_launched "${log_file}")"
+  run_matched="$(run_matched_tests "${log_file}")"
   iteration_reached="$(extract_iteration_reached "${log_file}")"
   failed_iteration="$(extract_stress_value "failed_iteration" "${log_file}")"
   time_to_failure_ms="$(extract_stress_value "time_to_failure_ms" "${log_file}")"
@@ -377,7 +495,16 @@ for entry in "${modes[@]}"; do
   fi
 
   result="PASS"
-  if [[ "${launched}" != "yes" ]]; then
+  if [[ "${run_matched}" != "yes" ]]; then
+    result="FAIL"
+    overall_status=1
+    failure_stage="test_selection_run"
+    failure_reason="CTest found the stress test during discovery, but the execution command matched zero tests."
+    failed_modes+=("${mode_key}")
+    failed_bitmap_modes+=("${bitmap_mode}")
+    failed_composition_modes+=("${composition_mode}")
+    failed_stages+=("${failure_stage}")
+  elif [[ "${launched}" != "yes" ]]; then
     result="FAIL"
     overall_status=1
     if [[ "${failure_stage}" == "unstructured" || -z "${failure_stage}" ]]; then
@@ -404,7 +531,10 @@ for entry in "${modes[@]}"; do
   append_summary "<details><summary>${mode_key}</summary>"
   append_summary ""
   append_summary "- Test: \`${test_name}\`"
+  append_summary "- Escaped exact regex: \`${exact_regex}\`"
+  append_summary "- CTest command: \`$(sanitize_markdown_inline "$(format_command_for_log "${run_command[@]}")")\`"
   append_summary "- Test exists: \`${test_exists}\`"
+  append_summary "- Run matched tests: \`${run_matched}\`"
   append_summary "- Test launched: \`${launched}\`"
   append_summary "- Exit code: \`${exit_code}\`"
   append_summary "- Wall time: \`${elapsed_seconds}s\`"
@@ -428,7 +558,7 @@ for entry in "${modes[@]}"; do
   while IFS= read -r line; do
     append_summary "- \`${line}\`"
   done < <(
-    grep -E '^stress\.(mode|bitmap_mode|composition_mode|repeat_count|startup_stage|iteration_begin|iteration|iteration_elapsed_ms|failed_iteration|failure_stage|failure_reason|time_to_failure_ms|total_elapsed_ms|status|subtitle_workers|subtitled_frames|source\.|subtitle\.|output\.|prefix\.)=' "${log_file}" \
+    grep -E '^stress\.(mode|bitmap_mode|composition_mode|repeat_count|startup_marker|startup_stage|iteration_begin|iteration|iteration_elapsed_ms|failed_iteration|failure_stage|failure_reason|time_to_failure_ms|total_elapsed_ms|status|subtitle_workers|subtitled_frames|source\.|subtitle\.|output\.|prefix\.)=' "${log_file}" \
       | tail -n 40 || true
   )
 
@@ -441,7 +571,7 @@ for entry in "${modes[@]}"; do
     emit_github_annotation \
       error \
       "Subtitle stress mode failed" \
-      "mode=${mode_key}; bitmap=${bitmap_mode}; composition=${composition_mode}; exists=${test_exists}; launched=${launched}; time_ms=${elapsed_ms}; startup=${startup_stage_reached}; iteration=${iteration_reached}; stage=${failure_stage}; asan=${asan_status}; reason=${annotation_reason}"
+      "mode=${mode_key}; bitmap=${bitmap_mode}; composition=${composition_mode}; exists=${test_exists}; matched=${run_matched}; launched=${launched}; time_ms=${elapsed_ms}; startup=${startup_stage_reached}; iteration=${iteration_reached}; stage=${failure_stage}; asan=${asan_status}; reason=${annotation_reason}"
   fi
 done
 
