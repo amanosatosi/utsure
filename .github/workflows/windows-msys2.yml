@@ -234,9 +234,14 @@ jobs:
         run: ./scripts/ci/windows-msys2-dependency-audit.sh
 
       - name: Build and run subtitle ASan compositor coverage
+        id: subtitle_asan_compositor
+        continue-on-error: true
         run: ./scripts/ci/windows-msys2-build.sh
 
       - name: Run subtitle ASan isolation matrix
+        id: subtitle_asan_matrix
+        if: always()
+        continue-on-error: true
         run: ./scripts/ci/windows-msys2-run-subtitle-stress-matrix.sh
 
       - name: Upload subtitle ASan stress logs
@@ -244,5 +249,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: subtitle-asan-stress
-          if-no-files-found: error
+          if-no-files-found: warn
           path: artifacts/subtitle-asan-stress
+
+      - name: Enforce subtitle ASan result
+        if: always()
+        run: |
+          compositor_outcome="${{ steps.subtitle_asan_compositor.outcome }}"
+          matrix_outcome="${{ steps.subtitle_asan_matrix.outcome }}"
+          echo "subtitle_asan_compositor=${compositor_outcome}"
+          echo "subtitle_asan_matrix=${matrix_outcome}"
+          if [[ "${compositor_outcome}" != "success" || "${matrix_outcome}" != "success" ]]; then
+            exit 1
+          fi
