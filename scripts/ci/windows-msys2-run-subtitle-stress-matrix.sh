@@ -50,9 +50,12 @@ sanitize_markdown_inline() {
   printf '%s' "${value}"
 }
 
-escape_ctest_regex() {
-  local value="$1"
-  printf '%s' "${value}" | sed -E 's/[][(){}.^$*+?|\\-]/\\&/g'
+build_exact_ctest_regex() {
+  local test_name="$1"
+  local literal_regex
+  # CTest expects a regex; escape the literal test name once, then anchor it.
+  literal_regex="$(printf '%s' "${test_name}" | sed -E 's/[][(){}.^$*+?|\\-]/\\&/g')"
+  printf '^%s$' "${literal_regex}"
 }
 
 format_command_for_log() {
@@ -147,9 +150,8 @@ run_matched_tests() {
 }
 
 check_test_exists() {
-  local test_name="$1"
-  local log_file="$2"
-  local exact_regex="$3"
+  local log_file="$1"
+  local exact_regex="$2"
   local exit_code
 
   set +e
@@ -158,7 +160,7 @@ check_test_exists() {
   exit_code=$?
   set -e
 
-  if [[ "${exit_code}" -eq 0 ]]; then
+  if [[ "${exit_code}" -eq 0 ]] && grep -Eq '^Total Tests:[[:space:]]+[1-9][0-9]*[[:space:]]*$' "${log_file}"; then
     printf 'yes'
     return
   fi
@@ -258,7 +260,7 @@ append_summary ""
 read -r representative_bitmap_mode representative_composition_mode representative_mode_key representative_test_name <<< "${representative_entry}"
 representative_discovery_log="${results_dir}/${representative_mode_key}.discovery.log"
 representative_startup_log="${results_dir}/${representative_mode_key}.startup.log"
-representative_exact_regex="^$(escape_ctest_regex "${representative_test_name}")$"
+representative_exact_regex="$(build_exact_ctest_regex "${representative_test_name}")"
 ctest_config="${UTSURE_CTEST_CONFIG:-${UTSURE_CMAKE_BUILD_TYPE:-}}"
 ctest_config_args=()
 if [[ -n "${ctest_config}" ]]; then
@@ -274,10 +276,10 @@ representative_run_command=(
   -R "${representative_exact_regex}"
 )
 
-representative_test_exists="$(check_test_exists "${representative_test_name}" "${representative_discovery_log}" "${representative_exact_regex}")"
+representative_test_exists="$(check_test_exists "${representative_discovery_log}" "${representative_exact_regex}")"
 append_summary "- Discovery method: \`ctest -N --no-tests=error\`"
 append_summary "- Exact test name: \`${representative_test_name}\`"
-append_summary "- Escaped exact regex: \`${representative_exact_regex}\`"
+append_summary "- Exact CTest regex: \`${representative_exact_regex}\`"
 append_summary "- CTest config: \`${ctest_config:-<default>}\`"
 append_summary "- Test exists: \`${representative_test_exists}\`"
 
@@ -302,7 +304,7 @@ append_summary "| --- | --- | --- | --- | --- | ---: | --- | ---: | --- | --- |"
 
 echo "Running representative startup check for ${representative_mode_key}."
 echo "Representative exact test name: ${representative_test_name}"
-echo "Representative escaped regex: ${representative_exact_regex}"
+echo "Representative exact regex: ${representative_exact_regex}"
 echo "Representative ctest command: $(format_command_for_log "${representative_run_command[@]}")"
 append_summary "- Representative ctest command: \`$(sanitize_markdown_inline "$(format_command_for_log "${representative_run_command[@]}")")\`"
 set +e
@@ -387,8 +389,8 @@ for entry in "${modes[@]}"; do
   discovery_log="${results_dir}/${mode_key}.discovery.log"
   log_file="${results_dir}/${mode_key}.log"
   start_time="$(date +%s)"
-  exact_regex="^$(escape_ctest_regex "${test_name}")$"
-  test_exists="$(check_test_exists "${test_name}" "${discovery_log}" "${exact_regex}")"
+  exact_regex="$(build_exact_ctest_regex "${test_name}")"
+  test_exists="$(check_test_exists "${discovery_log}" "${exact_regex}")"
   run_command=(
     ctest
     --test-dir "${build_dir}"
@@ -401,7 +403,7 @@ for entry in "${modes[@]}"; do
 
   echo "Running ${mode_key} (${test_name}) with repeat count ${repeat_count}."
   echo "Mode exact test name: ${test_name}"
-  echo "Mode escaped regex: ${exact_regex}"
+  echo "Mode exact regex: ${exact_regex}"
   echo "Mode ctest command: $(format_command_for_log "${run_command[@]}")"
 
   if [[ "${test_exists}" != "yes" ]]; then
@@ -517,7 +519,7 @@ for entry in "${modes[@]}"; do
   append_summary "<details><summary>${mode_key}</summary>"
   append_summary ""
   append_summary "- Test: \`${test_name}\`"
-  append_summary "- Escaped exact regex: \`${exact_regex}\`"
+  append_summary "- Exact CTest regex: \`${exact_regex}\`"
   append_summary "- CTest command: \`$(sanitize_markdown_inline "$(format_command_for_log "${run_command[@]}")")\`"
   append_summary "- Test exists: \`${test_exists}\`"
   append_summary "- Run matched tests: \`${run_matched}\`"
