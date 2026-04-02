@@ -213,39 +213,52 @@ bool has_opaque_color_variation(const utsure::core::subtitles::RenderedSubtitleF
     return false;
 }
 
-int assert_decoded_output(
+std::string validate_decoded_output(
     const DecodedMediaSource &decoded_output,
     const std::size_t expected_frame_count,
     const bool expect_audio
 ) {
     if (decoded_output.video_frames.size() != expected_frame_count) {
-        return fail("Unexpected burned-output video frame count.");
+        return "Unexpected burned-output video frame count.";
     }
 
     if (expect_audio && decoded_output.audio_blocks.empty()) {
-        return fail("The subtitle burn-in path unexpectedly dropped audio.");
+        return "The subtitle burn-in path unexpectedly dropped audio.";
     }
 
     if (!expect_audio && !decoded_output.audio_blocks.empty()) {
-        return fail("The subtitle burn-in path unexpectedly contains audio.");
+        return "The subtitle burn-in path unexpectedly contains audio.";
     }
 
     for (std::size_t index = 1; index < decoded_output.video_frames.size(); ++index) {
         if (decoded_output.video_frames[index].timestamp.start_microseconds <=
             decoded_output.video_frames[index - 1].timestamp.start_microseconds) {
-            return fail("Unexpected burned-output timestamp sequence.");
+            return "Unexpected burned-output timestamp sequence.";
         }
+    }
+
+    return {};
+}
+
+int assert_decoded_output(
+    const DecodedMediaSource &decoded_output,
+    const std::size_t expected_frame_count,
+    const bool expect_audio
+) {
+    const auto validation_error = validate_decoded_output(decoded_output, expected_frame_count, expect_audio);
+    if (!validation_error.empty()) {
+        return fail(validation_error);
     }
 
     return 0;
 }
 
-int assert_observer_flow(
+std::string validate_observer_flow(
     const CollectingObserver &observer,
     const int expected_decode_steps
 ) {
     if (observer.progress_updates.empty()) {
-        return fail("The subtitle burn-in observer did not receive any progress updates.");
+        return "The subtitle burn-in observer did not receive any progress updates.";
     }
 
     const int expected_total_steps = 1 + expected_decode_steps + 1 + 1 + 1;
@@ -253,12 +266,12 @@ int assert_observer_flow(
 
     if (observer.progress_updates.front().stage != EncodeJobStage::assembling_timeline ||
         observer.progress_updates.back().stage != EncodeJobStage::completed) {
-        return fail("The subtitle burn-in observer did not report the expected lifecycle stages.");
+        return "The subtitle burn-in observer did not report the expected lifecycle stages.";
     }
 
     for (const auto &progress : observer.progress_updates) {
         if (progress.total_steps != expected_total_steps) {
-            return fail("The subtitle burn-in observer reported an unexpected total-step count.");
+            return "The subtitle burn-in observer reported an unexpected total-step count.";
         }
 
         if (progress.stage == EncodeJobStage::burning_in_subtitles) {
@@ -267,20 +280,61 @@ int assert_observer_flow(
     }
 
     if (subtitle_stage_count != 1) {
-        return fail("The subtitle burn-in observer did not report the subtitle stage exactly once.");
+        return "The subtitle burn-in observer did not report the subtitle stage exactly once.";
     }
 
     for (const auto &log_message : observer.log_messages) {
         if (log_message.level == EncodeJobLogLevel::error) {
-            return fail("The subtitle burn-in observer reported an unexpected error log.");
+            return "The subtitle burn-in observer reported an unexpected error log.";
         }
     }
 
     if (!observer_logs_contain_text(observer, "Streaming performance: total_elapsed=")) {
-        return fail("The subtitle burn-in observer did not report the expected subtitle-path runtime logs.");
+        return "The subtitle burn-in observer did not report the expected subtitle-path runtime logs.";
+    }
+
+    return {};
+}
+
+int assert_observer_flow(
+    const CollectingObserver &observer,
+    const int expected_decode_steps
+) {
+    const auto validation_error = validate_observer_flow(observer, expected_decode_steps);
+    if (!validation_error.empty()) {
+        return fail(validation_error);
     }
 
     return 0;
+}
+
+std::string validate_subtitle_runtime_visibility(
+    const CollectingObserver &observer,
+    const EncodeJobSummary &summary,
+    const std::string_view expected_bitmap_mode,
+    const std::string_view expected_composition_mode
+) {
+    if (summary.streaming_runtime.subtitle_bitmap_mode != expected_bitmap_mode ||
+        summary.streaming_runtime.subtitle_composition_mode != expected_composition_mode) {
+        return "The subtitle runtime summary did not record the expected isolation mode.";
+    }
+
+    const std::size_t expected_subtitle_workers = expected_composition_mode == "worker_local"
+        ? summary.streaming_runtime.video_processing_worker_count
+        : 1U;
+    if (summary.streaming_runtime.subtitle_processing_worker_count != expected_subtitle_workers) {
+        return "The subtitle runtime summary reported an unexpected subtitle-worker count.";
+    }
+
+    const auto report = format_encode_job_report(summary);
+    if (!observer_logs_contain_text(observer, std::string("subtitle bitmap mode ") + std::string(expected_bitmap_mode)) ||
+        !observer_logs_contain_text(observer, std::string("composition mode ") + std::string(expected_composition_mode)) ||
+        report.find("streaming.subtitle.bitmap_mode=" + std::string(expected_bitmap_mode)) == std::string::npos ||
+        report.find("streaming.subtitle.composition_mode=" + std::string(expected_composition_mode)) == std::string::npos) {
+        return "The subtitle runtime logs/report did not expose the active isolation mode.";
+    }
+
+    return {};
 }
 
 int assert_subtitle_runtime_visibility(
@@ -289,24 +343,14 @@ int assert_subtitle_runtime_visibility(
     const std::string_view expected_bitmap_mode,
     const std::string_view expected_composition_mode
 ) {
-    if (summary.streaming_runtime.subtitle_bitmap_mode != expected_bitmap_mode ||
-        summary.streaming_runtime.subtitle_composition_mode != expected_composition_mode) {
-        return fail("The subtitle runtime summary did not record the expected isolation mode.");
-    }
-
-    const std::size_t expected_subtitle_workers = expected_composition_mode == "worker_local"
-        ? summary.streaming_runtime.video_processing_worker_count
-        : 1U;
-    if (summary.streaming_runtime.subtitle_processing_worker_count != expected_subtitle_workers) {
-        return fail("The subtitle runtime summary reported an unexpected subtitle-worker count.");
-    }
-
-    const auto report = format_encode_job_report(summary);
-    if (!observer_logs_contain_text(observer, std::string("subtitle bitmap mode ") + std::string(expected_bitmap_mode)) ||
-        !observer_logs_contain_text(observer, std::string("composition mode ") + std::string(expected_composition_mode)) ||
-        report.find("streaming.subtitle.bitmap_mode=" + std::string(expected_bitmap_mode)) == std::string::npos ||
-        report.find("streaming.subtitle.composition_mode=" + std::string(expected_composition_mode)) == std::string::npos) {
-        return fail("The subtitle runtime logs/report did not expose the active isolation mode.");
+    const auto validation_error = validate_subtitle_runtime_visibility(
+        observer,
+        summary,
+        expected_bitmap_mode,
+        expected_composition_mode
+    );
+    if (!validation_error.empty()) {
+        return fail(validation_error);
     }
 
     return 0;
@@ -806,7 +850,11 @@ int run_stress_burn_in_assertion(
         }
     };
 
-    const auto emit_failure_metadata = [&](const std::size_t iteration) {
+    const auto emit_failure_metadata = [&](
+        const std::size_t iteration,
+        const std::string_view stage,
+        const std::string_view reason
+    ) {
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - suite_started_at
         );
@@ -816,7 +864,18 @@ int run_stress_burn_in_assertion(
         std::cout << "stress.composition_mode=" << composition_mode << '\n';
         std::cout << "stress.repeat_count=" << repeat_count << '\n';
         std::cout << "stress.failed_iteration=" << iteration << '\n';
+        std::cout << "stress.failure_stage=" << stage << '\n';
+        std::cout << "stress.failure_reason=" << reason << '\n';
         std::cout << "stress.time_to_failure_ms=" << elapsed.count() << '\n';
+    };
+
+    const auto fail_with_metadata = [&](
+        const std::size_t iteration,
+        const std::string_view stage,
+        const std::string_view reason
+    ) {
+        emit_failure_metadata(iteration, stage, reason);
+        return fail(reason);
     };
 
     std::error_code cleanup_error{};
@@ -831,19 +890,26 @@ int run_stress_burn_in_assertion(
 
     const EncodeJobResult plain_job_result = EncodeJobRunner::run(plain_job);
     if (!plain_job_result.succeeded()) {
-        emit_failure_metadata(0U);
-        return fail("Plain stress encode failed unexpectedly before subtitle comparison.");
+        return fail_with_metadata(
+            0U,
+            "plain_encode",
+            "Plain stress encode failed unexpectedly before subtitle comparison."
+        );
     }
 
     const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);
     if (!plain_output_decode.succeeded()) {
-        emit_failure_metadata(0U);
-        return fail("Plain stress output decode failed unexpectedly before subtitle comparison.");
+        return fail_with_metadata(
+            0U,
+            "plain_decode",
+            "Plain stress output decode failed unexpectedly before subtitle comparison."
+        );
     }
 
-    if (assert_decoded_output(*plain_output_decode.decoded_media_source, kExpectedFrameCount, true) != 0) {
-        emit_failure_metadata(0U);
-        return 1;
+    const auto plain_output_validation_error =
+        validate_decoded_output(*plain_output_decode.decoded_media_source, kExpectedFrameCount, true);
+    if (!plain_output_validation_error.empty()) {
+        return fail_with_metadata(0U, "plain_output_validation", plain_output_validation_error);
     }
 
     for (std::size_t iteration = 0; iteration < repeat_count; ++iteration) {
@@ -860,51 +926,62 @@ int run_stress_burn_in_assertion(
             std::chrono::steady_clock::now() - iteration_started_at
         );
         if (!burned_job_result.succeeded()) {
-            emit_failure_metadata(iteration + 1U);
-            return fail("Subtitle stress encode failed unexpectedly.");
+            return fail_with_metadata(
+                iteration + 1U,
+                "burned_encode",
+                "Subtitle stress encode failed unexpectedly."
+            );
         }
 
         const auto &summary = *burned_job_result.encode_job_summary;
         if (summary.timeline_summary.output_video_frame_count != static_cast<std::int64_t>(kExpectedFrameCount) ||
             summary.subtitled_video_frame_count != static_cast<std::int64_t>(kExpectedFrameCount) ||
             summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
-            emit_failure_metadata(iteration + 1U);
-            return fail("Unexpected summary counts for the subtitle stress encode.");
+            return fail_with_metadata(
+                iteration + 1U,
+                "summary_validation",
+                "Unexpected summary counts for the subtitle stress encode."
+            );
         }
 
         const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
         if (!burned_output_decode.succeeded()) {
-            emit_failure_metadata(iteration + 1U);
-            return fail("Subtitle stress output decode failed unexpectedly.");
+            return fail_with_metadata(
+                iteration + 1U,
+                "burned_decode",
+                "Subtitle stress output decode failed unexpectedly."
+            );
         }
 
-        if (assert_decoded_output(*burned_output_decode.decoded_media_source, kExpectedFrameCount, true) != 0) {
-            emit_failure_metadata(iteration + 1U);
-            return 1;
+        const auto burned_output_validation_error =
+            validate_decoded_output(*burned_output_decode.decoded_media_source, kExpectedFrameCount, true);
+        if (!burned_output_validation_error.empty()) {
+            return fail_with_metadata(iteration + 1U, "burned_output_validation", burned_output_validation_error);
         }
 
         if (!frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U) ||
             !frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 240U) ||
             !frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 479U)) {
-            emit_failure_metadata(iteration + 1U);
-            return fail("Subtitle stress burn-in did not visibly alter the expected sampled frames.");
+            return fail_with_metadata(
+                iteration + 1U,
+                "visual_validation",
+                "Subtitle stress burn-in did not visibly alter the expected sampled frames."
+            );
         }
 
-        const auto observer_result = assert_observer_flow(observer, 1);
-        if (observer_result != 0) {
-            emit_failure_metadata(iteration + 1U);
-            return observer_result;
+        const auto observer_validation_error = validate_observer_flow(observer, 1);
+        if (!observer_validation_error.empty()) {
+            return fail_with_metadata(iteration + 1U, "observer_validation", observer_validation_error);
         }
 
-        const auto runtime_result = assert_subtitle_runtime_visibility(
+        const auto runtime_validation_error = validate_subtitle_runtime_visibility(
             observer,
             summary,
             bitmap_mode,
             composition_mode
         );
-        if (runtime_result != 0) {
-            emit_failure_metadata(iteration + 1U);
-            return runtime_result;
+        if (!runtime_validation_error.empty()) {
+            return fail_with_metadata(iteration + 1U, "runtime_visibility", runtime_validation_error);
         }
 
         std::cout << "stress.iteration=" << (iteration + 1U) << '\n';
