@@ -15,6 +15,7 @@ cmake_build_type="${UTSURE_CMAKE_BUILD_TYPE:-Debug}"
 build_dir="${UTSURE_BUILD_DIR:-build}"
 build_app="${UTSURE_BUILD_APP:-ON}"
 run_app_smoke_test="${UTSURE_RUN_APP_SMOKE_TEST:-${build_app}}"
+skip_ctest="${UTSURE_SKIP_CTEST:-OFF}"
 
 cmake_extra_args=()
 if [[ -n "${UTSURE_CMAKE_EXTRA_ARGS:-}" ]]; then
@@ -65,7 +66,9 @@ cmake --build "${build_dir}" --target utsure_core_subtitle_renderer_tests --para
 cmake --build "${build_dir}" --target utsure_core_subtitle_bitmap_compositor_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_subtitle_burn_in_tests --parallel
 
-ctest --test-dir "${build_dir}" --output-on-failure "${ctest_args[@]}"
+if [[ "${skip_ctest}" != "ON" ]]; then
+  ctest --test-dir "${build_dir}" --output-on-failure "${ctest_args[@]}"
+fi
 
 if [[ "${build_app}" == "ON" && "${run_app_smoke_test}" == "ON" ]]; then
   export QT_PLUGIN_PATH="${msys2_prefix}/share/qt6/plugins"

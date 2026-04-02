@@ -236,18 +236,32 @@ jobs:
       - name: Audit dependencies
         run: ./scripts/ci/windows-msys2-dependency-audit.sh
 
-      - name: Build and run subtitle ASan compositor coverage
-        id: subtitle_asan_compositor
+      - name: Configure and build subtitle ASan binaries
+        id: subtitle_asan_build
         continue-on-error: true
+        env:
+          UTSURE_SKIP_CTEST: "ON"
         run: ./scripts/ci/windows-msys2-build.sh
 
-      - name: Syntax check subtitle stress matrix
+      - name: Print subtitle ASan CTest discovery
+        id: subtitle_asan_discovery
         if: always()
+        continue-on-error: true
+        run: bash ./scripts/ci/windows-msys2-check-subtitle-stress-discovery.sh
+
+      - name: Build and run subtitle ASan compositor coverage
+        id: subtitle_asan_compositor
+        if: always() && steps.subtitle_asan_build.outcome == 'success' && steps.subtitle_asan_discovery.outcome == 'success'
+        continue-on-error: true
+        run: ctest --test-dir build -C Debug --output-on-failure -R "${UTSURE_CTEST_REGEX}"
+
+      - name: Syntax check subtitle stress matrix
+        if: always() && steps.subtitle_asan_build.outcome == 'success' && steps.subtitle_asan_discovery.outcome == 'success'
         run: bash -n ./scripts/ci/windows-msys2-run-subtitle-stress-matrix.sh
 
       - name: Run subtitle ASan isolation matrix
         id: subtitle_asan_matrix
-        if: always()
+        if: always() && steps.subtitle_asan_build.outcome == 'success' && steps.subtitle_asan_discovery.outcome == 'success'
         continue-on-error: true
         run: bash ./scripts/ci/windows-msys2-run-subtitle-stress-matrix.sh
 
@@ -262,10 +276,14 @@ jobs:
       - name: Enforce subtitle ASan result
         if: always()
         run: |
+          build_outcome="${{ steps.subtitle_asan_build.outcome }}"
+          discovery_outcome="${{ steps.subtitle_asan_discovery.outcome }}"
           compositor_outcome="${{ steps.subtitle_asan_compositor.outcome }}"
           matrix_outcome="${{ steps.subtitle_asan_matrix.outcome }}"
+          echo "subtitle_asan_build=${build_outcome}"
+          echo "subtitle_asan_discovery=${discovery_outcome}"
           echo "subtitle_asan_compositor=${compositor_outcome}"
           echo "subtitle_asan_matrix=${matrix_outcome}"
-          if [[ "${compositor_outcome}" != "success" || "${matrix_outcome}" != "success" ]]; then
+          if [[ "${build_outcome}" != "success" || "${discovery_outcome}" != "success" || "${compositor_outcome}" != "success" || "${matrix_outcome}" != "success" ]]; then
             exit 1
           fi
