@@ -3531,7 +3531,7 @@ void MainWindow::update_start_button_visuals() {
         start_button_->setMaximumWidth(30);
         start_button_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         start_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        refresh_button_style(start_button_);
+        refresh_widget_style(start_button_);
         return;
     }
 
