@@ -92,6 +92,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M23 slice is limited to identifying streaming encode bottlenecks, surfacing stage timing/runtime diagnostics, removing subtitle-free RGBA normalization overhead where possible, and reusing video conversion buffers without changing output quality defaults or subtitle-enabled behavior.
 - The current M24 slice is limited to the subtitle-enabled streaming path: removing subtitle bitmap-copy overhead, moving subtitle render/composition off the ordered encode lane where practical, then hardening that path with diagnostics, isolation switches, and safer defaults when crash risk appears, all while preserving existing burn-in/timestamp/mux behavior without changing codec quality defaults.
 - The current M24 crash-hardening pass is also limited to subtitle-path diagnostics, runtime isolation toggles for direct-vs-copied bitmap handling and worker-vs-serialized composition, defensive lifetime/stride assertions, subtitle stress coverage, and CI sanitizer support; it does not add unrelated GUI features or broader encode-policy changes.
+- The current M24 slice also permits one narrow user-requested desktop-shell branding follow-up, limited to wiring the provided `logo.svg` and `icon.svg` into the existing Qt app resources without changing encode/core behavior.
 
 ## Architecture direction
 
@@ -904,6 +905,7 @@ Current slice status:
   * Completed: added explicit subtitle isolation/runtime-debug controls so CI can compare direct bitmap bytes vs copied bitmap bytes and worker-local sessions vs serialized subtitle composition without code edits; the safe default now stays on copied bitmap transfer plus serialized subtitle composition until the optimized modes are revalidated.
   * Completed: hardened the optimized subtitle path so invalid bitmap/session/frame state fails loudly with actionable diagnostics instead of risking silent late-session memory corruption.
   * Completed: extended subtitle-enabled validation with a longer stress encode, isolation-mode test coverage, compositor hardening checks, and a dedicated AddressSanitizer-oriented CI job to surface crash-prone combinations automatically.
+  * Completed: wired the user-provided desktop branding assets so the toolbar brand mark now uses `logo.svg` and the Qt application/window icon now uses `icon.svg`, without changing encode behavior.
   * Pending: capture real before/after timing data for the requested subtitle-enabled comparison encode, because this repository does not allow local compile/run validation and the current workspace does not contain a prebuilt binary to execute.
   * Pending: confirm in CI which isolation combination still reproduces or removes the historical long-session crash window, then decide whether the direct or worker-local modes can safely become default again.
   * Validation note: local validation for this slice was limited to code-path inspection, focused test updates, and `git diff --check`; actual benchmark numbers, sanitizer findings, and end-to-end sustained encode verification still need CI or another approved prebuilt runtime environment.

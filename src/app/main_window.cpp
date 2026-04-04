@@ -348,14 +348,14 @@ QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size, Q
     return QIcon(pixmap);
 }
 
-void refresh_button_style(QAbstractButton *button) {
-    if (button == nullptr || button->style() == nullptr) {
+void refresh_widget_style(QWidget *widget) {
+    if (widget == nullptr || widget->style() == nullptr) {
         return;
     }
 
-    button->style()->unpolish(button);
-    button->style()->polish(button);
-    button->update();
+    widget->style()->unpolish(widget);
+    widget->style()->polish(widget);
+    widget->update();
 }
 
 void apply_icon_or_text(
@@ -400,7 +400,7 @@ void apply_icon_or_text(
             << QString("Icon fallback active for '%1': %2").arg(resource_path, failure_reason);
     }
 
-    refresh_button_style(button);
+    refresh_widget_style(button);
 }
 
 void apply_native_caption_accent(QWidget *window) {
@@ -554,6 +554,11 @@ QLabel#BrandMark {
     min-height: 30px;
     max-width: 30px;
     max-height: 30px;
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+QLabel#BrandMark[logoFallback="true"] {
     border-radius: 6px;
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2c1044, stop:1 #b241ff);
     border: 1px solid #1b1225;
@@ -561,7 +566,6 @@ QLabel#BrandMark {
     font-family: "Yu Gothic UI", "Yu Gothic", "Meiryo UI", "Meiryo", "Segoe UI";
     font-size: 16px;
     font-weight: 900;
-    padding: 0;
 }
 QLabel#BrandName {
     color: #b241ff;
@@ -881,6 +885,18 @@ QLabel#PreviewTimeBadge {
     auto *brand_mark = new QLabel(QString::fromUtf8(u8"\u5199"), toolbar_brand_widget);
     brand_mark->setObjectName("BrandMark");
     brand_mark->setAlignment(Qt::AlignCenter);
+    QString brand_logo_failure_reason{};
+    const QIcon brand_logo_icon = load_resource_icon(":/icons/logo.svg", QSize(30, 30), &brand_logo_failure_reason);
+    if (!brand_logo_icon.isNull()) {
+        brand_mark->setPixmap(brand_logo_icon.pixmap(QSize(30, 30)));
+        brand_mark->setText(QString{});
+        brand_mark->setProperty("logoFallback", false);
+    } else {
+        brand_mark->setProperty("logoFallback", true);
+        qWarning().noquote()
+            << QString("Brand logo fallback active for ':/icons/logo.svg': %1").arg(brand_logo_failure_reason);
+    }
+    refresh_widget_style(brand_mark);
 
     auto *brand_name = new QLabel("utsure", toolbar_brand_widget);
     brand_name->setObjectName("BrandName");

@@ -4,6 +4,8 @@
     <file alias="remove.svg">icons/remove.svg</file>
     <file alias="settings.svg">icons/settings.svg</file>
     <file alias="info.svg">icons/info.svg</file>
+    <file alias="icon.svg">icons/icon.svg</file>
+    <file alias="logo.svg">icons/logo.svg</file>
     <file alias="play.svg">icons/play.svg</file>
     <file alias="stop.svg">icons/stop.svg</file>
     <file alias="browse.svg">icons/browse.svg</file>
