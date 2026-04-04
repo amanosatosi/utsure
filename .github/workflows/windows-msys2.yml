@@ -145,6 +145,11 @@ jobs:
       UTSURE_CTEST_REGEX: "utsure\\.core\\.subtitles\\.(compositor\\.|burn_in\\.stress\\.)"
       CC: clang
       CXX: clang++
+      AR: llvm-ar
+      NM: llvm-nm
+      RANLIB: llvm-ranlib
+      STRIP: llvm-strip
+      WINDRES: llvm-windres
 
     defaults:
       run:

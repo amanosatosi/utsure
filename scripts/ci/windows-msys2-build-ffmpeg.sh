@@ -15,11 +15,24 @@ ffmpeg_configure_flags_string="${UTSURE_FFMPEG_CONFIGURE_FLAGS:---enable-gpl --e
 ffmpeg_build_id="${UTSURE_FFMPEG_BUILD_ID:-ffmpeg-${ffmpeg_version}}"
 ffmpeg_stamp_file="${ffmpeg_prefix}/.utsure-ffmpeg-build-id"
 msys2_prefix="${UTSURE_MSYS2_PREFIX:-/ucrt64}"
+ffmpeg_cc="${CC:-}"
+ffmpeg_cxx="${CXX:-}"
+ffmpeg_ar="${AR:-}"
+ffmpeg_nm="${NM:-}"
+ffmpeg_ranlib="${RANLIB:-}"
+ffmpeg_strip="${STRIP:-}"
+ffmpeg_windres="${WINDRES:-}"
 
 mkdir -p "${ffmpeg_root}"
 
 echo "Using FFmpeg version: ${ffmpeg_version}"
 echo "Using FFmpeg build id: ${ffmpeg_build_id}"
+if [[ -n "${ffmpeg_cc}" ]]; then
+  echo "Using FFmpeg C compiler: ${ffmpeg_cc}"
+fi
+if [[ -n "${ffmpeg_cxx}" ]]; then
+  echo "Using FFmpeg C++ compiler: ${ffmpeg_cxx}"
+fi
 
 if [ ! -f "${ffmpeg_archive_path}" ]; then
   curl -L --fail --output "${ffmpeg_archive_path}" "${ffmpeg_source_url}"
@@ -46,9 +59,33 @@ export PATH="${msys2_prefix}/bin:${PATH}"
 export PKG_CONFIG_PATH="${msys2_prefix}/lib/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 read -r -a ffmpeg_configure_flags <<< "${ffmpeg_configure_flags_string}"
 
+configure_tool_args=()
+if [[ -n "${ffmpeg_cc}" ]]; then
+  configure_tool_args+=("--cc=${ffmpeg_cc}")
+fi
+if [[ -n "${ffmpeg_cxx}" ]]; then
+  configure_tool_args+=("--cxx=${ffmpeg_cxx}")
+fi
+if [[ -n "${ffmpeg_ar}" ]]; then
+  configure_tool_args+=("--ar=${ffmpeg_ar}")
+fi
+if [[ -n "${ffmpeg_nm}" ]]; then
+  configure_tool_args+=("--nm=${ffmpeg_nm}")
+fi
+if [[ -n "${ffmpeg_ranlib}" ]]; then
+  configure_tool_args+=("--ranlib=${ffmpeg_ranlib}")
+fi
+if [[ -n "${ffmpeg_strip}" ]]; then
+  configure_tool_args+=("--strip=${ffmpeg_strip}")
+fi
+if [[ -n "${ffmpeg_windres}" ]]; then
+  configure_tool_args+=("--windres=${ffmpeg_windres}")
+fi
+
 pushd "${ffmpeg_build_dir}" >/dev/null
 "${ffmpeg_source_dir}/configure" \
   --prefix="${ffmpeg_prefix}" \
+  "${configure_tool_args[@]}" \
   "${ffmpeg_configure_flags[@]}" \
   --pkg-config=pkg-config
 make -j"$(nproc)"
