@@ -17,6 +17,14 @@ if(UTSURE_ENABLE_ADDRESS_SANITIZER)
         message(FATAL_ERROR "UTSURE_ENABLE_ADDRESS_SANITIZER is not supported with MSVC in this repository.")
     endif()
 
+    if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        message(FATAL_ERROR
+            "UTSURE_ENABLE_ADDRESS_SANITIZER is not supported with the MSYS2 MinGW GCC toolchain because "
+            "that environment does not provide libasan. Use the MSYS2 CLANG64 toolchain for AddressSanitizer "
+            "coverage on Windows."
+        )
+    endif()
+
     add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
     add_link_options(-fsanitize=address)
 endif()

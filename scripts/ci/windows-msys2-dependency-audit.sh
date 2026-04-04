@@ -10,15 +10,19 @@ ffms2_prefix="${UTSURE_FFMS2_PREFIX:-${third_party_root}/ffms2/prefix}"
 ffms2_pcdir="${ffms2_prefix}/lib/pkgconfig"
 libassmod_prefix="${UTSURE_LIBASSMOD_PREFIX:-${third_party_root}/libassmod/prefix}"
 libassmod_pcdir="${libassmod_prefix}/lib/pkgconfig"
+msys2_prefix="${UTSURE_MSYS2_PREFIX:-/ucrt64}"
+build_app="${UTSURE_BUILD_APP:-ON}"
 
 normalize_path() {
   cygpath -m "$1" | tr '[:upper:]' '[:lower:]'
 }
 
-export PATH="${ffmpeg_prefix}/bin:${ffms2_prefix}/bin:${libassmod_prefix}/bin:/ucrt64/bin:${PATH}"
+export PATH="${ffmpeg_prefix}/bin:${ffms2_prefix}/bin:${libassmod_prefix}/bin:${msys2_prefix}/bin:${PATH}"
 export PKG_CONFIG_PATH="${ffmpeg_pcdir}:${ffms2_pcdir}:${libassmod_pcdir}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
-test -f /ucrt64/lib/cmake/Qt6/Qt6Config.cmake
+if [[ "${build_app}" == "ON" ]]; then
+  test -f "${msys2_prefix}/lib/cmake/Qt6/Qt6Config.cmake"
+fi
 
 ffmpeg_release_line="$(ffmpeg -version | head -n 1)"
 case "${ffmpeg_release_line}" in

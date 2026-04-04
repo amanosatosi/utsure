@@ -10,6 +10,7 @@ ffms2_prefix="${UTSURE_FFMS2_PREFIX:-${third_party_root}/ffms2/prefix}"
 ffms2_pcdir="${ffms2_prefix}/lib/pkgconfig"
 libassmod_prefix="${UTSURE_LIBASSMOD_PREFIX:-${third_party_root}/libassmod/prefix}"
 libassmod_pcdir="${libassmod_prefix}/lib/pkgconfig"
+msys2_prefix="${UTSURE_MSYS2_PREFIX:-/ucrt64}"
 cmake_build_type="${UTSURE_CMAKE_BUILD_TYPE:-Debug}"
 build_dir="${UTSURE_BUILD_DIR:-build}"
 build_app="${UTSURE_BUILD_APP:-ON}"
@@ -30,12 +31,12 @@ if [[ -n "${UTSURE_CTEST_REGEX:-}" ]]; then
   ctest_args+=(-R "${UTSURE_CTEST_REGEX}")
 fi
 
-export PATH="${ffmpeg_prefix}/bin:${ffms2_prefix}/bin:${libassmod_prefix}/bin:/ucrt64/bin:${PATH}"
+export PATH="${ffmpeg_prefix}/bin:${ffms2_prefix}/bin:${libassmod_prefix}/bin:${msys2_prefix}/bin:${PATH}"
 export PKG_CONFIG_PATH="${ffmpeg_pcdir}:${ffms2_pcdir}:${libassmod_pcdir}${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
 
 cmake -S . -B "${build_dir}" -G Ninja \
   -DCMAKE_BUILD_TYPE="${cmake_build_type}" \
-  -DCMAKE_PREFIX_PATH=/ucrt64 \
+  -DCMAKE_PREFIX_PATH="${msys2_prefix}" \
   -DUTSURE_BUILD_APP="${build_app}" \
   -DUTSURE_ENABLE_DEPENDENCY_AUDIT=ON \
   -DUTSURE_REQUIRE_FFMPEG=ON \
@@ -67,7 +68,7 @@ cmake --build "${build_dir}" --target utsure_core_subtitle_burn_in_tests --paral
 ctest --test-dir "${build_dir}" --output-on-failure "${ctest_args[@]}"
 
 if [[ "${build_app}" == "ON" && "${run_app_smoke_test}" == "ON" ]]; then
-  export QT_PLUGIN_PATH="/ucrt64/share/qt6/plugins"
+  export QT_PLUGIN_PATH="${msys2_prefix}/share/qt6/plugins"
   export QT_QPA_PLATFORM="offscreen"
 
   "./${build_dir}/src/app/utsure.exe" --dump-window-structure --smoke-test

@@ -11,6 +11,8 @@ jobs:
     runs-on: windows-latest
     env:
       UTSURE_CMAKE_BUILD_TYPE: Release
+      UTSURE_MSYS2_PREFIX: "/ucrt64"
+      UTSURE_TOOLCHAIN_ID_PREFIX: "ucrt64-gcc"
       UTSURE_FFMPEG_SERIES: "7.1"
       UTSURE_FFMPEG_VERSION: "7.1.2"
       UTSURE_FFMS2_REF: "25cef14386fcaaa58ee547065deee8f6e82c56a2"
@@ -62,7 +64,7 @@ jobs:
           UTSURE_FFMPEG_RECIPE_HASH: ${{ hashFiles('.github/workflows/windows-msys2.yml', 'scripts/ci/windows-msys2-build-ffmpeg.sh') }}
         run: |
           compiler_version="$(c++ -dumpfullversion 2>/dev/null || c++ -dumpversion)"
-          toolchain_id="ucrt64-gcc-${compiler_version}"
+          toolchain_id="${UTSURE_TOOLCHAIN_ID_PREFIX}-${compiler_version}"
           configure_flags_hash="$(printf '%s' "${UTSURE_FFMPEG_CONFIGURE_FLAGS}" | sha256sum | cut -c1-16)"
           build_id="ffmpeg-${UTSURE_FFMPEG_VERSION}-${toolchain_id}-${configure_flags_hash}-${UTSURE_FFMPEG_RECIPE_HASH}"
           {
@@ -128,6 +130,8 @@ jobs:
     runs-on: windows-latest
     env:
       UTSURE_CMAKE_BUILD_TYPE: Debug
+      UTSURE_MSYS2_PREFIX: "/clang64"
+      UTSURE_TOOLCHAIN_ID_PREFIX: "clang64-clang"
       UTSURE_FFMPEG_SERIES: "7.1"
       UTSURE_FFMPEG_VERSION: "7.1.2"
       UTSURE_FFMS2_REF: "25cef14386fcaaa58ee547065deee8f6e82c56a2"
@@ -139,6 +143,8 @@ jobs:
       UTSURE_RUN_APP_SMOKE_TEST: "OFF"
       UTSURE_CMAKE_EXTRA_ARGS: "-DUTSURE_ENABLE_ADDRESS_SANITIZER=ON"
       UTSURE_CTEST_REGEX: "utsure\\.core\\.subtitles\\.(compositor\\.|burn_in\\.stress\\.)"
+      CC: clang
+      CXX: clang++
 
     defaults:
       run:
@@ -151,27 +157,25 @@ jobs:
       - name: Set up MSYS2
         uses: msys2/setup-msys2@v2
         with:
-          msystem: UCRT64
+          msystem: CLANG64
           update: true
           install: >-
             git
             autoconf
             automake
-            mingw-w64-ucrt-x86_64-cmake
-            mingw-w64-ucrt-x86_64-freetype
-            mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-fribidi
-            mingw-w64-ucrt-x86_64-harfbuzz
-            mingw-w64-ucrt-x86_64-libx264
-            mingw-w64-ucrt-x86_64-meson
-            mingw-w64-ucrt-x86_64-nasm
-            mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-pkgconf
-            mingw-w64-ucrt-x86_64-qt6-base
-            mingw-w64-ucrt-x86_64-qt6-multimedia
-            mingw-w64-ucrt-x86_64-qt6-svg
-            mingw-w64-ucrt-x86_64-x265
-            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-compiler-rt
+            mingw-w64-clang-x86_64-freetype
+            mingw-w64-clang-x86_64-fribidi
+            mingw-w64-clang-x86_64-harfbuzz
+            mingw-w64-clang-x86_64-libx264
+            mingw-w64-clang-x86_64-meson
+            mingw-w64-clang-x86_64-nasm
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-x265
+            mingw-w64-clang-x86_64-zlib
             curl
             libtool
             make
@@ -182,7 +186,7 @@ jobs:
           UTSURE_FFMPEG_RECIPE_HASH: ${{ hashFiles('.github/workflows/windows-msys2.yml', 'scripts/ci/windows-msys2-build-ffmpeg.sh') }}
         run: |
           compiler_version="$(c++ -dumpfullversion 2>/dev/null || c++ -dumpversion)"
-          toolchain_id="ucrt64-gcc-${compiler_version}"
+          toolchain_id="${UTSURE_TOOLCHAIN_ID_PREFIX}-${compiler_version}"
           configure_flags_hash="$(printf '%s' "${UTSURE_FFMPEG_CONFIGURE_FLAGS}" | sha256sum | cut -c1-16)"
           build_id="ffmpeg-${UTSURE_FFMPEG_VERSION}-${toolchain_id}-${configure_flags_hash}-${UTSURE_FFMPEG_RECIPE_HASH}"
           {
