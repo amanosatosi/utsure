@@ -9,6 +9,7 @@ add_library(utsure_encoder_core STATIC
     src/job/output_naming.cpp
     src/process/external_tool_runner.cpp
     src/media/audio_output.cpp
+    src/media/audio_stream_selection.cpp
     src/media/decoded_media.cpp
     src/media/ffmpeg_media_support.cpp
     src/media/media_decode_report.cpp

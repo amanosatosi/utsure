@@ -991,6 +991,8 @@ DecodedMediaSource build_composed_media_source(
             },
             .frame_count = static_cast<std::int64_t>(video_frames.size())
         },
+        .audio_streams = {},
+        .selected_audio_stream_index = std::nullopt,
         .primary_audio_stream = std::nullopt
     };
 
@@ -999,6 +1001,8 @@ DecodedMediaSource build_composed_media_source(
         output_audio_stream.timestamps.start_pts = 0;
         output_audio_stream.timestamps.duration_pts = count_audio_samples(audio_blocks);
         output_audio_stream.frame_count = count_audio_samples(audio_blocks);
+        source_info.audio_streams.push_back(output_audio_stream);
+        source_info.selected_audio_stream_index = output_audio_stream.stream_index;
         source_info.primary_audio_stream = output_audio_stream;
     }
 

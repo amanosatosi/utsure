@@ -1,3 +1,4 @@
+#include "utsure/core/media/audio_stream_selection.hpp"
 #include "utsure/core/job/encode_job.hpp"
 #include "utsure/core/job/encode_job_report.hpp"
 #include "utsure/core/media/media_decoder.hpp"
@@ -36,6 +37,7 @@ using utsure::core::media::MediaInspector;
 using utsure::core::media::OutputVideoCodec;
 using utsure::core::media::Rational;
 using utsure::core::media::ResolvedAudioOutputMode;
+using utsure::core::media::audio_stream_has_explicit_japanese_metadata;
 using utsure::core::timeline::TimelineSegmentKind;
 
 int fail(std::string_view message) {
@@ -1001,6 +1003,97 @@ int run_copy_audio_assertion(
     return 0;
 }
 
+int run_multi_audio_selected_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &output_path
+) {
+    const MediaInspectionResult input_inspection_result = MediaInspector::inspect(main_path);
+    if (!input_inspection_result.succeeded() ||
+        !input_inspection_result.media_source_info->primary_audio_stream.has_value()) {
+        return fail("The multi-audio input could not be inspected with a selected audio stream.");
+    }
+
+    const auto &selected_input_audio = *input_inspection_result.media_source_info->primary_audio_stream;
+    if (!audio_stream_has_explicit_japanese_metadata(selected_input_audio) ||
+        selected_input_audio.channel_count != 1) {
+        return fail("The multi-audio input inspection did not select the Japanese audio track.");
+    }
+
+    CollectingObserver observer{};
+    EncodeJob job{
+        .input = {
+            .main_source_path = main_path
+        },
+        .output = {
+            .output_path = output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+    job.output.audio.mode = AudioOutputMode::encode_aac;
+
+    const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!job_result.succeeded()) {
+        const std::string error_message =
+            "The multi-audio selected-stream encode job failed unexpectedly: " +
+            job_result.error->message +
+            " Hint: " +
+            job_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const auto &summary = *job_result.encode_job_summary;
+    if (!summary.inspected_input_info.primary_audio_stream.has_value() ||
+        !audio_stream_has_explicit_japanese_metadata(*summary.inspected_input_info.primary_audio_stream) ||
+        summary.inspected_input_info.primary_audio_stream->channel_count != 1 ||
+        summary.encoded_media_summary.resolved_audio_output.resolved_mode != ResolvedAudioOutputMode::encode_aac) {
+        return fail("The encode job summary did not preserve the selected Japanese audio stream.");
+    }
+
+    if (!summary.encoded_media_summary.output_info.primary_audio_stream.has_value() ||
+        summary.encoded_media_summary.output_info.primary_audio_stream->channel_count != 1) {
+        return fail("The encoded output did not preserve the selected audio channel layout.");
+    }
+
+    const MediaDecodeResult output_decode_result = MediaDecoder::decode(output_path);
+    if (!output_decode_result.succeeded()) {
+        const std::string error_message =
+            "The multi-audio selected-stream output decode failed unexpectedly: " +
+            output_decode_result.error->message +
+            " Hint: " +
+            output_decode_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    if (assert_output_decode(*output_decode_result.decoded_media_source, 48U, true) != 0) {
+        return 1;
+    }
+
+    if (output_decode_result.decoded_media_source->audio_blocks.empty() ||
+        output_decode_result.decoded_media_source->audio_blocks.front().channel_count != 1) {
+        return fail("The output decode did not use the selected Japanese mono track.");
+    }
+
+    if (assert_fine_encode_progress(observer, summary) != 0) {
+        return 1;
+    }
+
+    if (assert_runtime_visibility(observer, summary) != 0) {
+        return 1;
+    }
+
+    std::cout << "selected.input.audio.language=" << *selected_input_audio.language_tag << '\n';
+    std::cout << "selected.output.audio.channels="
+              << output_decode_result.decoded_media_source->audio_blocks.front().channel_count << '\n';
+    return 0;
+}
+
 int run_coarse_timebase_ntsc_assertion(
     const std::filesystem::path &main_path,
     const std::filesystem::path &output_path
@@ -1251,6 +1344,7 @@ int main(int argc, char *argv[]) {
             "[--streaming-memory-budget] <input> <output> | "
             "[--disable-audio] <input> <output> | "
             "[--copy-audio] <input> <output> | "
+            "[--multi-audio-selected] <input> <output> | "
             "[--coarse-timebase-ntsc] <input> <output> | "
             "[--irregular-timestamps] <input> <output>"
         );
@@ -1305,6 +1399,13 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--copy-audio" && argc == 4) {
         return run_copy_audio_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
+        );
+    }
+
+    if (mode == "--multi-audio-selected" && argc == 4) {
+        return run_multi_audio_selected_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3])
         );

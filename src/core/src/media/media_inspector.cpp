@@ -112,37 +112,23 @@ MediaInspectionResult MediaInspector::inspect(const std::filesystem::path &input
             );
         }
 
-        const auto primary_audio_stream_index = av_find_best_stream(
-            format_context.get(),
-            AVMEDIA_TYPE_AUDIO,
-            -1,
-            -1,
-            nullptr,
-            0
+        const auto media_source_info = ffmpeg_support::build_media_source_info(
+            normalized_input_path,
+            *format_context,
+            primary_video_stream_index >= 0 ? primary_video_stream_index : -1
         );
-        if (primary_audio_stream_index < 0 && primary_audio_stream_index != AVERROR_STREAM_NOT_FOUND) {
-            return make_error(
-                input_path_string,
-                "Failed to select a primary audio stream from '" + input_path_string + "'.",
-                "FFmpeg reported: " + ffmpeg_support::ffmpeg_error_to_string(primary_audio_stream_index)
-            );
-        }
 
-        if (primary_video_stream_index == AVERROR_STREAM_NOT_FOUND && primary_audio_stream_index == AVERROR_STREAM_NOT_FOUND) {
+        if (!media_source_info.primary_video_stream.has_value() &&
+            !media_source_info.primary_audio_stream.has_value()) {
             return make_error(
                 input_path_string,
-                "No audio or video streams were found in '" + input_path_string + "'.",
+                "No decodable audio or video streams were found in '" + input_path_string + "'.",
                 "Provide a media file that contains at least one decodable audio or video stream."
             );
         }
 
         return MediaInspectionResult{
-            .media_source_info = ffmpeg_support::build_media_source_info(
-                normalized_input_path,
-                *format_context,
-                primary_video_stream_index >= 0 ? primary_video_stream_index : -1,
-                primary_audio_stream_index >= 0 ? primary_audio_stream_index : -1
-            ),
+            .media_source_info = std::move(media_source_info),
             .error = std::nullopt
         };
     } catch (const std::exception &exception) {

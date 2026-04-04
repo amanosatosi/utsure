@@ -1937,42 +1937,25 @@ MediaDecodeResult MediaDecoder::decode(
             );
         }
 
-        const auto primary_audio_stream_index = av_find_best_stream(
-            format_context.get(),
-            AVMEDIA_TYPE_AUDIO,
-            -1,
-            -1,
-            nullptr,
-            0
-        );
-        if (primary_audio_stream_index < 0 && primary_audio_stream_index != AVERROR_STREAM_NOT_FOUND) {
-            return make_error(
-                input_path_string,
-                "Failed to select a primary audio stream from '" + input_path_string + "'.",
-                "FFmpeg reported: " + ffmpeg_support::ffmpeg_error_to_string(primary_audio_stream_index)
-            );
-        }
-
-        if (primary_video_stream_index == AVERROR_STREAM_NOT_FOUND &&
-            primary_audio_stream_index == AVERROR_STREAM_NOT_FOUND) {
-            return make_error(
-                input_path_string,
-                "No audio or video streams were found in '" + input_path_string + "'.",
-                "Provide a media file that contains at least one decodable audio or video stream."
-            );
-        }
-
         DecodedMediaSource decoded_media_source{
             .source_info = ffmpeg_support::build_media_source_info(
                 normalized_input_path,
                 *format_context,
-                primary_video_stream_index >= 0 ? primary_video_stream_index : -1,
-                primary_audio_stream_index >= 0 ? primary_audio_stream_index : -1
+                primary_video_stream_index >= 0 ? primary_video_stream_index : -1
             ),
             .normalization_policy = normalization_policy,
             .video_frames = {},
             .audio_blocks = {}
         };
+
+        if (!decoded_media_source.source_info.primary_video_stream.has_value() &&
+            !decoded_media_source.source_info.primary_audio_stream.has_value()) {
+            return make_error(
+                input_path_string,
+                "No decodable audio or video streams were found in '" + input_path_string + "'.",
+                "Provide a media file that contains at least one decodable audio or video stream."
+            );
+        }
 
         if (stream_selection.decode_video && decoded_media_source.source_info.primary_video_stream.has_value()) {
             decoded_media_source.video_frames = decode_video_frames(
@@ -2060,8 +2043,7 @@ VideoFrameDecodeResult MediaDecoder::decode_video_frame_at_time(
         const auto source_info = ffmpeg_support::build_media_source_info(
             normalized_input_path,
             *format_context,
-            primary_video_stream_index,
-            -1
+            primary_video_stream_index
         );
         if (!source_info.primary_video_stream.has_value()) {
             return make_video_frame_error(
@@ -2150,8 +2132,7 @@ VideoFrameWindowDecodeResult MediaDecoder::decode_video_frame_window_at_time(
         const auto source_info = ffmpeg_support::build_media_source_info(
             normalized_input_path,
             *format_context,
-            primary_video_stream_index,
-            -1
+            primary_video_stream_index
         );
         if (!source_info.primary_video_stream.has_value()) {
             return make_video_frame_window_error(

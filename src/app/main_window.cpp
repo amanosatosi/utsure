@@ -200,15 +200,29 @@ double rational_to_double(const utsure::core::media::Rational &value) {
     return static_cast<double>(value.numerator) / static_cast<double>(value.denominator);
 }
 
-QString format_audio_track_display(const std::optional<utsure::core::media::AudioStreamInfo> &audio_stream) {
-    if (!audio_stream.has_value()) {
+QString format_audio_track_display(const utsure::core::media::MediaSourceInfo &source_info) {
+    if (!source_info.primary_audio_stream.has_value()) {
         return "No source audio detected";
     }
 
-    return QString("Primary | %1 | %2 channels | %3 Hz")
-        .arg(to_qstring(audio_stream->codec_name))
-        .arg(audio_stream->channel_count)
-        .arg(audio_stream->sample_rate);
+    const auto &audio_stream = *source_info.primary_audio_stream;
+    QString summary = QString("%1 | %2 | %3 channels | %4 Hz")
+        .arg(source_info.audio_streams.size() > 1 ? "Selected" : "Primary")
+        .arg(to_qstring(audio_stream.codec_name))
+        .arg(audio_stream.channel_count)
+        .arg(audio_stream.sample_rate);
+
+    if (source_info.audio_streams.size() > 1) {
+        summary += QString(" | %1 tracks").arg(static_cast<int>(source_info.audio_streams.size()));
+    }
+
+    if (audio_stream.language_tag.has_value()) {
+        summary += QString(" | %1").arg(to_qstring(*audio_stream.language_tag));
+    } else if (audio_stream.title.has_value()) {
+        summary += QString(" | %1").arg(to_qstring(*audio_stream.title));
+    }
+
+    return summary;
 }
 
 QString basename_from_path(const QString &path_text) {
@@ -3072,7 +3086,7 @@ void MainWindow::ensure_job_inspection(const int job_index) {
     }
 
     job.inspected_source_info = *inspection_result.media_source_info;
-    job.audio_track_display = format_audio_track_display(job.inspected_source_info->primary_audio_stream);
+    job.audio_track_display = format_audio_track_display(*job.inspected_source_info);
 
     if (job.inspected_source_info->container_duration_microseconds.has_value() &&
         *job.inspected_source_info->container_duration_microseconds > 0) {

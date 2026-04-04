@@ -36,8 +36,7 @@ using FormatContextHandle = std::unique_ptr<AVFormatContext, FormatContextDelete
 [[nodiscard]] MediaSourceInfo build_media_source_info(
     const std::filesystem::path &input_path,
     const AVFormatContext &format_context,
-    int primary_video_stream_index,
-    int primary_audio_stream_index
+    int primary_video_stream_index
 );
 
 }  // namespace utsure::core::media::ffmpeg_support

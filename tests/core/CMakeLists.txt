@@ -9,6 +9,9 @@ set(UTSURE_TIMELINE_OUTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-outro.avi")
 set(UTSURE_TIMELINE_BAD_FPS_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-bad-fps.avi")
 set(UTSURE_NTSC_COARSE_TIMEBASE_FILE "${UTSURE_TEST_MEDIA_DIR}/ntsc-coarse-timebase.mp4")
 set(UTSURE_IRREGULAR_TIMESTAMP_FILE "${UTSURE_TEST_MEDIA_DIR}/irregular-timestamp-main.mp4")
+set(UTSURE_MULTI_AUDIO_JAPANESE_FILE "${UTSURE_TEST_MEDIA_DIR}/multi-audio-japanese.mkv")
+set(UTSURE_MULTI_AUDIO_DEFAULT_FILE "${UTSURE_TEST_MEDIA_DIR}/multi-audio-default.mp4")
+set(UTSURE_MULTI_AUDIO_FALLBACK_FILE "${UTSURE_TEST_MEDIA_DIR}/multi-audio-fallback.mkv")
 set(UTSURE_SUBTITLE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-sample.ass")
 set(UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-gradient-sample.ass")
 set(UTSURE_SUBTITLE_IMG_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-img-sample.ass")
@@ -152,6 +155,86 @@ add_custom_command(
 )
 
 add_custom_command(
+    OUTPUT "${UTSURE_MULTI_AUDIO_JAPANESE_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "testsrc=size=320x180:rate=24"
+        -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=2"
+        -f lavfi -i "sine=frequency=880:sample_rate=48000:duration=2"
+        -map 0:v:0
+        -map 1:a:0
+        -map 2:a:0
+        -c:v libx264
+        -preset ultrafast
+        -pix_fmt yuv420p
+        -c:a aac
+        -b:a:0 128k
+        -b:a:1 96k
+        -ac:a:0 2
+        -ac:a:1 1
+        -metadata:s:a:0 language=eng
+        -metadata:s:a:0 title=English
+        -disposition:a:0 default
+        -metadata:s:a:1 language=jpn
+        -metadata:s:a:1 title=Japanese
+        -disposition:a:1 0
+        -shortest
+        "${UTSURE_MULTI_AUDIO_JAPANESE_FILE}"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${UTSURE_MULTI_AUDIO_DEFAULT_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "testsrc=size=320x180:rate=24"
+        -f lavfi -i "sine=frequency=520:sample_rate=48000:duration=2"
+        -f lavfi -i "sine=frequency=1040:sample_rate=48000:duration=2"
+        -map 0:v:0
+        -map 1:a:0
+        -map 2:a:0
+        -c:v libx264
+        -preset ultrafast
+        -pix_fmt yuv420p
+        -c:a aac
+        -b:a:0 96k
+        -b:a:1 128k
+        -ac:a:0 1
+        -ac:a:1 2
+        -metadata:s:a:0 language=eng
+        -metadata:s:a:0 title=English
+        -disposition:a:0 0
+        -metadata:s:a:1 language=deu
+        -metadata:s:a:1 title=Deutsch
+        -disposition:a:1 default
+        -shortest
+        "${UTSURE_MULTI_AUDIO_DEFAULT_FILE}"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${UTSURE_MULTI_AUDIO_FALLBACK_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "testsrc=size=320x180:rate=24"
+        -f lavfi -i "sine=frequency=610:sample_rate=48000:duration=2"
+        -f lavfi -i "sine=frequency=1220:sample_rate=48000:duration=2"
+        -map 0:v:0
+        -map 1:a:0
+        -map 2:a:0
+        -c:v libx264
+        -preset ultrafast
+        -pix_fmt yuv420p
+        -c:a aac
+        -b:a:0 96k
+        -b:a:1 128k
+        -ac:a:0 1
+        -ac:a:1 2
+        -disposition:a:0 0
+        -disposition:a:1 0
+        -shortest
+        "${UTSURE_MULTI_AUDIO_FALLBACK_FILE}"
+    VERBATIM
+)
+
+add_custom_command(
     OUTPUT "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
     COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
         -f lavfi -i "testsrc2=size=320x180:rate=24"
@@ -178,6 +261,9 @@ add_custom_target(
         "${UTSURE_TIMELINE_BAD_FPS_FILE}"
         "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
         "${UTSURE_IRREGULAR_TIMESTAMP_FILE}"
+        "${UTSURE_MULTI_AUDIO_JAPANESE_FILE}"
+        "${UTSURE_MULTI_AUDIO_DEFAULT_FILE}"
+        "${UTSURE_MULTI_AUDIO_FALLBACK_FILE}"
         "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
 )
 
@@ -204,6 +290,21 @@ add_test(
 add_test(
     NAME utsure.core.media.inspect.missing
     COMMAND utsure_core_media_inspection_tests --missing "${UTSURE_TEST_MEDIA_DIR}/missing-input.avi"
+)
+
+add_test(
+    NAME utsure.core.media.inspect.multi_audio_japanese
+    COMMAND utsure_core_media_inspection_tests --multi-audio-japanese "${UTSURE_MULTI_AUDIO_JAPANESE_FILE}"
+)
+
+add_test(
+    NAME utsure.core.media.inspect.multi_audio_default
+    COMMAND utsure_core_media_inspection_tests --multi-audio-default "${UTSURE_MULTI_AUDIO_DEFAULT_FILE}"
+)
+
+add_test(
+    NAME utsure.core.media.inspect.multi_audio_fallback
+    COMMAND utsure_core_media_inspection_tests --multi-audio-fallback "${UTSURE_MULTI_AUDIO_FALLBACK_FILE}"
 )
 
 add_executable(utsure_core_media_decode_tests
@@ -239,6 +340,11 @@ add_test(
 add_test(
     NAME utsure.core.media.preview_audio_session.sequential
     COMMAND utsure_core_media_decode_tests --preview-audio-session "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
+)
+
+add_test(
+    NAME utsure.core.media.decode.multi_audio_selected
+    COMMAND utsure_core_media_decode_tests --multi-audio-selected "${UTSURE_MULTI_AUDIO_JAPANESE_FILE}"
 )
 
 add_executable(utsure_core_media_encode_tests
@@ -346,6 +452,13 @@ add_test(
     COMMAND utsure_core_encode_job_tests --irregular-timestamps
         "${UTSURE_IRREGULAR_TIMESTAMP_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/job-irregular-timestamps.mp4"
+)
+
+add_test(
+    NAME utsure.core.job.encode.multi_audio_selected
+    COMMAND utsure_core_encode_job_tests --multi-audio-selected
+        "${UTSURE_MULTI_AUDIO_JAPANESE_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-multi-audio-selected.mp4"
 )
 
 add_executable(utsure_core_encode_job_preflight_tests

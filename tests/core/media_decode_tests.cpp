@@ -1,3 +1,4 @@
+#include "utsure/core/media/audio_stream_selection.hpp"
 #include "utsure/core/media/media_decode_report.hpp"
 #include "utsure/core/media/media_decoder.hpp"
 
@@ -17,6 +18,7 @@ using utsure::core::media::MediaDecoder;
 using utsure::core::media::NormalizedAudioSampleFormat;
 using utsure::core::media::NormalizedVideoPixelFormat;
 using utsure::core::media::TimestampOrigin;
+using utsure::core::media::audio_stream_has_explicit_japanese_metadata;
 using utsure::core::media::format_media_decode_report;
 
 constexpr std::string_view kExpectedSampleReport =
@@ -406,13 +408,44 @@ int run_preview_audio_session_assertion(const std::filesystem::path &sample_path
     return 0;
 }
 
+int run_multi_audio_selected_assertion(const std::filesystem::path &sample_path) {
+    const MediaDecodeResult result = MediaDecoder::decode(sample_path);
+    if (!result.succeeded()) {
+        const std::string error_message =
+            "The multi-audio selected-stream decode failed unexpectedly: " +
+            result.error->message +
+            " Hint: " +
+            result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const auto &decoded_media_source = *result.decoded_media_source;
+    if (!decoded_media_source.source_info.primary_audio_stream.has_value()) {
+        return fail("The multi-audio selected-stream decode did not expose a primary audio stream.");
+    }
+
+    const auto &selected_audio = *decoded_media_source.source_info.primary_audio_stream;
+    if (!audio_stream_has_explicit_japanese_metadata(selected_audio) ||
+        selected_audio.channel_count != 1) {
+        return fail("The decode path did not use the selected Japanese audio stream.");
+    }
+
+    if (decoded_media_source.audio_blocks.empty() || decoded_media_source.audio_blocks.front().channel_count != 1) {
+        return fail("Decoded audio blocks did not match the selected Japanese audio stream layout.");
+    }
+
+    std::cout << "decoded.audio.language=" << selected_audio.language_tag.value_or("unknown") << '\n';
+    std::cout << "decoded.audio.channels=" << decoded_media_source.audio_blocks.front().channel_count << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
         return fail(
             "Usage: utsure_core_media_decode_tests "
-            "[--sample|--missing|--preview-session-sequential|--preview-audio-session] <path>"
+            "[--sample|--missing|--preview-session-sequential|--preview-audio-session|--multi-audio-selected] <path>"
         );
     }
 
@@ -435,5 +468,12 @@ int main(int argc, char *argv[]) {
         return run_preview_audio_session_assertion(path);
     }
 
-    return fail("Unknown mode. Use --sample, --missing, --preview-session-sequential, or --preview-audio-session.");
+    if (mode == "--multi-audio-selected") {
+        return run_multi_audio_selected_assertion(path);
+    }
+
+    return fail(
+        "Unknown mode. Use --sample, --missing, --preview-session-sequential, --preview-audio-session, or "
+        "--multi-audio-selected."
+    );
 }
