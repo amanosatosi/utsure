@@ -378,51 +378,69 @@ public:
         setFocusPolicy(Qt::NoFocus);
 
         auto *root_layout = new QVBoxLayout(this);
-        root_layout->setContentsMargins(40, 40, 40, 40);
+        root_layout->setContentsMargins(32, 32, 32, 32);
         root_layout->addStretch(1);
 
         auto *card = new QFrame(this);
         card->setObjectName("SourceDropOverlayCard");
-        card->setMaximumWidth(560);
-        card->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Maximum);
+        card->setMinimumWidth(560);
+        card->setMaximumWidth(700);
+        card->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
 
-        auto *card_layout = new QVBoxLayout(card);
-        card_layout->setContentsMargins(30, 26, 30, 26);
-        card_layout->setSpacing(14);
+        auto *card_layout = new QHBoxLayout(card);
+        card_layout->setContentsMargins(26, 24, 26, 24);
+        card_layout->setSpacing(22);
 
         auto *illustration = new QFrame(card);
         illustration->setObjectName("SourceDropOverlayIllustration");
-        illustration->setFixedSize(112, 112);
+        illustration->setFixedSize(136, 136);
         auto *illustration_layout = new QVBoxLayout(illustration);
         illustration_layout->setContentsMargins(0, 0, 0, 0);
 
         auto *icon_label = new QLabel(illustration);
         icon_label->setObjectName("SourceDropOverlayIcon");
         icon_label->setAlignment(Qt::AlignCenter);
-        const QIcon icon = load_resource_icon(":/icons/add.svg", QSize(48, 48));
+        const QIcon icon = load_resource_icon(":/icons/add.svg", QSize(58, 58));
         if (!icon.isNull()) {
-            icon_label->setPixmap(icon.pixmap(48, 48));
+            icon_label->setPixmap(icon.pixmap(58, 58));
         } else {
             icon_label->setText("+");
         }
         illustration_layout->addWidget(icon_label, 1);
 
-        auto *title_label = new QLabel("Drop videos anywhere to add them to the queue", card);
+        auto *copy_column = new QWidget(card);
+        copy_column->setProperty("chromeTransparent", true);
+        copy_column->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        auto *copy_layout = new QVBoxLayout(copy_column);
+        copy_layout->setContentsMargins(0, 0, 0, 0);
+        copy_layout->setSpacing(8);
+
+        auto *eyebrow_label = new QLabel("SOURCE IMPORT", copy_column);
+        eyebrow_label->setObjectName("SourceDropOverlayEyebrow");
+        eyebrow_label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+
+        auto *title_label = new QLabel("Drop videos anywhere to add them to the queue", copy_column);
         title_label->setObjectName("SourceDropOverlayTitle");
-        title_label->setAlignment(Qt::AlignCenter);
+        title_label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        title_label->setMinimumWidth(360);
         title_label->setWordWrap(true);
 
         auto *body_label = new QLabel(
-            "Dropped folders are scanned one level deep. Only supported video files are added.",
-            card
+            "Local files and folders are accepted. Folders are scanned one level deep and only supported video files "
+            "are added.",
+            copy_column
         );
         body_label->setObjectName("SourceDropOverlayBody");
-        body_label->setAlignment(Qt::AlignCenter);
+        body_label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         body_label->setWordWrap(true);
 
-        card_layout->addWidget(illustration, 0, Qt::AlignHCenter);
-        card_layout->addWidget(title_label);
-        card_layout->addWidget(body_label);
+        copy_layout->addWidget(eyebrow_label);
+        copy_layout->addWidget(title_label);
+        copy_layout->addWidget(body_label);
+        copy_layout->addStretch(1);
+
+        card_layout->addWidget(illustration, 0, Qt::AlignVCenter);
+        card_layout->addWidget(copy_column, 1);
 
         root_layout->addWidget(card, 0, Qt::AlignCenter);
         root_layout->addStretch(1);
@@ -625,33 +643,41 @@ QFrame#PreviewSurface {
     border-radius: 6px;
 }
 QWidget#SourceDropOverlay {
-    background: rgba(7, 7, 10, 176);
+    background: rgba(6, 6, 9, 204);
 }
 QFrame#SourceDropOverlayCard {
-    background: rgba(20, 20, 26, 244);
-    border: 1px solid #4c4120;
-    border-radius: 18px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(24, 24, 32, 248), stop:1 rgba(16, 16, 22, 244));
+    border: 1px solid rgba(255, 206, 46, 110);
+    border-radius: 24px;
 }
 QFrame#SourceDropOverlayIllustration {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(178, 65, 255, 225), stop:1 rgba(255, 206, 46, 210));
-    border: 1px solid rgba(255, 206, 46, 230);
-    border-radius: 56px;
+    background: qradialgradient(cx:0.35, cy:0.3, radius:0.85, fx:0.3, fy:0.28, stop:0 rgba(199, 108, 255, 240), stop:1 rgba(255, 206, 46, 220));
+    border: 1px solid rgba(255, 206, 46, 200);
+    border-radius: 68px;
+}
+QLabel#SourceDropOverlayEyebrow {
+    background: transparent;
+    color: #ffce2e;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1.6px;
 }
 QLabel#SourceDropOverlayIcon {
     background: transparent;
     color: #111111;
-    font-size: 30px;
+    font-size: 36px;
     font-weight: 900;
 }
 QLabel#SourceDropOverlayTitle {
     background: transparent;
-    color: #f4f4f8;
-    font-size: 20px;
+    color: #f6f6fb;
+    font-size: 24px;
     font-weight: 900;
 }
 QLabel#SourceDropOverlayBody {
     background: transparent;
-    color: #b9b9c4;
+    color: #bbbcc8;
+    font-size: 13px;
 }
 QFrame#PreviewTransportBar {
     background: rgba(20, 20, 26, 232);
