@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: windows-latest
@@ -76,7 +79,7 @@ jobs:
 
       - name: Restore FFmpeg cache
         id: ffmpeg-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             .deps/ffmpeg/prefix
@@ -96,7 +99,7 @@ jobs:
 
       - name: Save FFmpeg cache
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             .deps/ffmpeg/prefix
@@ -120,7 +123,7 @@ jobs:
         run: ./scripts/ci/windows-msys2-package-portable.sh
 
       - name: Upload portable artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: encoder-windows-x64-portable
           if-no-files-found: error
@@ -203,7 +206,7 @@ jobs:
 
       - name: Restore FFmpeg cache
         id: ffmpeg-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: |
             .deps/ffmpeg/prefix
@@ -223,7 +226,7 @@ jobs:
 
       - name: Save FFmpeg cache
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             .deps/ffmpeg/prefix

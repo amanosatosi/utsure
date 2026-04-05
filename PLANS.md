@@ -95,6 +95,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M24 slice also permits one narrow user-requested desktop-shell branding follow-up, limited to wiring the provided `logo.svg` and `icon.svg` into the existing Qt app resources without changing encode/core behavior.
 - The current M24 slice also permits one narrow user-requested multi-audio follow-up, limited to enumerating source audio streams, deterministically selecting one core-owned active audio stream with Japanese preference, and keeping the current single-selected-stream GUI/pipeline behavior without adding a manual picker yet.
 - The current M24 CI-sanitizer slice now also includes using an MSYS2 Windows toolchain that actually ships AddressSanitizer runtime libraries for the dedicated subtitle stress job, while keeping the normal non-sanitized Windows build on the existing UCRT64 GCC toolchain.
+- The current M24 CI slice now also includes bumping the Windows GitHub Actions JavaScript actions to Node 24-compatible releases, with a temporary `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` override during validation.
 
 ## Architecture direction
 
