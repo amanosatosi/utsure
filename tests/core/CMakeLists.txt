@@ -554,6 +554,24 @@ add_test(
     COMMAND utsure_core_output_naming_tests
 )
 
+add_executable(utsure_core_source_import_paths_tests
+    source_import_paths_tests.cpp
+)
+
+target_link_libraries(utsure_core_source_import_paths_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_core_source_import_paths_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_source_import_paths_tests)
+
+add_test(
+    NAME utsure.core.media.source_import_paths
+    COMMAND utsure_core_source_import_paths_tests
+)
+
 add_executable(utsure_core_batch_parallelism_tests
     batch_parallelism_tests.cpp
 )

@@ -9,6 +9,7 @@
 #include "utsure/core/job/batch_parallelism.hpp"
 #include "utsure/core/job/encode_job_preflight.hpp"
 #include "utsure/core/media/media_inspector.hpp"
+#include "utsure/core/media/source_import_paths.hpp"
 #include "utsure/core/subtitles/subtitle_auto_selection.hpp"
 
 #include <QAbstractButton>
@@ -20,6 +21,10 @@
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QDebug>
+#include <QDragEnterEvent>
+#include <QDragLeaveEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QEvent>
 #include <QFile>
 #include <QFileDialog>
@@ -37,9 +42,11 @@
 #include <QLineEdit>
 #include <QLoggingCategory>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -53,6 +60,7 @@
 #include <QTime>
 #include <QTimer>
 #include <QToolButton>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -362,6 +370,66 @@ QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size, Q
     return QIcon(pixmap);
 }
 
+class SourceDropOverlayWidget final : public QWidget {
+public:
+    explicit SourceDropOverlayWidget(QWidget *parent = nullptr) : QWidget(parent) {
+        setObjectName("SourceDropOverlay");
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+        setFocusPolicy(Qt::NoFocus);
+
+        auto *root_layout = new QVBoxLayout(this);
+        root_layout->setContentsMargins(40, 40, 40, 40);
+        root_layout->addStretch(1);
+
+        auto *card = new QFrame(this);
+        card->setObjectName("SourceDropOverlayCard");
+        card->setMaximumWidth(560);
+        card->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Maximum);
+
+        auto *card_layout = new QVBoxLayout(card);
+        card_layout->setContentsMargins(30, 26, 30, 26);
+        card_layout->setSpacing(14);
+
+        auto *illustration = new QFrame(card);
+        illustration->setObjectName("SourceDropOverlayIllustration");
+        illustration->setFixedSize(112, 112);
+        auto *illustration_layout = new QVBoxLayout(illustration);
+        illustration_layout->setContentsMargins(0, 0, 0, 0);
+
+        auto *icon_label = new QLabel(illustration);
+        icon_label->setObjectName("SourceDropOverlayIcon");
+        icon_label->setAlignment(Qt::AlignCenter);
+        const QIcon icon = load_resource_icon(":/icons/add.svg", QSize(48, 48));
+        if (!icon.isNull()) {
+            icon_label->setPixmap(icon.pixmap(48, 48));
+        } else {
+            icon_label->setText("+");
+        }
+        illustration_layout->addWidget(icon_label, 1);
+
+        auto *title_label = new QLabel("Drop videos anywhere to add them to the queue", card);
+        title_label->setObjectName("SourceDropOverlayTitle");
+        title_label->setAlignment(Qt::AlignCenter);
+        title_label->setWordWrap(true);
+
+        auto *body_label = new QLabel(
+            "Dropped folders are scanned one level deep. Only supported video files are added.",
+            card
+        );
+        body_label->setObjectName("SourceDropOverlayBody");
+        body_label->setAlignment(Qt::AlignCenter);
+        body_label->setWordWrap(true);
+
+        card_layout->addWidget(illustration, 0, Qt::AlignHCenter);
+        card_layout->addWidget(title_label);
+        card_layout->addWidget(body_label);
+
+        root_layout->addWidget(card, 0, Qt::AlignCenter);
+        root_layout->addStretch(1);
+        hide();
+    }
+};
+
 void refresh_widget_style(QWidget *widget) {
     if (widget == nullptr || widget->style() == nullptr) {
         return;
@@ -524,6 +592,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
                        .arg(to_qstring(utsure::core::BuildInfo::project_version())));
     resize(1240, 680);
     setMinimumSize(960, 500);
+    setAcceptDrops(true);
 
     setStyleSheet(R"(
 QWidget {
@@ -554,6 +623,35 @@ QFrame#PreviewSurface {
     background: #050508;
     border: 1px solid #2a2a35;
     border-radius: 6px;
+}
+QWidget#SourceDropOverlay {
+    background: rgba(7, 7, 10, 176);
+}
+QFrame#SourceDropOverlayCard {
+    background: rgba(20, 20, 26, 244);
+    border: 1px solid #4c4120;
+    border-radius: 18px;
+}
+QFrame#SourceDropOverlayIllustration {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(178, 65, 255, 225), stop:1 rgba(255, 206, 46, 210));
+    border: 1px solid rgba(255, 206, 46, 230);
+    border-radius: 56px;
+}
+QLabel#SourceDropOverlayIcon {
+    background: transparent;
+    color: #111111;
+    font-size: 30px;
+    font-weight: 900;
+}
+QLabel#SourceDropOverlayTitle {
+    background: transparent;
+    color: #f4f4f8;
+    font-size: 20px;
+    font-weight: 900;
+}
+QLabel#SourceDropOverlayBody {
+    background: transparent;
+    color: #b9b9c4;
 }
 QFrame#PreviewTransportBar {
     background: rgba(20, 20, 26, 232);
@@ -1477,6 +1575,8 @@ QLabel#PreviewTimeBadge {
 
     root_layout->addWidget(content_widget, 1);
     setCentralWidget(central_widget);
+    source_drop_overlay_ = new SourceDropOverlayWidget(central_widget);
+    update_source_drop_overlay_geometry();
 
     QTimer::singleShot(0, this, [this, body_splitter, content_splitter]() {
         body_splitter->setSizes(QList<int>{160, 410});
@@ -1607,6 +1707,66 @@ QString MainWindow::window_structure_summary() const {
         "- Left tabs: Main, Encode, Special, and global Logs, with automatic subtitle selection under Main and custom output naming under Encode\n"
         "- Right tabs: transport-controlled Preview with trim timeline plus selected-task log"
     );
+}
+
+void MainWindow::dragEnterEvent(QDragEnterEvent *event) {
+    if (event == nullptr) {
+        return;
+    }
+
+    const bool accepted = can_accept_source_drop(event->mimeData());
+    set_source_drop_overlay_visible(accepted);
+    if (accepted) {
+        event->acceptProposedAction();
+        return;
+    }
+
+    event->ignore();
+}
+
+void MainWindow::dragMoveEvent(QDragMoveEvent *event) {
+    if (event == nullptr) {
+        return;
+    }
+
+    const bool accepted = can_accept_source_drop(event->mimeData());
+    set_source_drop_overlay_visible(accepted);
+    if (accepted) {
+        event->acceptProposedAction();
+        return;
+    }
+
+    event->ignore();
+}
+
+void MainWindow::dragLeaveEvent(QDragLeaveEvent *event) {
+    set_source_drop_overlay_visible(false);
+    if (event != nullptr) {
+        event->accept();
+    }
+}
+
+void MainWindow::dropEvent(QDropEvent *event) {
+    set_source_drop_overlay_visible(false);
+    if (event == nullptr) {
+        return;
+    }
+
+    if (!can_accept_source_drop(event->mimeData())) {
+        event->ignore();
+        return;
+    }
+
+    event->acceptProposedAction();
+    const QStringList source_paths = resolve_source_drop_paths(event->mimeData());
+    if (!source_paths.isEmpty()) {
+        add_source_jobs_from_paths(source_paths);
+    }
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event) {
+    QMainWindow::resizeEvent(event);
+    update_source_drop_overlay_geometry();
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
@@ -1850,6 +2010,61 @@ bool MainWindow::is_valid_job_index(const int index) const {
     return index >= 0 && index < static_cast<int>(jobs_.size());
 }
 
+bool MainWindow::can_accept_source_drop(const QMimeData *mime_data) const {
+    if (queue_run_active_ || mime_data == nullptr || !mime_data->hasUrls()) {
+        return false;
+    }
+
+    const QList<QUrl> urls = mime_data->urls();
+    for (const QUrl &url : urls) {
+        if (!url.isLocalFile()) {
+            continue;
+        }
+
+        const QString local_path = QDir::cleanPath(url.toLocalFile().trimmed());
+        if (local_path.isEmpty()) {
+            continue;
+        }
+
+        if (utsure::core::media::SourceImportPaths::is_supported_drop_candidate(qstring_to_path(local_path))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+QStringList MainWindow::resolve_source_drop_paths(const QMimeData *mime_data) const {
+    if (!can_accept_source_drop(mime_data)) {
+        return {};
+    }
+
+    std::vector<std::filesystem::path> dropped_paths{};
+    const QList<QUrl> urls = mime_data->urls();
+    dropped_paths.reserve(static_cast<std::size_t>(urls.size()));
+    for (const QUrl &url : urls) {
+        if (!url.isLocalFile()) {
+            continue;
+        }
+
+        const QString local_path = QDir::cleanPath(url.toLocalFile().trimmed());
+        if (local_path.isEmpty()) {
+            continue;
+        }
+
+        dropped_paths.push_back(qstring_to_path(local_path));
+    }
+
+    const auto expansion_result = utsure::core::media::SourceImportPaths::expand_drop_candidates(dropped_paths);
+    QStringList resolved_paths{};
+    resolved_paths.reserve(static_cast<qsizetype>(expansion_result.accepted_source_paths.size()));
+    for (const auto &path : expansion_result.accepted_source_paths) {
+        resolved_paths.push_back(path_to_qstring(path));
+    }
+
+    return resolved_paths;
+}
+
 qint64 MainWindow::selected_job_frame_step_us() const {
     if (!is_valid_job_index(selected_job_index_)) {
         return 41708;
@@ -1878,7 +2093,7 @@ void MainWindow::add_source_jobs() {
 }
 
 void MainWindow::add_source_jobs_from_paths(const QStringList &paths) {
-    if (paths.isEmpty()) {
+    if (queue_run_active_ || paths.isEmpty()) {
         return;
     }
 
@@ -3562,6 +3777,29 @@ void MainWindow::advance_busy_spinner() {
 
     busy_spinner_phase_ = (busy_spinner_phase_ + 1) % 12;
     start_button_->setIcon(make_busy_icon(busy_spinner_phase_));
+}
+
+void MainWindow::set_source_drop_overlay_visible(const bool visible) {
+    if (source_drop_overlay_ == nullptr) {
+        return;
+    }
+
+    if (!visible) {
+        source_drop_overlay_->hide();
+        return;
+    }
+
+    update_source_drop_overlay_geometry();
+    source_drop_overlay_->show();
+    source_drop_overlay_->raise();
+}
+
+void MainWindow::update_source_drop_overlay_geometry() {
+    if (source_drop_overlay_ == nullptr || centralWidget() == nullptr) {
+        return;
+    }
+
+    source_drop_overlay_->setGeometry(centralWidget()->rect());
 }
 
 void MainWindow::start_encode_queue() {

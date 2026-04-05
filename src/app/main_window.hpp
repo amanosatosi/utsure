@@ -17,15 +17,21 @@
 
 class EncodeJobRunnerController;
 class QEvent;
+class QDragEnterEvent;
+class QDragLeaveEvent;
+class QDragMoveEvent;
+class QDropEvent;
 class QLabel;
 class QCheckBox;
 class QComboBox;
 class QLineEdit;
+class QMimeData;
 class PreviewAudioController;
 class PreviewFrameRendererController;
 class PreviewSurfaceWidget;
 class QPlainTextEdit;
 class QPushButton;
+class QResizeEvent;
 class QSpinBox;
 class QTabWidget;
 class QTableWidget;
@@ -95,6 +101,11 @@ public:
     };
 
 private:
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dragMoveEvent(QDragMoveEvent *event) override;
+    void dragLeaveEvent(QDragLeaveEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
     struct PlannedBatchJob final {
         int job_index{-1};
         utsure::core::job::EncodeJob job{};
@@ -121,12 +132,14 @@ private:
     [[nodiscard]] bool job_has_minimum_required_fields(const UiEncodeJob &job) const;
     [[nodiscard]] QString current_audio_quality_label() const;
     [[nodiscard]] bool is_valid_job_index(int index) const;
+    [[nodiscard]] bool can_accept_source_drop(const QMimeData *mime_data) const;
     [[nodiscard]] bool any_runner_slot_running() const;
     [[nodiscard]] int active_runner_count() const;
     [[nodiscard]] int configured_parallel_job_count() const;
     [[nodiscard]] int find_free_runner_slot_index() const;
     [[nodiscard]] QString format_parallel_tooltip() const;
     [[nodiscard]] QString normalized_output_path_key(const QString &path_text) const;
+    [[nodiscard]] QStringList resolve_source_drop_paths(const QMimeData *mime_data) const;
     [[nodiscard]] qint64 selected_job_frame_step_us() const;
 
     void add_source_jobs();
@@ -206,6 +219,8 @@ private:
     void refresh_audio_track_combo();
     void update_start_button_visuals();
     void advance_busy_spinner();
+    void set_source_drop_overlay_visible(bool visible);
+    void update_source_drop_overlay_geometry();
 
     void start_encode_queue();
     void start_available_queued_jobs();
@@ -256,6 +271,7 @@ private:
     bool preview_requested_subtitle_enabled_{false};
     bool preview_request_in_flight_{false};
 
+    QWidget *source_drop_overlay_{nullptr};
     QTableWidget *queue_table_{nullptr};
     QLabel *detail_status_value_{nullptr};
     QLabel *detail_elapsed_value_{nullptr};
