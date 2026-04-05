@@ -57,6 +57,7 @@ cmake --build "${build_dir}" --target utsure_core_media_encode_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_encode_job_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_encode_job_preflight_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_output_naming_tests --parallel
+cmake --build "${build_dir}" --target utsure_core_source_import_paths_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_batch_parallelism_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_subtitle_auto_selection_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_subtitle_font_recovery_tests --parallel
