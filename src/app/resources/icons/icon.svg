@@ -1,19 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" aria-label="Gothic or maru readable version">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" aria-label="Gothic or maru readable version optimized for app icon use">
+  <rect x="36" y="36" width="440" height="440" rx="96" fill="#fbf8ff"/>
   <defs>
-    <path id="starShapeB" d="M256 40
-      Q280 148 328 184
-      Q364 220 472 256
-      Q364 292 328 328
-      Q280 364 256 472
-      Q232 364 184 328
-      Q148 292 40 256
-      Q148 220 184 184
-      Q232 148 256 40 Z"/>
+    <rect id="starShapeB" x="120" y="120" width="272" height="272" transform="rotate(45 256 256)"/>
   </defs>
-  <use href="#starShapeB" fill="#E0BD52" stroke="#5C3A88" stroke-width="18" stroke-linejoin="round"/>
-  <g transform="translate(256 276)">
-    <g transform="scale(0.174,-0.174)">
-      <path d="M78 786V567H153V716H846V567H924V786ZM300 708C277 582 240 411 210 309L286 302L295 336H685L672 217H55V148H662C648 61 632 16 612 -1C600 -11 587 -13 564 -13C539 -13 471 -12 401 -6C415 -26 425 -56 427 -77C492 -81 556 -82 590 -80C627 -78 651 -70 674 -47C701 -21 721 34 738 148H948V217H747C752 261 757 311 762 368C764 379 765 403 765 403H311L339 523H777V589H353L375 701Z" transform="translate(-501 -352)" fill="#5C3A88"/>
+  <use href="#starShapeB" fill="#000000" stroke="#5C3A88" stroke-width="18" stroke-linejoin="miter"/>
+  <g transform="translate(256 282)">
+    <g transform="scale(0.205,-0.205)">
+      <path d="M78 786V567H153V716H846V567H924V786ZM300 708C277 582 240 411 210 309L286 302L295 336H685L672 217H55V148H662C648 61 632 16 612 -1C600 -11 587 -13 564 -13C539 -13 471 -12 401 -6C415 -26 425 -56 427 -77C492 -81 556 -82 590 -80C627 -78 651 -70 674 -47C701 -21 721 34 738 148H948V217H747C752 261 757 311 762 368C764 379 765 403 765 403H311L339 523H777V589H353L375 701Z" transform="translate(-501 -352)" fill="#E0BD52"/>
     </g>
   </g>
 </svg>
