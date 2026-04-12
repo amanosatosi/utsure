@@ -827,6 +827,18 @@ std::int64_t compute_frame_duration_pts(const Rational &frame_rate, const Ration
     return frame_duration_pts;
 }
 
+std::int64_t cadence_frame_start_pts(
+    const std::int64_t frame_index,
+    const Rational &frame_rate,
+    const Rational &time_base
+) {
+    if (frame_index < 0 || !rational_is_positive(frame_rate) || !rational_is_positive(time_base)) {
+        throw std::runtime_error("The output timeline does not expose a usable frame cadence.");
+    }
+
+    return av_rescale_q(frame_index, av_inv_q(to_av_rational(frame_rate)), to_av_rational(time_base));
+}
+
 std::optional<std::int64_t> estimate_segment_duration_pts(
     const timeline::TimelineSegmentPlan &segment_plan,
     const Rational &output_video_time_base,
@@ -1396,6 +1408,28 @@ FrameHandle move_frame(AVFrame &source_frame) {
     auto moved_frame = allocate_frame();
     av_frame_move_ref(moved_frame.get(), &source_frame);
     return moved_frame;
+}
+
+FrameHandle clone_frame(const AVFrame &source_frame) {
+    auto cloned_frame = allocate_frame();
+    const auto clone_result = av_frame_ref(cloned_frame.get(), const_cast<AVFrame *>(&source_frame));
+    if (clone_result < 0) {
+        throw std::runtime_error(
+            "Failed to duplicate a decoded streaming frame. FFmpeg reported: " +
+            ffmpeg_support::ffmpeg_error_to_string(clone_result)
+        );
+    }
+
+    return cloned_frame;
+}
+
+StreamingVideoFrame clone_streaming_video_frame(const StreamingVideoFrame &source_frame) {
+    StreamingVideoFrame cloned_frame{};
+    if (source_frame.native_frame) {
+        cloned_frame.native_frame = clone_frame(*source_frame.native_frame);
+    }
+    cloned_frame.metadata = source_frame.metadata;
+    return cloned_frame;
 }
 
 struct VideoProcessTask final {
@@ -3175,6 +3209,7 @@ SegmentProcessResult process_segment(
     std::optional<std::int64_t> previous_video_source_pts{};
     Rational previous_video_source_time_base{};
     std::optional<PendingVideoFrameInput> pending_video_frame{};
+    std::int64_t next_segment_output_frame_index = 0;
     std::uint64_t next_video_process_order_index = 0;
 
     if (encode_audio && resources.audio_decoder) {
@@ -3576,6 +3611,45 @@ SegmentProcessResult process_segment(
         });
     };
 
+    const auto emit_pending_video_frames_until = [&](const std::int64_t source_interval_end_pts) {
+        if (!pending_video_frame.has_value()) {
+            return;
+        }
+
+        while (true) {
+            const auto output_frame_pts = segment_output_start_pts + cadence_frame_start_pts(
+                next_segment_output_frame_index,
+                timeline_plan.output_frame_rate,
+                timeline_plan.output_video_time_base
+            );
+            if (output_frame_pts >= source_interval_end_pts) {
+                return;
+            }
+
+            const auto next_output_frame_pts = segment_output_start_pts + cadence_frame_start_pts(
+                next_segment_output_frame_index + 1,
+                timeline_plan.output_frame_rate,
+                timeline_plan.output_video_time_base
+            );
+            const auto output_duration_pts = std::min(source_interval_end_pts, next_output_frame_pts) - output_frame_pts;
+            if (output_duration_pts <= 0) {
+                throw std::runtime_error(
+                    "The " + std::string(timeline::to_string(segment_plan.kind)) +
+                    " segment produced a non-positive normalized video frame duration."
+                );
+            }
+
+            auto normalized_timing = pending_video_frame->timing;
+            normalized_timing.output_pts = output_frame_pts;
+            submit_video_frame_for_output(
+                clone_streaming_video_frame(pending_video_frame->frame),
+                normalized_timing,
+                output_duration_pts
+            );
+            ++next_segment_output_frame_index;
+        }
+    };
+
     const auto process_video_frame = [&](StreamingVideoFrame video_frame) {
         const auto resolved_timing = resolve_video_frame_timing_for_segment(
             segment_plan.kind,
@@ -3589,19 +3663,7 @@ SegmentProcessResult process_segment(
         );
 
         if (pending_video_frame.has_value()) {
-            const auto pending_duration_pts = resolved_timing.output_pts - pending_video_frame->timing.output_pts;
-            if (pending_duration_pts <= 0) {
-                throw std::runtime_error(
-                    "The " + std::string(timeline::to_string(segment_plan.kind)) +
-                    " segment produced a non-positive video frame duration on the output timeline."
-                );
-            }
-
-            submit_video_frame_for_output(
-                std::move(pending_video_frame->frame),
-                pending_video_frame->timing,
-                pending_duration_pts
-            );
+            emit_pending_video_frames_until(resolved_timing.output_pts);
         }
 
         pending_video_frame = PendingVideoFrameInput{
@@ -3790,20 +3852,16 @@ SegmentProcessResult process_segment(
     receive_video_frames();
 
     if (pending_video_frame.has_value()) {
-        const auto final_duration_pts =
+        const auto final_source_duration_pts =
             pending_video_frame->timing.output_duration_pts.value_or(video_output_plan.frame_duration_pts);
-        if (final_duration_pts <= 0) {
+        if (final_source_duration_pts <= 0) {
             throw std::runtime_error(
                 "The " + std::string(timeline::to_string(segment_plan.kind)) +
                 " segment final video frame does not expose a usable duration."
             );
         }
 
-        submit_video_frame_for_output(
-            std::move(pending_video_frame->frame),
-            pending_video_frame->timing,
-            final_duration_pts
-        );
+        emit_pending_video_frames_until(pending_video_frame->timing.output_pts + final_source_duration_pts);
         pending_video_frame.reset();
     }
 

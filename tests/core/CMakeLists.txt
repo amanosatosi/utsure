@@ -487,8 +487,8 @@ add_test(
 )
 
 add_test(
-    NAME utsure.core.job.preflight.invalid_fps
-    COMMAND utsure_core_encode_job_preflight_tests --invalid-fps
+    NAME utsure.core.job.preflight.mismatched_fps_preview
+    COMMAND utsure_core_encode_job_preflight_tests --mismatched-fps-preview
         "${UTSURE_SAMPLE_MEDIA_FILE}"
         "${UTSURE_TIMELINE_BAD_FPS_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/preflight-invalid-fps.mp4"
@@ -683,10 +683,10 @@ add_test(
 )
 
 add_test(
-    NAME utsure.core.timeline.mismatch_fps
-    COMMAND utsure_core_timeline_tests --mismatch-fps
-        "${UTSURE_SAMPLE_MEDIA_FILE}"
+    NAME utsure.core.timeline.normalized_fps
+    COMMAND utsure_core_timeline_tests --normalized-fps
         "${UTSURE_TIMELINE_BAD_FPS_FILE}"
+        "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
 )
 
 add_executable(utsure_core_subtitle_renderer_tests

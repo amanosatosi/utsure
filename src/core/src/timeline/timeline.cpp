@@ -33,8 +33,22 @@ struct VideoCadence final {
     int width{0};
     int height{0};
     Rational sample_aspect_ratio{1, 1};
-    std::int64_t frame_duration_pts{0};
-    std::int64_t frame_duration_microseconds{0};
+};
+
+struct CadenceFrameTiming final {
+    std::int64_t start_pts{0};
+    std::int64_t duration_pts{0};
+};
+
+struct SegmentFrameInterval final {
+    const DecodedVideoFrame *frame{nullptr};
+    std::int64_t relative_start_pts{0};
+    std::int64_t relative_end_pts{0};
+};
+
+struct SegmentFramePlan final {
+    std::vector<SegmentFrameInterval> source_intervals{};
+    std::int64_t duration_pts{0};
 };
 
 TimelineAssemblyResult make_assembly_error(std::string message, std::string actionable_hint);
@@ -65,10 +79,26 @@ void validate_audio_compatibility(
     const std::optional<AudioStreamInfo> &candidate_audio
 );
 VideoCadence derive_video_cadence(const DecodedMediaSource &main_segment, const Rational &output_video_time_base);
-void validate_segment_frames(
+SegmentFramePlan analyze_segment_frames(
     TimelineSegmentKind kind,
     const DecodedMediaSource &decoded_segment,
     const VideoCadence &video_cadence,
+    const Rational &output_video_time_base
+);
+void validate_main_segment_cadence(
+    const SegmentFramePlan &segment_frame_plan,
+    const Rational &output_frame_rate,
+    const Rational &output_video_time_base
+);
+std::int64_t cadence_frame_start_pts(
+    std::int64_t frame_index,
+    const Rational &output_frame_rate,
+    const Rational &output_video_time_base
+);
+std::optional<CadenceFrameTiming> resolve_output_cadence_frame_timing(
+    std::int64_t frame_index,
+    std::int64_t segment_duration_pts,
+    const Rational &output_frame_rate,
     const Rational &output_video_time_base
 );
 std::int64_t count_audio_samples(const std::vector<DecodedAudioSamples> &audio_blocks);
@@ -310,48 +340,99 @@ TimelineCompositionResult TimelineComposer::compose(
             const auto &segment_plan = timeline_plan.segments[segment_index];
             const auto &decoded_segment = decoded_segments[segment_index];
 
-            validate_segment_frames(
+            const auto segment_frame_plan = analyze_segment_frames(
                 segment_plan.kind,
                 decoded_segment,
                 video_cadence,
                 timeline_plan.output_video_time_base
             );
+            if (segment_index == timeline_plan.main_segment_index) {
+                validate_main_segment_cadence(
+                    segment_frame_plan,
+                    timeline_plan.output_frame_rate,
+                    timeline_plan.output_video_time_base
+                );
+            }
+
+            const std::int64_t segment_output_start_pts = next_output_video_pts;
 
             TimelineSegmentSummary segment_summary{
                 .kind = segment_plan.kind,
                 .source_path = segment_plan.source_path,
-                .start_microseconds = rescale_to_microseconds(next_output_video_pts, timeline_plan.output_video_time_base),
+                .start_microseconds = rescale_to_microseconds(segment_output_start_pts, timeline_plan.output_video_time_base),
                 .duration_microseconds = 0,
-                .video_frame_count = static_cast<std::int64_t>(decoded_segment.video_frames.size()),
+                .video_frame_count = 0,
                 .audio_block_count = 0,
                 .subtitles_enabled = segment_plan.subtitles_enabled,
                 .inserted_silence = false
             };
 
-            for (const auto &frame : decoded_segment.video_frames) {
-                auto output_frame = frame;
+            std::size_t source_frame_index = 0;
+            for (std::int64_t output_segment_frame_index = 0;; ++output_segment_frame_index) {
+                const auto output_frame_timing = resolve_output_cadence_frame_timing(
+                    output_segment_frame_index,
+                    segment_frame_plan.duration_pts,
+                    timeline_plan.output_frame_rate,
+                    timeline_plan.output_video_time_base
+                );
+                if (!output_frame_timing.has_value()) {
+                    break;
+                }
+
+                while (source_frame_index + 1 < segment_frame_plan.source_intervals.size() &&
+                       segment_frame_plan.source_intervals[source_frame_index + 1].relative_start_pts <=
+                           output_frame_timing->start_pts) {
+                    ++source_frame_index;
+                }
+
+                while (source_frame_index + 1 < segment_frame_plan.source_intervals.size() &&
+                       output_frame_timing->start_pts >=
+                           segment_frame_plan.source_intervals[source_frame_index].relative_end_pts) {
+                    ++source_frame_index;
+                }
+
+                const auto &source_interval = segment_frame_plan.source_intervals[source_frame_index];
+                if (output_frame_timing->start_pts >= source_interval.relative_end_pts || source_interval.frame == nullptr) {
+                    throw std::runtime_error(
+                        "The " + std::string(to_string(segment_plan.kind)) +
+                        " segment could not be normalized onto the main output cadence."
+                    );
+                }
+
+                auto output_frame = *source_interval.frame;
                 output_frame.stream_index = main_segment.source_info.primary_video_stream->stream_index;
                 output_frame.frame_index = static_cast<std::int64_t>(output_video_frames.size());
                 output_frame.timestamp.source_time_base = timeline_plan.output_video_time_base;
-                output_frame.timestamp.source_pts = next_output_video_pts;
-                output_frame.timestamp.source_duration = video_cadence.frame_duration_pts;
+                output_frame.timestamp.source_pts = segment_output_start_pts + output_frame_timing->start_pts;
+                output_frame.timestamp.source_duration = output_frame_timing->duration_pts;
                 output_frame.timestamp.origin = TimestampOrigin::stream_cursor;
                 output_frame.timestamp.start_microseconds =
-                    rescale_to_microseconds(next_output_video_pts, timeline_plan.output_video_time_base);
-                output_frame.timestamp.duration_microseconds = video_cadence.frame_duration_microseconds;
+                    rescale_to_microseconds(
+                        segment_output_start_pts + output_frame_timing->start_pts,
+                        timeline_plan.output_video_time_base
+                    );
+                output_frame.timestamp.duration_microseconds =
+                    rescale_to_microseconds(output_frame_timing->duration_pts, timeline_plan.output_video_time_base);
                 output_frame.sample_aspect_ratio = video_cadence.sample_aspect_ratio;
                 output_video_frames.push_back(std::move(output_frame));
-                next_output_video_pts += video_cadence.frame_duration_pts;
+                ++segment_summary.video_frame_count;
+            }
+
+            if (segment_summary.video_frame_count <= 0) {
+                throw std::runtime_error(
+                    "The " + std::string(to_string(segment_plan.kind)) +
+                    " segment did not produce any output frames after cadence normalization."
+                );
             }
 
             segment_summary.duration_microseconds = rescale_to_microseconds(
-                segment_summary.video_frame_count * video_cadence.frame_duration_pts,
+                segment_frame_plan.duration_pts,
                 timeline_plan.output_video_time_base
             );
 
             if (timeline_plan.output_audio_stream.has_value()) {
                 const auto expected_segment_samples = rescale_value(
-                    segment_summary.video_frame_count * video_cadence.frame_duration_pts,
+                    segment_frame_plan.duration_pts,
                     timeline_plan.output_video_time_base,
                     timeline_plan.output_audio_stream->timestamps.time_base
                 );
@@ -365,6 +446,8 @@ TimelineCompositionResult TimelineComposer::compose(
                     next_output_audio_pts
                 );
             }
+
+            next_output_video_pts = segment_output_start_pts + segment_frame_plan.duration_pts;
 
             timeline_summary.segments.push_back(std::move(segment_summary));
         }
@@ -393,7 +476,7 @@ TimelineCompositionResult TimelineComposer::compose(
     } catch (const std::runtime_error &exception) {
         return make_composition_error(
             exception.what(),
-            "Adjust the decoded segment cadence or audio layout so every composed segment matches the main timeline."
+            "Adjust the decoded segment timing or audio layout so every composed segment can be normalized onto the main timeline."
         );
     } catch (const std::exception &exception) {
         return make_composition_error(
@@ -578,22 +661,6 @@ void validate_video_compatibility(
         );
     }
 
-    if (!rational_is_positive(candidate_video.average_frame_rate)) {
-        throw std::runtime_error(
-            "The " + std::string(to_string(kind)) + " segment does not expose a usable average frame rate."
-        );
-    }
-
-    if (!rationals_equal(candidate_video.average_frame_rate, main_video.average_frame_rate)) {
-        throw std::runtime_error(
-            "The " + std::string(to_string(kind)) + " segment frame rate " +
-            std::to_string(candidate_video.average_frame_rate.numerator) + "/" +
-            std::to_string(candidate_video.average_frame_rate.denominator) +
-            " does not match the main segment frame rate " +
-            std::to_string(main_video.average_frame_rate.numerator) + "/" +
-            std::to_string(main_video.average_frame_rate.denominator) + "."
-        );
-    }
 }
 
 bool channel_layouts_conflict(const AudioStreamInfo &left, const AudioStreamInfo &right) {
@@ -660,6 +727,8 @@ VideoCadence derive_video_cadence(
     const DecodedMediaSource &main_segment,
     const Rational &output_video_time_base
 ) {
+    (void)output_video_time_base;
+
     if (main_segment.video_frames.empty()) {
         throw std::runtime_error("The main segment decode did not produce any video frames.");
     }
@@ -667,22 +736,6 @@ VideoCadence derive_video_cadence(
     const auto &first_frame = main_segment.video_frames.front();
     if (first_frame.pixel_format != media::NormalizedVideoPixelFormat::rgba8 || first_frame.planes.size() != 1) {
         throw std::runtime_error("Timeline composition requires decoded rgba8 video frames with a single plane.");
-    }
-
-    const auto first_frame_duration = first_frame.timestamp.source_duration.value_or(0);
-    if (first_frame_duration <= 0 || !rational_is_positive(first_frame.timestamp.source_time_base)) {
-        throw std::runtime_error(
-            "The main segment decode did not expose a usable frame duration for timeline composition."
-        );
-    }
-
-    const std::int64_t frame_duration_pts = rescale_value(
-        first_frame_duration,
-        first_frame.timestamp.source_time_base,
-        output_video_time_base
-    );
-    if (frame_duration_pts <= 0) {
-        throw std::runtime_error("The main segment frame duration could not be converted into the output time base.");
     }
 
     for (std::size_t index = 0; index < main_segment.video_frames.size(); ++index) {
@@ -700,56 +753,16 @@ VideoCadence derive_video_cadence(
                 "Timeline composition requires every segment to keep one constant sample aspect ratio."
             );
         }
-
-        const auto frame_duration = frame.timestamp.source_duration.value_or(0);
-        if (frame_duration <= 0 || !rational_is_positive(frame.timestamp.source_time_base)) {
-            throw std::runtime_error("A decoded main-segment frame is missing timing information.");
-        }
-
-        const auto converted_duration = rescale_value(
-            frame_duration,
-            frame.timestamp.source_time_base,
-            output_video_time_base
-        );
-        if (converted_duration != frame_duration_pts) {
-            throw std::runtime_error(
-                "The main segment uses variable or incompatible frame durations. This milestone requires constant cadence."
-            );
-        }
-
-        if (index == 0) {
-            continue;
-        }
-
-        const auto &previous_frame = main_segment.video_frames[index - 1];
-        const auto previous_pts = rescale_value(
-            previous_frame.timestamp.source_pts.value_or(0),
-            previous_frame.timestamp.source_time_base,
-            output_video_time_base
-        );
-        const auto current_pts = rescale_value(
-            frame.timestamp.source_pts.value_or(0),
-            frame.timestamp.source_time_base,
-            output_video_time_base
-        );
-
-        if ((current_pts - previous_pts) != frame_duration_pts) {
-            throw std::runtime_error(
-                "The main segment cadence is not strictly constant after normalization. VFR composition is not supported yet."
-            );
-        }
     }
 
     return VideoCadence{
         .width = first_frame.width,
         .height = first_frame.height,
-        .sample_aspect_ratio = first_frame.sample_aspect_ratio,
-        .frame_duration_pts = frame_duration_pts,
-        .frame_duration_microseconds = rescale_to_microseconds(frame_duration_pts, output_video_time_base)
+        .sample_aspect_ratio = first_frame.sample_aspect_ratio
     };
 }
 
-void validate_segment_frames(
+SegmentFramePlan analyze_segment_frames(
     const TimelineSegmentKind kind,
     const DecodedMediaSource &decoded_segment,
     const VideoCadence &video_cadence,
@@ -760,6 +773,17 @@ void validate_segment_frames(
             "The " + std::string(to_string(kind)) + " segment decode did not produce any video frames."
         );
     }
+
+    if (!rational_is_positive(output_video_time_base)) {
+        throw std::runtime_error("Timeline composition requires a positive output video time base.");
+    }
+
+    std::vector<SegmentFrameInterval> source_intervals{};
+    source_intervals.reserve(decoded_segment.video_frames.size());
+    std::optional<std::int64_t> first_converted_pts{};
+    std::optional<std::int64_t> previous_source_pts{};
+    Rational previous_source_time_base{};
+    std::int64_t last_converted_duration = 0;
 
     for (std::size_t index = 0; index < decoded_segment.video_frames.size(); ++index) {
         const auto &frame = decoded_segment.video_frames[index];
@@ -784,47 +808,165 @@ void validate_segment_frames(
         }
 
         const auto frame_duration = frame.timestamp.source_duration.value_or(0);
-        if (frame_duration <= 0 || !rational_is_positive(frame.timestamp.source_time_base)) {
+        if (frame_duration <= 0 ||
+            !rational_is_positive(frame.timestamp.source_time_base) ||
+            !frame.timestamp.source_pts.has_value()) {
             throw std::runtime_error(
                 "The " + std::string(to_string(kind)) + " segment contains a decoded frame with missing timing data."
             );
         }
 
-        const auto converted_duration = rescale_value(
+        if (previous_source_pts.has_value() &&
+            av_compare_ts(
+                *frame.timestamp.source_pts,
+                to_av_rational(frame.timestamp.source_time_base),
+                *previous_source_pts,
+                to_av_rational(previous_source_time_base)
+            ) <= 0) {
+            throw std::runtime_error(
+                "The " + std::string(to_string(kind)) +
+                " segment timestamps do not advance monotonically on the decoded timeline."
+            );
+        }
+
+        const auto converted_pts = rescale_value(
+            *frame.timestamp.source_pts,
+            frame.timestamp.source_time_base,
+            output_video_time_base
+        );
+        if (!first_converted_pts.has_value()) {
+            first_converted_pts = converted_pts;
+        }
+
+        last_converted_duration = rescale_value(
             frame_duration,
             frame.timestamp.source_time_base,
             output_video_time_base
         );
-        if (converted_duration != video_cadence.frame_duration_pts) {
+        if (last_converted_duration < 0) {
             throw std::runtime_error(
-                "The " + std::string(to_string(kind)) +
-                " segment frame cadence does not match the main segment cadence."
+                "The " + std::string(to_string(kind)) + " segment contains a decoded frame with an invalid duration."
             );
         }
 
-        if (index == 0) {
-            continue;
-        }
-
-        const auto &previous_frame = decoded_segment.video_frames[index - 1];
-        const auto previous_pts = rescale_value(
-            previous_frame.timestamp.source_pts.value_or(0),
-            previous_frame.timestamp.source_time_base,
-            output_video_time_base
-        );
-        const auto current_pts = rescale_value(
-            frame.timestamp.source_pts.value_or(0),
-            frame.timestamp.source_time_base,
-            output_video_time_base
-        );
-
-        if ((current_pts - previous_pts) != video_cadence.frame_duration_pts) {
-            throw std::runtime_error(
-                "The " + std::string(to_string(kind)) +
-                " segment timestamps do not advance at the main segment cadence."
-            );
-        }
+        source_intervals.push_back(SegmentFrameInterval{
+            .frame = &frame,
+            .relative_start_pts = converted_pts - *first_converted_pts,
+            .relative_end_pts = 0
+        });
+        previous_source_pts = *frame.timestamp.source_pts;
+        previous_source_time_base = frame.timestamp.source_time_base;
     }
+
+    for (std::size_t index = 0; index + 1 < source_intervals.size(); ++index) {
+        source_intervals[index].relative_end_pts = source_intervals[index + 1].relative_start_pts;
+    }
+
+    source_intervals.back().relative_end_pts = source_intervals.back().relative_start_pts + last_converted_duration;
+    if (source_intervals.back().relative_end_pts <= 0) {
+        throw std::runtime_error(
+            "The " + std::string(to_string(kind)) +
+            " segment duration could not be represented in the main output time base."
+        );
+    }
+
+    const auto segment_duration_pts = source_intervals.back().relative_end_pts;
+    return SegmentFramePlan{
+        .source_intervals = std::move(source_intervals),
+        .duration_pts = segment_duration_pts
+    };
+}
+
+void validate_main_segment_cadence(
+    const SegmentFramePlan &segment_frame_plan,
+    const Rational &output_frame_rate,
+    const Rational &output_video_time_base
+) {
+    std::size_t source_frame_index = 0;
+    std::int64_t output_frame_index = 0;
+
+    while (true) {
+        const auto output_frame_timing = resolve_output_cadence_frame_timing(
+            output_frame_index,
+            segment_frame_plan.duration_pts,
+            output_frame_rate,
+            output_video_time_base
+        );
+        if (!output_frame_timing.has_value()) {
+            break;
+        }
+
+        while (source_frame_index + 1 < segment_frame_plan.source_intervals.size() &&
+               segment_frame_plan.source_intervals[source_frame_index + 1].relative_start_pts <=
+                   output_frame_timing->start_pts) {
+            ++source_frame_index;
+        }
+
+        while (source_frame_index + 1 < segment_frame_plan.source_intervals.size() &&
+               output_frame_timing->start_pts >= segment_frame_plan.source_intervals[source_frame_index].relative_end_pts) {
+            ++source_frame_index;
+        }
+
+        if (source_frame_index != static_cast<std::size_t>(output_frame_index) ||
+            output_frame_timing->start_pts >= segment_frame_plan.source_intervals[source_frame_index].relative_end_pts) {
+            throw std::runtime_error(
+                "The main segment cadence is not strictly constant after normalization. VFR composition is not supported yet."
+            );
+        }
+
+        ++output_frame_index;
+    }
+
+    if (output_frame_index != static_cast<std::int64_t>(segment_frame_plan.source_intervals.size())) {
+        throw std::runtime_error(
+            "The main segment cadence is not strictly constant after normalization. VFR composition is not supported yet."
+        );
+    }
+}
+
+std::int64_t cadence_frame_start_pts(
+    const std::int64_t frame_index,
+    const Rational &output_frame_rate,
+    const Rational &output_video_time_base
+) {
+    if (frame_index < 0 || !rational_is_positive(output_frame_rate) || !rational_is_positive(output_video_time_base)) {
+        throw std::runtime_error("Timeline composition requires a positive output cadence.");
+    }
+
+    return av_rescale_q(
+        frame_index,
+        av_inv_q(to_av_rational(output_frame_rate)),
+        to_av_rational(output_video_time_base)
+    );
+}
+
+std::optional<CadenceFrameTiming> resolve_output_cadence_frame_timing(
+    const std::int64_t frame_index,
+    const std::int64_t segment_duration_pts,
+    const Rational &output_frame_rate,
+    const Rational &output_video_time_base
+) {
+    if (segment_duration_pts <= 0) {
+        return std::nullopt;
+    }
+
+    const auto frame_start_pts = cadence_frame_start_pts(frame_index, output_frame_rate, output_video_time_base);
+    if (frame_start_pts >= segment_duration_pts) {
+        return std::nullopt;
+    }
+
+    const auto next_frame_start_pts = cadence_frame_start_pts(frame_index + 1, output_frame_rate, output_video_time_base);
+    const auto frame_end_pts = std::min(segment_duration_pts, next_frame_start_pts);
+    if (frame_end_pts <= frame_start_pts) {
+        throw std::runtime_error(
+            "The main segment cadence cannot be represented with positive frame durations in the output time base."
+        );
+    }
+
+    return CadenceFrameTiming{
+        .start_pts = frame_start_pts,
+        .duration_pts = frame_end_pts - frame_start_pts
+    };
 }
 
 std::int64_t count_audio_samples(const std::vector<DecodedAudioSamples> &audio_blocks) {
@@ -853,6 +995,15 @@ DecodedAudioSamples make_audio_block(
         );
     } else {
         output_channels = channel_samples;
+        for (auto &channel : output_channels) {
+            if (static_cast<int>(channel.size()) < samples_per_channel) {
+                throw std::runtime_error("Timeline composition encountered a truncated normalized audio block.");
+            }
+
+            if (static_cast<int>(channel.size()) > samples_per_channel) {
+                channel.resize(static_cast<std::size_t>(samples_per_channel));
+            }
+        }
     }
 
     return DecodedAudioSamples{
@@ -920,15 +1071,8 @@ void append_audio_segment(
         );
     }
 
-    const auto actual_segment_samples = count_audio_samples(decoded_segment.audio_blocks);
-    if (actual_segment_samples != expected_segment_samples) {
-        throw std::runtime_error(
-            "The decoded " + std::string(to_string(segment_plan.kind)) +
-            " segment audio duration does not match its video duration at the main cadence."
-        );
-    }
-
     const auto starting_block_count = static_cast<std::int64_t>(output_audio_blocks.size());
+    std::int64_t samples_remaining = expected_segment_samples;
 
     for (const auto &audio_block : decoded_segment.audio_blocks) {
         if (audio_block.sample_format != decoded_segment.normalization_policy.audio_sample_format) {
@@ -946,16 +1090,51 @@ void append_audio_segment(
             );
         }
 
+        if (samples_remaining <= 0) {
+            break;
+        }
+
+        const int emitted_samples = static_cast<int>(std::min<std::int64_t>(
+            audio_block.samples_per_channel,
+            samples_remaining
+        ));
+
         output_audio_blocks.push_back(make_audio_block(
             output_audio_stream,
             decoded_segment.normalization_policy,
             static_cast<std::int64_t>(output_audio_blocks.size()),
             next_output_audio_pts,
-            audio_block.samples_per_channel,
+            emitted_samples,
             false,
             audio_block.channel_samples
         ));
-        next_output_audio_pts += audio_block.samples_per_channel;
+        next_output_audio_pts += emitted_samples;
+        samples_remaining -= emitted_samples;
+    }
+
+    if (samples_remaining > 0) {
+        if (decoded_segment.normalization_policy.audio_block_samples <= 0) {
+            throw std::runtime_error("Timeline composition requires a positive normalized audio block size.");
+        }
+
+        segment_summary.inserted_silence = true;
+        while (samples_remaining > 0) {
+            const int block_size = static_cast<int>(std::min<std::int64_t>(
+                samples_remaining,
+                decoded_segment.normalization_policy.audio_block_samples
+            ));
+            output_audio_blocks.push_back(make_audio_block(
+                output_audio_stream,
+                decoded_segment.normalization_policy,
+                static_cast<std::int64_t>(output_audio_blocks.size()),
+                next_output_audio_pts,
+                block_size,
+                true,
+                {}
+            ));
+            next_output_audio_pts += block_size;
+            samples_remaining -= block_size;
+        }
     }
 
     segment_summary.audio_block_count = static_cast<std::int64_t>(output_audio_blocks.size()) - starting_block_count;
@@ -971,6 +1150,10 @@ DecodedMediaSource build_composed_media_source(
 ) {
     const auto &main_segment_plan = timeline_plan.segments[timeline_plan.main_segment_index];
     const auto &main_video_stream = *main_segment_plan.inspected_source_info.primary_video_stream;
+    const auto total_video_duration_pts = video_frames.empty()
+        ? 0
+        : video_frames.back().timestamp.source_pts.value_or(0) +
+            video_frames.back().timestamp.source_duration.value_or(0);
 
     MediaSourceInfo source_info{
         .input_name = "timeline",
@@ -987,7 +1170,7 @@ DecodedMediaSource build_composed_media_source(
             .timestamps = {
                 .time_base = timeline_plan.output_video_time_base,
                 .start_pts = 0,
-                .duration_pts = static_cast<std::int64_t>(video_frames.size()) * video_cadence.frame_duration_pts
+                .duration_pts = total_video_duration_pts
             },
             .frame_count = static_cast<std::int64_t>(video_frames.size())
         },

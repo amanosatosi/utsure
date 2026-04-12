@@ -139,7 +139,7 @@ int run_valid_preview_assertion(
     return 0;
 }
 
-int run_invalid_fps_assertion(
+int run_mismatched_fps_preview_assertion(
     const std::filesystem::path &main_path,
     const std::filesystem::path &bad_intro_path,
     const std::filesystem::path &output_path
@@ -150,22 +150,22 @@ int run_invalid_fps_assertion(
     job.input.intro_source_path = bad_intro_path;
 
     const auto result = EncodeJobPreflight::inspect(job);
-    if (result.can_start_encode()) {
-        return fail("A mismatched-fps preflight job passed unexpectedly.");
+    if (!result.can_start_encode()) {
+        return fail("A mismatched-fps preflight job was blocked unexpectedly.");
     }
 
-    if (!issues_contain(
-            result,
-            EncodeJobPreflightIssueCode::timeline_validation_failed,
-            EncodeJobPreflightIssueSeverity::error)) {
-        return fail("The mismatched-fps preflight job did not report the expected timeline error.");
+    if (result.preview_summary.has_value() == false) {
+        return fail("A mismatched-fps preflight job should still produce a preview summary.");
     }
 
-    if (result.preview_summary.has_value()) {
-        return fail("A failed timeline preflight unexpectedly produced a preview summary.");
+    if (result.preview_summary->segment_kinds.size() != 2 ||
+        result.preview_summary->segment_kinds[0] != TimelineSegmentKind::intro ||
+        result.preview_summary->segment_kinds[1] != TimelineSegmentKind::main ||
+        format_rational(result.preview_summary->output_frame_rate) != "24/1") {
+        return fail("The mismatched-fps preflight preview did not keep the main segment authoritative.");
     }
 
-    std::cout << "timeline_validation=failed\n";
+    std::cout << "timeline_validation=normalized_to_main\n";
     return 0;
 }
 
@@ -361,7 +361,7 @@ int main(int argc, char *argv[]) {
         return fail(
             "Usage: utsure_core_encode_job_preflight_tests "
             "[--valid-preview <intro> <main> <outro> <subtitle> <output>|"
-            "--invalid-fps <main> <bad-intro> <output>|"
+            "--mismatched-fps-preview <main> <bad-intro> <output>|"
             "--missing-subtitle <main> <missing-subtitle> <output>|"
             "--overwrite-warning <main> <output>|"
             "--output-conflicts-main <main>|"
@@ -383,8 +383,8 @@ int main(int argc, char *argv[]) {
         );
     }
 
-    if (mode == "--invalid-fps" && argc == 5) {
-        return run_invalid_fps_assertion(
+    if (mode == "--mismatched-fps-preview" && argc == 5) {
+        return run_mismatched_fps_preview_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3]),
             std::filesystem::path(argv[4])

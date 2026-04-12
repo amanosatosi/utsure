@@ -350,23 +350,55 @@ int assert_subtitle_scope(
     return 0;
 }
 
-int assert_mismatch_fps(const std::filesystem::path &main_path, const std::filesystem::path &mismatch_path) {
-    const TimelineAssemblyResult assembly_result = TimelineAssembler::assemble(TimelineAssemblyRequest{
-        .intro_source_path = mismatch_path,
+int assert_normalized_fps_intro(const std::filesystem::path &intro_path, const std::filesystem::path &main_path) {
+    const auto context = compose_timeline(TimelineAssemblyRequest{
+        .intro_source_path = intro_path,
         .main_source_path = main_path,
         .subtitles_present = false,
         .subtitle_timing_mode = SubtitleTimingMode::main_segment_only
     });
-    if (assembly_result.succeeded() || !assembly_result.error.has_value()) {
-        return fail("Mismatched-FPS timeline assembly unexpectedly succeeded.");
+    if (!context.has_value()) {
+        return 1;
     }
 
-    if (assembly_result.error->message.find("frame rate") == std::string::npos) {
-        return fail("The mismatched-FPS timeline error did not mention the frame-rate mismatch.");
+    const auto &summary = context->output.timeline_summary;
+    const auto &decoded = context->output.decoded_media_source;
+
+    if (summary.segments.size() != 2 ||
+        summary.segments[0].kind != TimelineSegmentKind::intro ||
+        summary.segments[1].kind != TimelineSegmentKind::main) {
+        return fail("Unexpected normalized intro/main segment order.");
     }
 
-    std::cout << assembly_result.error->message << '\n';
-    std::cout << assembly_result.error->actionable_hint << '\n';
+    if (format_rational(summary.output_frame_rate) != "24000/1001" ||
+        format_rational(summary.output_video_time_base) != "1/1000") {
+        return fail("The normalized intro/main timeline did not keep the main cadence authoritative.");
+    }
+
+    if (summary.segments[0].video_frame_count != 24 ||
+        summary.segments[0].duration_microseconds != 1000000 ||
+        summary.segments[1].start_microseconds != 1000000 ||
+        summary.output_video_frame_count != 72) {
+        return fail("Unexpected normalized intro/main frame counts or segment timing.");
+    }
+
+    if (decoded.video_frames[0].timestamp.start_microseconds != 0 ||
+        decoded.video_frames[0].timestamp.duration_microseconds != 42000 ||
+        decoded.video_frames[1].timestamp.start_microseconds != 42000 ||
+        decoded.video_frames[1].timestamp.duration_microseconds != 41000 ||
+        decoded.video_frames[2].timestamp.start_microseconds != 83000 ||
+        decoded.video_frames[23].timestamp.start_microseconds != 959000 ||
+        decoded.video_frames[23].timestamp.duration_microseconds != 41000 ||
+        decoded.video_frames[24].timestamp.start_microseconds != 1000000 ||
+        decoded.video_frames[25].timestamp.start_microseconds != 1042000) {
+        return fail("The normalized intro cadence did not produce the expected output timestamps.");
+    }
+
+    if (audio_block_is_silent(decoded.audio_blocks[0])) {
+        return fail("The normalized intro audio should not have been dropped.");
+    }
+
+    std::cout << build_summary(context->output) << '\n';
     return 0;
 }
 
@@ -378,7 +410,7 @@ int main(int argc, char *argv[]) {
             "Usage: utsure_core_timeline_tests "
             "[--main-only <main>|--intro-main <intro> <main>|--main-outro <main> <outro>|"
             "--intro-main-outro <intro> <main> <outro>|--subtitle-scope <intro> <main> <outro>|"
-            "--mismatch-fps <main> <bad-intro>]"
+            "--normalized-fps <bad-intro> <main>]"
         );
     }
 
@@ -412,8 +444,8 @@ int main(int argc, char *argv[]) {
         );
     }
 
-    if (mode == "--mismatch-fps" && argc == 4) {
-        return assert_mismatch_fps(std::filesystem::path(argv[2]), std::filesystem::path(argv[3]));
+    if (mode == "--normalized-fps" && argc == 4) {
+        return assert_normalized_fps_intro(std::filesystem::path(argv[2]), std::filesystem::path(argv[3]));
     }
 
     return fail("Unknown mode or wrong argument count for utsure_core_timeline_tests.");
