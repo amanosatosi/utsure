@@ -44,6 +44,10 @@ int fail(std::string_view message) {
     return 1;
 }
 
+bool contains_text(const std::string &text, std::string_view needle) {
+    return text.find(needle) != std::string::npos;
+}
+
 struct CollectingObserver final : EncodeJobObserver {
     std::vector<EncodeJobProgress> progress_updates{};
     std::vector<EncodeJobLogMessage> log_messages{};
