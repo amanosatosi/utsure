@@ -101,7 +101,12 @@ void composite_premultiplied_rgba_bitmap_into_frame(
     validate_rgba_frame_surface(video_frame, "Premultiplied RGBA composition");
 
     auto &plane = video_frame.planes.front();
-    required_rgba_buffer_size(bitmap.width, bitmap.height, bitmap.line_stride_bytes, "bitmap");
+    [[maybe_unused]] const auto required_bitmap_bytes = required_rgba_buffer_size(
+        bitmap.width,
+        bitmap.height,
+        bitmap.line_stride_bytes,
+        "bitmap"
+    );
     if (bitmap.bytes == nullptr) {
         throw std::runtime_error(
             "Premultiplied RGBA composition received a truncated frame or bitmap buffer. " +

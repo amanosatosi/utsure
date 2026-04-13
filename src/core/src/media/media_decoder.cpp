@@ -1110,29 +1110,6 @@ AVChannelLayout make_default_audio_channel_layout(const int channel_count) {
     return channel_layout;
 }
 
-AudioStreamInfo build_preview_audio_stream_info(
-    const AudioStreamInfo &source_audio_stream_info,
-    const int output_sample_rate,
-    const int output_channel_count
-) {
-    AVChannelLayout output_channel_layout = make_default_audio_channel_layout(output_channel_count);
-    const std::string channel_layout_name = ffmpeg_support::channel_layout_name_from_layout(output_channel_layout);
-    av_channel_layout_uninit(&output_channel_layout);
-
-    AudioStreamInfo output_audio_stream_info = source_audio_stream_info;
-    output_audio_stream_info.sample_format_name = "f32_planar";
-    output_audio_stream_info.sample_rate = output_sample_rate;
-    output_audio_stream_info.channel_count = output_channel_count;
-    output_audio_stream_info.channel_layout_name = channel_layout_name;
-    output_audio_stream_info.timestamps.time_base = Rational{
-        .numerator = 1,
-        .denominator = output_sample_rate
-    };
-    output_audio_stream_info.timestamps.start_pts = 0;
-    output_audio_stream_info.timestamps.duration_pts = std::nullopt;
-    return output_audio_stream_info;
-}
-
 SwrContextHandle make_audio_preview_resample_context(
     const OpenStreamResources &resources,
     const AudioStreamInfo &output_audio_stream_info

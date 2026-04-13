@@ -18,6 +18,7 @@ using utsure::core::job::EncodeJobSubtitleSettings;
 using utsure::core::job::format_encode_job_preview;
 using utsure::core::media::AudioOutputMode;
 using utsure::core::media::OutputVideoCodec;
+using utsure::core::media::Rational;
 using utsure::core::timeline::SubtitleTimingMode;
 using utsure::core::timeline::TimelineSegmentKind;
 
@@ -28,6 +29,14 @@ int fail(std::string_view message) {
 
 bool contains_text(const std::string &text, std::string_view needle) {
     return text.find(needle) != std::string::npos;
+}
+
+std::string format_rational(const Rational &value) {
+    if (!value.is_valid()) {
+        return "unknown";
+    }
+
+    return std::to_string(value.numerator) + "/" + std::to_string(value.denominator);
 }
 
 void remove_file_if_present(const std::filesystem::path &path) {
