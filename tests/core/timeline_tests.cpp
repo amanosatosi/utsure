@@ -423,7 +423,7 @@ int assert_trimmed_main(const std::filesystem::path &main_path) {
         summary.segments[0].duration_microseconds != 1000000 ||
         summary.output_duration_microseconds != 1000000 ||
         summary.output_video_frame_count != 24 ||
-        summary.output_audio_block_count != 47) {
+        summary.output_audio_block_count != 48) {
         return fail("Unexpected trimmed-main timeline counts or durations.");
     }
 

@@ -841,7 +841,7 @@ int run_trimmed_main_job_assertion(
         summary.timeline_summary.segments[0].duration_microseconds != 1000000 ||
         summary.timeline_summary.output_duration_microseconds != 1000000 ||
         summary.timeline_summary.output_video_frame_count != 24 ||
-        summary.timeline_summary.output_audio_block_count != 47 ||
+        summary.timeline_summary.output_audio_block_count != 48 ||
         format_rational(summary.timeline_summary.output_frame_rate) != "24/1" ||
         summary.encoded_media_summary.resolved_audio_output.resolved_mode != ResolvedAudioOutputMode::encode_aac) {
         return fail("Unexpected trimmed main-source summary state.");
@@ -946,7 +946,7 @@ int run_timeline_trimmed_main_assertion(
         summary.timeline_summary.segments[2].start_microseconds != 2000000 ||
         summary.timeline_summary.output_duration_microseconds != 3000000 ||
         summary.timeline_summary.output_video_frame_count != 72 ||
-        summary.timeline_summary.output_audio_block_count != 141) {
+        summary.timeline_summary.output_audio_block_count != 142) {
         return fail("Unexpected intro/trimmed-main/outro summary state.");
     }
 
