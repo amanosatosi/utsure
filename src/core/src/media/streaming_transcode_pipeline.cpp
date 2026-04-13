@@ -3953,7 +3953,7 @@ SegmentProcessResult process_segment(
             const auto source_frame_duration_pts = av_rescale_q(
                 decoded_audio_frame->nb_samples,
                 AVRational{1, decoded_audio_sample_rate},
-                to_av_rational(resources.audio_stream->time_base)
+                to_av_rational(audio_stream_time_base)
             );
             next_audio_fallback_source_pts = timestamp_seed.source_pts + source_frame_duration_pts;
 
