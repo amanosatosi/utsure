@@ -2,6 +2,7 @@
 #include "utsure/core/timeline/timeline.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
 #include <optional>
@@ -402,6 +403,45 @@ int assert_normalized_fps_intro(const std::filesystem::path &intro_path, const s
     return 0;
 }
 
+int assert_trimmed_main(const std::filesystem::path &main_path) {
+    const auto context = compose_timeline(TimelineAssemblyRequest{
+        .main_source_path = main_path,
+        .main_source_trim_in_us = 500000,
+        .main_source_trim_out_us = 1500000,
+        .subtitles_present = false,
+        .subtitle_timing_mode = SubtitleTimingMode::main_segment_only
+    });
+    if (!context.has_value()) {
+        return 1;
+    }
+
+    const auto &summary = context->output.timeline_summary;
+    const auto &decoded = context->output.decoded_media_source;
+    if (summary.segments.size() != 1 ||
+        summary.segments[0].kind != TimelineSegmentKind::main ||
+        summary.segments[0].start_microseconds != 0 ||
+        summary.segments[0].duration_microseconds != 1000000 ||
+        summary.output_duration_microseconds != 1000000 ||
+        summary.output_video_frame_count != 24 ||
+        summary.output_audio_block_count != 47) {
+        return fail("Unexpected trimmed-main timeline counts or durations.");
+    }
+
+    if (decoded.video_frames[0].timestamp.start_microseconds != 0 ||
+        decoded.video_frames[23].timestamp.start_microseconds != 958333 ||
+        decoded.audio_blocks[0].timestamp.start_microseconds != 0) {
+        return fail("Unexpected trimmed-main output timestamps.");
+    }
+
+    if (context->plan.segments[0].source_trim_in_microseconds != 500000 ||
+        context->plan.segments[0].source_trim_out_microseconds != std::optional<std::int64_t>(1500000)) {
+        return fail("The trimmed-main timeline plan did not preserve the requested trim range.");
+    }
+
+    std::cout << build_summary(context->output) << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -410,7 +450,7 @@ int main(int argc, char *argv[]) {
             "Usage: utsure_core_timeline_tests "
             "[--main-only <main>|--intro-main <intro> <main>|--main-outro <main> <outro>|"
             "--intro-main-outro <intro> <main> <outro>|--subtitle-scope <intro> <main> <outro>|"
-            "--normalized-fps <bad-intro> <main>]"
+            "--normalized-fps <bad-intro> <main>|--trimmed-main <main>]"
         );
     }
 
@@ -446,6 +486,10 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--normalized-fps" && argc == 4) {
         return assert_normalized_fps_intro(std::filesystem::path(argv[2]), std::filesystem::path(argv[3]));
+    }
+
+    if (mode == "--trimmed-main" && argc == 3) {
+        return assert_trimmed_main(std::filesystem::path(argv[2]));
     }
 
     return fail("Unknown mode or wrong argument count for utsure_core_timeline_tests.");

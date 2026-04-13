@@ -1865,11 +1865,25 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job_from_entry(
         job.input.intro_source_path = qstring_to_path(entry.intro_path);
     }
 
+    const qint64 bounded_duration_us = std::max<qint64>(entry.duration_us, 0);
+    const qint64 trim_in_us = std::clamp<qint64>(entry.trim_in_us, 0, bounded_duration_us);
+    const qint64 trim_out_us = std::clamp<qint64>(
+        std::max(entry.trim_out_us, trim_in_us),
+        trim_in_us,
+        bounded_duration_us
+    );
+    if (trim_in_us > 0) {
+        job.input.main_source_trim_in_us = trim_in_us;
+    }
+    if (bounded_duration_us > 0 && trim_out_us < bounded_duration_us) {
+        job.input.main_source_trim_out_us = trim_out_us;
+    }
+
     if (entry.endcard_enabled && !entry.endcard_path.trimmed().isEmpty()) {
         job.input.outro_source_path = qstring_to_path(entry.endcard_path);
     }
 
-    // Thumbnail pre-roll, trim, and intro/endcard music remain UI-only placeholders in this milestone
+    // Thumbnail pre-roll and intro/endcard music remain UI-only placeholders in this milestone
     // because encoder-core does not expose the corresponding contracts yet.
     return job;
 }

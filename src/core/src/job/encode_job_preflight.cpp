@@ -292,6 +292,8 @@ timeline::TimelineAssemblyRequest build_timeline_request(const EncodeJob &job) {
     return timeline::TimelineAssemblyRequest{
         .intro_source_path = job.input.intro_source_path,
         .main_source_path = job.input.main_source_path,
+        .main_source_trim_in_us = job.input.main_source_trim_in_us,
+        .main_source_trim_out_us = job.input.main_source_trim_out_us,
         .outro_source_path = job.input.outro_source_path,
         .subtitles_present = job.subtitles.has_value(),
         .subtitle_timing_mode = job.subtitles.has_value()
@@ -556,6 +558,7 @@ EncodeJobPreflightResult EncodeJobPreflight::inspect(const EncodeJob &job) noexc
             .output_path = job.output.output_path,
             .settings = job.output.audio,
             .segment_count = timeline_plan.segments.size(),
+            .main_source_trimmed = timeline_plan.segments[timeline_plan.main_segment_index].has_source_trim(),
             .main_source_audio_stream = timeline_plan.segments[timeline_plan.main_segment_index]
                 .inspected_source_info.primary_audio_stream.has_value()
                     ? &*timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info.primary_audio_stream

@@ -839,11 +839,65 @@ std::int64_t cadence_frame_start_pts(
     return av_rescale_q(frame_index, av_inv_q(to_av_rational(frame_rate)), to_av_rational(time_base));
 }
 
+std::optional<std::int64_t> estimate_source_duration_microseconds(const MediaSourceInfo &segment_info) {
+    if (segment_info.primary_video_stream.has_value()) {
+        const auto &video_stream = *segment_info.primary_video_stream;
+        if (video_stream.timestamps.duration_pts.has_value() &&
+            *video_stream.timestamps.duration_pts > 0 &&
+            rational_is_positive(video_stream.timestamps.time_base)) {
+            return rescale_to_microseconds(*video_stream.timestamps.duration_pts, video_stream.timestamps.time_base);
+        }
+
+        if (video_stream.frame_count.has_value() &&
+            *video_stream.frame_count > 0 &&
+            rational_is_positive(video_stream.average_frame_rate)) {
+            return av_rescale_q(
+                *video_stream.frame_count,
+                av_inv_q(to_av_rational(video_stream.average_frame_rate)),
+                AV_TIME_BASE_Q
+            );
+        }
+    }
+
+    if (segment_info.container_duration_microseconds.has_value() &&
+        *segment_info.container_duration_microseconds > 0) {
+        return *segment_info.container_duration_microseconds;
+    }
+
+    return std::nullopt;
+}
+
+bool segment_has_source_trim(const timeline::TimelineSegmentPlan &segment_plan) {
+    return segment_plan.source_trim_in_microseconds > 0 || segment_plan.source_trim_out_microseconds.has_value();
+}
+
+std::optional<std::int64_t> estimate_segment_duration_microseconds(const timeline::TimelineSegmentPlan &segment_plan) {
+    const auto source_duration_us = estimate_source_duration_microseconds(segment_plan.inspected_source_info);
+    const auto trim_in_us = std::max<std::int64_t>(segment_plan.source_trim_in_microseconds, 0);
+
+    if (segment_plan.source_trim_out_microseconds.has_value()) {
+        return std::max<std::int64_t>(*segment_plan.source_trim_out_microseconds - trim_in_us, 0);
+    }
+
+    if (source_duration_us.has_value()) {
+        return std::max<std::int64_t>(*source_duration_us - trim_in_us, 0);
+    }
+
+    return std::nullopt;
+}
+
 std::optional<std::int64_t> estimate_segment_duration_pts(
     const timeline::TimelineSegmentPlan &segment_plan,
     const Rational &output_video_time_base,
     const Rational &output_frame_rate
 ) {
+    if (const auto duration_us = estimate_segment_duration_microseconds(segment_plan); duration_us.has_value()) {
+        const auto duration_pts = av_rescale_q(*duration_us, AV_TIME_BASE_Q, to_av_rational(output_video_time_base));
+        if (duration_pts > 0) {
+            return duration_pts;
+        }
+    }
+
     if (!segment_plan.inspected_source_info.primary_video_stream.has_value()) {
         return std::nullopt;
     }
@@ -903,7 +957,9 @@ EstimatedVideoProgressTotals estimate_video_progress_totals(const timeline::Time
         }
 
         const auto &video_stream = *segment_plan.inspected_source_info.primary_video_stream;
-        if (video_stream.frame_count.has_value() && *video_stream.frame_count > 0) {
+        if (!segment_has_source_trim(segment_plan) &&
+            video_stream.frame_count.has_value() &&
+            *video_stream.frame_count > 0) {
             totals.total_video_frames += static_cast<std::uint64_t>(*video_stream.frame_count);
         } else {
             all_segment_frame_counts_known = false;
@@ -1261,6 +1317,42 @@ std::optional<AudioCopyTemplate> build_audio_copy_template(const timeline::Timel
         .time_base = ffmpeg_support::to_rational(audio_stream->time_base),
         .start_pts = start_pts
     };
+}
+
+void seek_segment_to_trim_start(
+    const timeline::TimelineSegmentPlan &segment_plan,
+    SegmentDecoderResources &resources
+) {
+    if (!segment_has_source_trim(segment_plan) || segment_plan.source_trim_in_microseconds <= 0) {
+        return;
+    }
+
+    if (resources.video_stream == nullptr) {
+        throw std::runtime_error("The streaming trim path requires a readable main video stream.");
+    }
+
+    const auto requested_pts = av_rescale_q(
+        segment_plan.source_trim_in_microseconds,
+        AV_TIME_BASE_Q,
+        resources.video_stream->time_base
+    );
+    const auto seek_result = av_seek_frame(
+        resources.format_context.get(),
+        segment_plan.inspected_source_info.primary_video_stream->stream_index,
+        requested_pts,
+        AVSEEK_FLAG_BACKWARD
+    );
+    if (seek_result < 0) {
+        throw std::runtime_error(
+            "Failed to seek the streaming segment trim start. FFmpeg reported: " +
+            ffmpeg_support::ffmpeg_error_to_string(seek_result)
+        );
+    }
+
+    avcodec_flush_buffers(resources.video_decoder.get());
+    if (resources.audio_decoder) {
+        avcodec_flush_buffers(resources.audio_decoder.get());
+    }
 }
 
 void send_packet_or_throw(AVCodecContext &codec_context, AVPacket *packet) {
@@ -2994,21 +3086,38 @@ DecodedAudioSamples make_output_audio_block(
     };
 }
 
+std::vector<std::vector<float>> copy_audio_block_range(
+    const std::vector<std::vector<float>> &channel_samples,
+    const int start_sample_index,
+    const int samples_per_channel
+) {
+    if (start_sample_index < 0 || samples_per_channel < 0) {
+        throw std::runtime_error("The streaming pipeline received an invalid audio trim sample range.");
+    }
+
+    std::vector<std::vector<float>> slice{};
+    slice.reserve(channel_samples.size());
+    for (const auto &channel : channel_samples) {
+        const auto start = static_cast<std::size_t>(start_sample_index);
+        const auto end = static_cast<std::size_t>(start_sample_index + samples_per_channel);
+        if (end > channel.size()) {
+            throw std::runtime_error("The streaming pipeline could not trim an audio block because its samples were incomplete.");
+        }
+
+        slice.emplace_back(
+            channel.begin() + static_cast<std::ptrdiff_t>(start),
+            channel.begin() + static_cast<std::ptrdiff_t>(end)
+        );
+    }
+
+    return slice;
+}
+
 std::vector<std::vector<float>> copy_audio_block_prefix(
     const std::vector<std::vector<float>> &channel_samples,
     const int samples_per_channel
 ) {
-    std::vector<std::vector<float>> prefix{};
-    prefix.reserve(channel_samples.size());
-    for (const auto &channel : channel_samples) {
-        if (channel.size() < static_cast<std::size_t>(samples_per_channel)) {
-            throw std::runtime_error("The streaming pipeline could not trim an audio block because its samples were incomplete.");
-        }
-
-        prefix.emplace_back(channel.begin(), channel.begin() + samples_per_channel);
-    }
-
-    return prefix;
+    return copy_audio_block_range(channel_samples, 0, samples_per_channel);
 }
 
 ResolvedVideoFrameTiming resolve_video_frame_timing_for_segment(
@@ -3134,6 +3243,7 @@ SegmentProcessResult process_segment(
         threading_settings,
         runtime_behavior.effective_logical_core_count
     );
+    seek_segment_to_trim_start(segment_plan, resources);
     PacketHandle demux_packet = allocate_packet();
     FrameHandle decoded_video_frame = allocate_frame();
     FrameHandle decoded_audio_frame = allocate_frame();
@@ -3190,12 +3300,37 @@ SegmentProcessResult process_segment(
         );
     }
 
-    std::int64_t next_fallback_source_pts =
-        segment_plan.inspected_source_info.primary_video_stream->timestamps.start_pts.value_or(0);
+    const auto segment_trim_in_us = std::max<std::int64_t>(segment_plan.source_trim_in_microseconds, 0);
+    const std::optional<std::int64_t> segment_trim_out_us = segment_plan.source_trim_out_microseconds;
+    const auto video_stream_time_base =
+        segment_plan.inspected_source_info.primary_video_stream->timestamps.time_base;
+    const auto audio_stream_time_base = segment_plan.inspected_source_info.primary_audio_stream.has_value()
+        ? segment_plan.inspected_source_info.primary_audio_stream->timestamps.time_base
+        : Rational{};
+    const auto requested_video_trim_start_pts = av_rescale_q(
+        segment_trim_in_us,
+        AV_TIME_BASE_Q,
+        to_av_rational(video_stream_time_base)
+    );
+    const auto requested_audio_trim_start_pts =
+        segment_plan.inspected_source_info.primary_audio_stream.has_value() && rational_is_positive(audio_stream_time_base)
+            ? av_rescale_q(segment_trim_in_us, AV_TIME_BASE_Q, to_av_rational(audio_stream_time_base))
+            : 0;
+
+    std::int64_t next_fallback_source_pts = segment_has_source_trim(segment_plan)
+        ? requested_video_trim_start_pts
+        : segment_plan.inspected_source_info.primary_video_stream->timestamps.start_pts.value_or(0);
+    std::int64_t next_audio_fallback_source_pts = segment_has_source_trim(segment_plan)
+        ? requested_audio_trim_start_pts
+        : segment_plan.inspected_source_info.primary_audio_stream.has_value()
+            ? segment_plan.inspected_source_info.primary_audio_stream->timestamps.start_pts.value_or(0)
+            : 0;
     const auto fallback_video_duration_pts =
         infer_video_frame_duration_pts(*segment_plan.inspected_source_info.primary_video_stream).value_or(1);
     const std::int64_t segment_video_start_pts =
-        segment_plan.inspected_source_info.primary_video_stream->timestamps.start_pts.value_or(0);
+        segment_has_source_trim(segment_plan)
+            ? requested_video_trim_start_pts
+            : segment_plan.inspected_source_info.primary_video_stream->timestamps.start_pts.value_or(0);
 
     SwrContextHandle audio_resample_context{};
     std::vector<std::vector<float>> pending_audio_channels{};
@@ -3211,6 +3346,9 @@ SegmentProcessResult process_segment(
     std::optional<PendingVideoFrameInput> pending_video_frame{};
     std::int64_t next_segment_output_frame_index = 0;
     std::uint64_t next_video_process_order_index = 0;
+    bool video_input_complete = false;
+    bool audio_input_complete =
+        !(resources.audio_stream && segment_plan.inspected_source_info.primary_audio_stream.has_value());
 
     if (encode_audio && resources.audio_decoder) {
         if (normalization_policy.audio_sample_format != NormalizedAudioSampleFormat::f32_planar) {
@@ -3281,6 +3419,25 @@ SegmentProcessResult process_segment(
             timeline_plan.output_video_time_base,
             resolved_audio_plan->time_base
         );
+    };
+
+    const auto packet_start_microseconds = [&](const AVPacket &packet, const Rational &time_base)
+        -> std::optional<std::int64_t> {
+        const auto packet_timestamp = choose_packet_timestamp_seed(packet);
+        if (!packet_timestamp.has_value()) {
+            return std::nullopt;
+        }
+
+        return rescale_to_microseconds(*packet_timestamp, time_base);
+    };
+
+    const auto packet_starts_after_trim_end = [&](const AVPacket &packet, const Rational &time_base) {
+        if (!segment_trim_out_us.has_value()) {
+            return false;
+        }
+
+        const auto packet_start_us = packet_start_microseconds(packet, time_base);
+        return packet_start_us.has_value() && *packet_start_us >= *segment_trim_out_us;
     };
 
     const auto update_known_video_timeline = [&](const AVPacket &video_packet) {
@@ -3651,6 +3808,16 @@ SegmentProcessResult process_segment(
     };
 
     const auto process_video_frame = [&](StreamingVideoFrame video_frame) {
+        if (video_frame.metadata.timestamp.start_microseconds < segment_trim_in_us) {
+            return;
+        }
+
+        if (segment_trim_out_us.has_value() &&
+            video_frame.metadata.timestamp.start_microseconds >= *segment_trim_out_us) {
+            video_input_complete = true;
+            return;
+        }
+
         const auto resolved_timing = resolve_video_frame_timing_for_segment(
             segment_plan.kind,
             video_frame,
@@ -3779,14 +3946,92 @@ SegmentProcessResult process_segment(
                 );
             }
 
-            append_channel_samples(
-                pending_audio_channels,
-                resample_audio_frame(
-                    *audio_resample_context,
-                    decoded_audio_frame.get(),
-                    resolved_audio_plan->channel_count
-                )
+            const auto timestamp_seed = choose_timestamp_seed(*decoded_audio_frame, next_audio_fallback_source_pts);
+            const int decoded_audio_sample_rate = decoded_audio_frame->sample_rate > 0
+                ? decoded_audio_frame->sample_rate
+                : resolved_audio_plan->sample_rate;
+            const auto source_frame_duration_pts = av_rescale_q(
+                decoded_audio_frame->nb_samples,
+                AVRational{1, decoded_audio_sample_rate},
+                to_av_rational(resources.audio_stream->time_base)
             );
+            next_audio_fallback_source_pts = timestamp_seed.source_pts + source_frame_duration_pts;
+
+            auto converted_channels = resample_audio_frame(
+                *audio_resample_context,
+                decoded_audio_frame.get(),
+                resolved_audio_plan->channel_count
+            );
+            int start_sample_index = 0;
+            int samples_to_append = converted_channels.empty()
+                ? 0
+                : static_cast<int>(converted_channels.front().size());
+            if (segment_has_source_trim(segment_plan)) {
+                const auto frame_start_us = rescale_to_microseconds(timestamp_seed.source_pts, audio_stream_time_base);
+                const auto frame_duration_us = av_rescale_q(
+                    decoded_audio_frame->nb_samples,
+                    AVRational{1, decoded_audio_sample_rate},
+                    AV_TIME_BASE_Q
+                );
+                const auto frame_end_us = frame_start_us + frame_duration_us;
+                const auto overlap_start_us = std::max(frame_start_us, segment_trim_in_us);
+                const auto overlap_end_us = segment_trim_out_us.has_value()
+                    ? std::min(frame_end_us, *segment_trim_out_us)
+                    : frame_end_us;
+                if (segment_trim_out_us.has_value() && frame_start_us >= *segment_trim_out_us) {
+                    audio_input_complete = true;
+                }
+
+                if (overlap_end_us <= overlap_start_us) {
+                    av_frame_unref(decoded_audio_frame.get());
+                    if (audio_decode_should_wait()) {
+                        return;
+                    }
+                    continue;
+                }
+
+                start_sample_index = static_cast<int>(av_rescale_q_rnd(
+                    overlap_start_us - frame_start_us,
+                    AV_TIME_BASE_Q,
+                    to_av_rational(resolved_audio_plan->time_base),
+                    AV_ROUND_UP
+                ));
+                const auto end_sample_index = av_rescale_q_rnd(
+                    overlap_end_us - frame_start_us,
+                    AV_TIME_BASE_Q,
+                    to_av_rational(resolved_audio_plan->time_base),
+                    AV_ROUND_DOWN
+                );
+                samples_to_append = static_cast<int>(std::max<std::int64_t>(
+                    end_sample_index - start_sample_index,
+                    0
+                ));
+                if (!converted_channels.empty()) {
+                    start_sample_index = std::clamp(
+                        start_sample_index,
+                        0,
+                        static_cast<int>(converted_channels.front().size())
+                    );
+                    samples_to_append = std::min(
+                        samples_to_append,
+                        std::max(
+                            static_cast<int>(converted_channels.front().size()) - start_sample_index,
+                            0
+                        )
+                    );
+                }
+            }
+
+            if (samples_to_append > 0) {
+                append_channel_samples(
+                    pending_audio_channels,
+                    (start_sample_index == 0 &&
+                     !converted_channels.empty() &&
+                     samples_to_append == static_cast<int>(converted_channels.front().size()))
+                        ? converted_channels
+                        : copy_audio_block_range(converted_channels, start_sample_index, samples_to_append)
+                );
+            }
             emit_ready_audio_blocks();
 
             av_frame_unref(decoded_audio_frame.get());
@@ -3821,13 +4066,30 @@ SegmentProcessResult process_segment(
     };
 
     while (av_read_frame(resources.format_context.get(), demux_packet.get()) >= 0) {
+        if (video_input_complete && audio_input_complete) {
+            av_packet_unref(demux_packet.get());
+            break;
+        }
+
         if (demux_packet->stream_index == segment_plan.inspected_source_info.primary_video_stream->stream_index) {
+            if (packet_starts_after_trim_end(*demux_packet, video_stream_time_base)) {
+                video_input_complete = true;
+                av_packet_unref(demux_packet.get());
+                continue;
+            }
+
             update_known_video_timeline(*demux_packet);
             send_packet_or_throw(*resources.video_decoder, demux_packet.get());
             receive_video_frames();
         } else if (resources.audio_stream &&
                    segment_plan.inspected_source_info.primary_audio_stream.has_value() &&
                    demux_packet->stream_index == segment_plan.inspected_source_info.primary_audio_stream->stream_index) {
+            if (packet_starts_after_trim_end(*demux_packet, audio_stream_time_base)) {
+                audio_input_complete = true;
+                av_packet_unref(demux_packet.get());
+                continue;
+            }
+
             if (copy_audio) {
                 output_session.copy_audio_packet(*demux_packet);
             } else if (encode_audio) {
@@ -4037,6 +4299,7 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
             .output_path = request.media_encode_request.output_path,
             .settings = request.media_encode_request.audio_settings,
             .segment_count = timeline_plan.segments.size(),
+            .main_source_trimmed = timeline_plan.segments[timeline_plan.main_segment_index].has_source_trim(),
             .main_source_audio_stream = main_source_audio_stream
         });
         if (resolved_audio_output.requested_copy_blocker.has_value()) {

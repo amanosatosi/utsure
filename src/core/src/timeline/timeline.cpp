@@ -7,6 +7,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <optional>
@@ -78,9 +79,14 @@ void validate_audio_compatibility(
     const std::optional<AudioStreamInfo> &main_audio,
     const std::optional<AudioStreamInfo> &candidate_audio
 );
+std::optional<std::int64_t> estimate_source_duration_microseconds(const MediaSourceInfo &segment_info);
+void validate_main_source_trim(
+    const TimelineAssemblyRequest &request,
+    const MediaSourceInfo &main_segment_info
+);
 VideoCadence derive_video_cadence(const DecodedMediaSource &main_segment, const Rational &output_video_time_base);
 SegmentFramePlan analyze_segment_frames(
-    TimelineSegmentKind kind,
+    const TimelineSegmentPlan &segment_plan,
     const DecodedMediaSource &decoded_segment,
     const VideoCadence &video_cadence,
     const Rational &output_video_time_base
@@ -102,6 +108,11 @@ std::optional<CadenceFrameTiming> resolve_output_cadence_frame_timing(
     const Rational &output_video_time_base
 );
 std::int64_t count_audio_samples(const std::vector<DecodedAudioSamples> &audio_blocks);
+std::vector<std::vector<float>> copy_audio_block_range(
+    const std::vector<std::vector<float>> &channel_samples,
+    int start_sample_index,
+    int samples_per_channel
+);
 DecodedAudioSamples make_audio_block(
     const AudioStreamInfo &output_audio_stream,
     const media::DecodeNormalizationPolicy &normalization_policy,
@@ -183,6 +194,7 @@ TimelineAssemblyResult TimelineAssembler::assemble(const TimelineAssemblyRequest
 
         const auto &main_segment_info = *main_inspection_result.media_source_info;
         validate_video_stream_presence(TimelineSegmentKind::main, main_segment_info);
+        validate_main_source_trim(request, main_segment_info);
 
         const auto main_video_stream = *main_segment_info.primary_video_stream;
         if (!rational_is_positive(main_video_stream.average_frame_rate)) {
@@ -238,6 +250,8 @@ TimelineAssemblyResult TimelineAssembler::assemble(const TimelineAssemblyRequest
             .kind = TimelineSegmentKind::main,
             .source_path = main_source_path,
             .inspected_source_info = main_segment_info,
+            .source_trim_in_microseconds = request.main_source_trim_in_us.value_or(0),
+            .source_trim_out_microseconds = request.main_source_trim_out_us,
             .subtitles_enabled = request.subtitles_present
         });
 
@@ -279,7 +293,7 @@ TimelineAssemblyResult TimelineAssembler::assemble(const TimelineAssemblyRequest
     } catch (const std::runtime_error &exception) {
         return make_assembly_error(
             exception.what(),
-            "Adjust the intro/outro clips so their formats and cadence match the supported timeline rules."
+            "Adjust the selected trim range or clip properties so the timeline can be normalized onto the main source."
         );
     } catch (const std::exception &exception) {
         return make_assembly_error(
@@ -341,7 +355,7 @@ TimelineCompositionResult TimelineComposer::compose(
             const auto &decoded_segment = decoded_segments[segment_index];
 
             const auto segment_frame_plan = analyze_segment_frames(
-                segment_plan.kind,
+                segment_plan,
                 decoded_segment,
                 video_cadence,
                 timeline_plan.output_video_time_base
@@ -392,7 +406,9 @@ TimelineCompositionResult TimelineComposer::compose(
                 }
 
                 const auto &source_interval = segment_frame_plan.source_intervals[source_frame_index];
-                if (output_frame_timing->start_pts >= source_interval.relative_end_pts || source_interval.frame == nullptr) {
+                if (output_frame_timing->start_pts < source_interval.relative_start_pts ||
+                    output_frame_timing->start_pts >= source_interval.relative_end_pts ||
+                    source_interval.frame == nullptr) {
                     throw std::runtime_error(
                         "The " + std::string(to_string(segment_plan.kind)) +
                         " segment could not be normalized onto the main output cadence."
@@ -476,7 +492,7 @@ TimelineCompositionResult TimelineComposer::compose(
     } catch (const std::runtime_error &exception) {
         return make_composition_error(
             exception.what(),
-            "Adjust the decoded segment timing or audio layout so every composed segment can be normalized onto the main timeline."
+            "Adjust the decoded segment timing, trim range, or audio layout so every segment can be normalized onto the main timeline."
         );
     } catch (const std::exception &exception) {
         return make_composition_error(
@@ -557,6 +573,73 @@ std::optional<std::filesystem::path> normalize_optional_path(const std::optional
     }
 
     return path->lexically_normal();
+}
+
+std::optional<std::int64_t> estimate_source_duration_microseconds(const MediaSourceInfo &segment_info) {
+    if (segment_info.primary_video_stream.has_value()) {
+        const auto &video_stream = *segment_info.primary_video_stream;
+        if (video_stream.timestamps.duration_pts.has_value() &&
+            *video_stream.timestamps.duration_pts > 0 &&
+            rational_is_positive(video_stream.timestamps.time_base)) {
+            return rescale_to_microseconds(*video_stream.timestamps.duration_pts, video_stream.timestamps.time_base);
+        }
+
+        if (video_stream.frame_count.has_value() &&
+            *video_stream.frame_count > 0 &&
+            rational_is_positive(video_stream.average_frame_rate)) {
+            return av_rescale_q(
+                *video_stream.frame_count,
+                av_inv_q(to_av_rational(video_stream.average_frame_rate)),
+                AV_TIME_BASE_Q
+            );
+        }
+    }
+
+    if (segment_info.container_duration_microseconds.has_value() &&
+        *segment_info.container_duration_microseconds > 0) {
+        return *segment_info.container_duration_microseconds;
+    }
+
+    return std::nullopt;
+}
+
+void validate_main_source_trim(
+    const TimelineAssemblyRequest &request,
+    const MediaSourceInfo &main_segment_info
+) {
+    const auto trim_in_us = request.main_source_trim_in_us.value_or(0);
+    if (trim_in_us < 0) {
+        throw std::runtime_error("The main source trim start must not be negative.");
+    }
+
+    if (request.main_source_trim_out_us.has_value() && *request.main_source_trim_out_us < 0) {
+        throw std::runtime_error("The main source trim end must not be negative.");
+    }
+
+    if (request.main_source_trim_out_us.has_value() &&
+        *request.main_source_trim_out_us <= trim_in_us) {
+        throw std::runtime_error("The main source trim range must keep the trim end after the trim start.");
+    }
+
+    const auto source_duration_us = estimate_source_duration_microseconds(main_segment_info);
+    if (!source_duration_us.has_value()) {
+        return;
+    }
+
+    if (trim_in_us >= *source_duration_us) {
+        throw std::runtime_error(
+            "The main source trim start lies outside the inspected source duration of " +
+            std::to_string(*source_duration_us) + " microseconds."
+        );
+    }
+
+    if (request.main_source_trim_out_us.has_value() &&
+        *request.main_source_trim_out_us > *source_duration_us) {
+        throw std::runtime_error(
+            "The main source trim end lies outside the inspected source duration of " +
+            std::to_string(*source_duration_us) + " microseconds."
+        );
+    }
 }
 
 MediaInspectionResult inspect_segment(
@@ -763,11 +846,12 @@ VideoCadence derive_video_cadence(
 }
 
 SegmentFramePlan analyze_segment_frames(
-    const TimelineSegmentKind kind,
+    const TimelineSegmentPlan &segment_plan,
     const DecodedMediaSource &decoded_segment,
     const VideoCadence &video_cadence,
     const Rational &output_video_time_base
 ) {
+    const auto kind = segment_plan.kind;
     if (decoded_segment.video_frames.empty()) {
         throw std::runtime_error(
             "The " + std::string(to_string(kind)) + " segment decode did not produce any video frames."
@@ -778,15 +862,19 @@ SegmentFramePlan analyze_segment_frames(
         throw std::runtime_error("Timeline composition requires a positive output video time base.");
     }
 
-    std::vector<SegmentFrameInterval> source_intervals{};
-    source_intervals.reserve(decoded_segment.video_frames.size());
-    std::optional<std::int64_t> first_converted_pts{};
+    struct RawFrameInterval final {
+        const DecodedVideoFrame *frame{nullptr};
+        std::int64_t start_pts{0};
+        std::int64_t end_pts{0};
+    };
+
+    std::vector<RawFrameInterval> raw_intervals{};
+    raw_intervals.reserve(decoded_segment.video_frames.size());
     std::optional<std::int64_t> previous_source_pts{};
     Rational previous_source_time_base{};
     std::int64_t last_converted_duration = 0;
 
-    for (std::size_t index = 0; index < decoded_segment.video_frames.size(); ++index) {
-        const auto &frame = decoded_segment.video_frames[index];
+    for (const auto &frame : decoded_segment.video_frames) {
         if (frame.pixel_format != media::NormalizedVideoPixelFormat::rgba8 || frame.planes.size() != 1) {
             throw std::runtime_error(
                 "The " + std::string(to_string(kind)) + " segment contains an unsupported decoded video frame layout."
@@ -834,10 +922,6 @@ SegmentFramePlan analyze_segment_frames(
             frame.timestamp.source_time_base,
             output_video_time_base
         );
-        if (!first_converted_pts.has_value()) {
-            first_converted_pts = converted_pts;
-        }
-
         last_converted_duration = rescale_value(
             frame_duration,
             frame.timestamp.source_time_base,
@@ -849,28 +933,83 @@ SegmentFramePlan analyze_segment_frames(
             );
         }
 
-        source_intervals.push_back(SegmentFrameInterval{
+        raw_intervals.push_back(RawFrameInterval{
             .frame = &frame,
-            .relative_start_pts = converted_pts - *first_converted_pts,
-            .relative_end_pts = 0
+            .start_pts = converted_pts,
+            .end_pts = 0
         });
         previous_source_pts = *frame.timestamp.source_pts;
         previous_source_time_base = frame.timestamp.source_time_base;
     }
 
-    for (std::size_t index = 0; index + 1 < source_intervals.size(); ++index) {
-        source_intervals[index].relative_end_pts = source_intervals[index + 1].relative_start_pts;
+    for (std::size_t index = 0; index + 1 < raw_intervals.size(); ++index) {
+        raw_intervals[index].end_pts = raw_intervals[index + 1].start_pts;
     }
 
-    source_intervals.back().relative_end_pts = source_intervals.back().relative_start_pts + last_converted_duration;
-    if (source_intervals.back().relative_end_pts <= 0) {
+    raw_intervals.back().end_pts = raw_intervals.back().start_pts + last_converted_duration;
+    if (raw_intervals.back().end_pts <= raw_intervals.back().start_pts) {
         throw std::runtime_error(
             "The " + std::string(to_string(kind)) +
             " segment duration could not be represented in the main output time base."
         );
     }
 
-    const auto segment_duration_pts = source_intervals.back().relative_end_pts;
+    const auto trim_start_pts = rescale_value(
+        segment_plan.source_trim_in_microseconds,
+        Rational{1, AV_TIME_BASE},
+        output_video_time_base
+    );
+    const std::optional<std::int64_t> trim_end_pts = segment_plan.source_trim_out_microseconds.has_value()
+        ? std::optional<std::int64_t>(rescale_value(
+            *segment_plan.source_trim_out_microseconds,
+            Rational{1, AV_TIME_BASE},
+            output_video_time_base
+        ))
+        : std::nullopt;
+
+    std::vector<SegmentFrameInterval> source_intervals{};
+    source_intervals.reserve(raw_intervals.size());
+    for (const auto &interval : raw_intervals) {
+        const auto clipped_start_pts = std::max(interval.start_pts, trim_start_pts);
+        const auto clipped_end_pts = trim_end_pts.has_value()
+            ? std::min(interval.end_pts, *trim_end_pts)
+            : interval.end_pts;
+        if (clipped_end_pts <= clipped_start_pts) {
+            continue;
+        }
+
+        source_intervals.push_back(SegmentFrameInterval{
+            .frame = interval.frame,
+            .relative_start_pts = clipped_start_pts - trim_start_pts,
+            .relative_end_pts = clipped_end_pts - trim_start_pts
+        });
+    }
+
+    if (source_intervals.empty()) {
+        throw std::runtime_error(
+            "The " + std::string(to_string(kind)) + " segment trim range did not keep any decoded video frames."
+        );
+    }
+
+    std::int64_t segment_duration_pts = source_intervals.back().relative_end_pts;
+    if (trim_end_pts.has_value()) {
+        const auto requested_duration_pts = *trim_end_pts - trim_start_pts;
+        if (requested_duration_pts <= 0) {
+            throw std::runtime_error(
+                "The " + std::string(to_string(kind)) + " segment trim range produced a non-positive video duration."
+            );
+        }
+
+        if (segment_duration_pts < requested_duration_pts) {
+            throw std::runtime_error(
+                "The " + std::string(to_string(kind)) +
+                " segment trim range extends beyond the decoded video duration."
+            );
+        }
+
+        segment_duration_pts = requested_duration_pts;
+    }
+
     return SegmentFramePlan{
         .source_intervals = std::move(source_intervals),
         .duration_pts = segment_duration_pts
@@ -907,8 +1046,10 @@ void validate_main_segment_cadence(
             ++source_frame_index;
         }
 
+        const auto &source_interval = segment_frame_plan.source_intervals[source_frame_index];
         if (source_frame_index != static_cast<std::size_t>(output_frame_index) ||
-            output_frame_timing->start_pts >= segment_frame_plan.source_intervals[source_frame_index].relative_end_pts) {
+            output_frame_timing->start_pts < source_interval.relative_start_pts ||
+            output_frame_timing->start_pts >= source_interval.relative_end_pts) {
             throw std::runtime_error(
                 "The main segment cadence is not strictly constant after normalization. VFR composition is not supported yet."
             );
@@ -976,6 +1117,33 @@ std::int64_t count_audio_samples(const std::vector<DecodedAudioSamples> &audio_b
     }
 
     return total_samples;
+}
+
+std::vector<std::vector<float>> copy_audio_block_range(
+    const std::vector<std::vector<float>> &channel_samples,
+    const int start_sample_index,
+    const int samples_per_channel
+) {
+    if (start_sample_index < 0 || samples_per_channel < 0) {
+        throw std::runtime_error("Timeline composition encountered an invalid trimmed audio sample range.");
+    }
+
+    std::vector<std::vector<float>> slice{};
+    slice.reserve(channel_samples.size());
+    for (const auto &channel : channel_samples) {
+        const auto start = static_cast<std::size_t>(start_sample_index);
+        const auto end = static_cast<std::size_t>(start_sample_index + samples_per_channel);
+        if (end > channel.size()) {
+            throw std::runtime_error("Timeline composition encountered a truncated normalized audio block.");
+        }
+
+        slice.emplace_back(
+            channel.begin() + static_cast<std::ptrdiff_t>(start),
+            channel.begin() + static_cast<std::ptrdiff_t>(end)
+        );
+    }
+
+    return slice;
 }
 
 DecodedAudioSamples make_audio_block(
@@ -1094,10 +1262,49 @@ void append_audio_segment(
             break;
         }
 
-        const int emitted_samples = static_cast<int>(std::min<std::int64_t>(
-            audio_block.samples_per_channel,
-            samples_remaining
-        ));
+        int sample_offset = 0;
+        int emitted_samples = audio_block.samples_per_channel;
+        if (segment_plan.has_source_trim()) {
+            const auto sample_time_base = Rational{
+                .numerator = 1,
+                .denominator = audio_block.sample_rate
+            };
+            const auto block_duration_us = audio_block.timestamp.duration_microseconds.value_or(
+                rescale_to_microseconds(audio_block.samples_per_channel, sample_time_base)
+            );
+            const auto block_start_us = audio_block.timestamp.start_microseconds;
+            const auto block_end_us = block_start_us + block_duration_us;
+            const auto overlap_start_us = std::max(block_start_us, segment_plan.source_trim_in_microseconds);
+            const auto overlap_end_us = segment_plan.source_trim_out_microseconds.has_value()
+                ? std::min(block_end_us, *segment_plan.source_trim_out_microseconds)
+                : block_end_us;
+            if (overlap_end_us <= overlap_start_us) {
+                continue;
+            }
+
+            sample_offset = static_cast<int>(av_rescale_q_rnd(
+                overlap_start_us - block_start_us,
+                AV_TIME_BASE_Q,
+                to_av_rational(sample_time_base),
+                AV_ROUND_UP
+            ));
+            const auto overlap_end_sample_index = av_rescale_q_rnd(
+                overlap_end_us - block_start_us,
+                AV_TIME_BASE_Q,
+                to_av_rational(sample_time_base),
+                AV_ROUND_DOWN
+            );
+            emitted_samples = static_cast<int>(std::max<std::int64_t>(
+                overlap_end_sample_index - sample_offset,
+                0
+            ));
+            emitted_samples = std::min(emitted_samples, audio_block.samples_per_channel - sample_offset);
+            if (emitted_samples <= 0) {
+                continue;
+            }
+        }
+
+        emitted_samples = static_cast<int>(std::min<std::int64_t>(emitted_samples, samples_remaining));
 
         output_audio_blocks.push_back(make_audio_block(
             output_audio_stream,
@@ -1106,7 +1313,9 @@ void append_audio_segment(
             next_output_audio_pts,
             emitted_samples,
             false,
-            audio_block.channel_samples
+            (sample_offset == 0 && emitted_samples == audio_block.samples_per_channel)
+                ? audio_block.channel_samples
+                : copy_audio_block_range(audio_block.channel_samples, sample_offset, emitted_samples)
         ));
         next_output_audio_pts += emitted_samples;
         samples_remaining -= emitted_samples;

@@ -512,6 +512,116 @@ int run_burn_in_assertion(
     return 0;
 }
 
+int run_trimmed_main_burn_in_assertion(
+    const std::filesystem::path &sample_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &plain_output_path,
+    const std::filesystem::path &burned_output_path
+) {
+    CollectingObserver observer{};
+    const EncodeJob plain_job{
+        .input = {
+            .main_source_path = sample_path,
+            .main_source_trim_in_us = 250000,
+            .main_source_trim_out_us = 1250000
+        },
+        .output = {
+            .output_path = plain_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJob burned_job{
+        .input = {
+            .main_source_path = sample_path,
+            .main_source_trim_in_us = 250000,
+            .main_source_trim_out_us = 1250000
+        },
+        .subtitles = utsure::core::job::EncodeJobSubtitleSettings{
+            .subtitle_path = subtitle_path,
+            .format_hint = "ass"
+        },
+        .output = {
+            .output_path = burned_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJobResult plain_job_result = EncodeJobRunner::run(plain_job);
+    if (!plain_job_result.succeeded()) {
+        return fail("Plain trimmed encode failed unexpectedly before subtitle comparison.");
+    }
+
+    const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!burned_job_result.succeeded()) {
+        return fail("Trimmed subtitle burn-in job failed unexpectedly.");
+    }
+
+    const auto &summary = *burned_job_result.encode_job_summary;
+    if (summary.job.input.main_source_trim_in_us != std::optional<std::int64_t>(250000) ||
+        summary.job.input.main_source_trim_out_us != std::optional<std::int64_t>(1250000) ||
+        summary.timeline_summary.output_duration_microseconds != 1000000 ||
+        summary.timeline_summary.output_video_frame_count != 24 ||
+        summary.subtitled_video_frame_count != 5 ||
+        summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
+        return fail("Unexpected trimmed subtitle burn-in summary state.");
+    }
+
+    const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);
+    const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
+    if (!plain_output_decode.succeeded() || !burned_output_decode.succeeded()) {
+        return fail("Trimmed subtitle burn-in output decode failed unexpectedly.");
+    }
+
+    if (assert_decoded_output(*plain_output_decode.decoded_media_source, 24U, true) != 0 ||
+        assert_decoded_output(*burned_output_decode.decoded_media_source, 24U, true) != 0) {
+        return 1;
+    }
+
+    if (!frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U)) {
+        return fail("Trimmed subtitle burn-in did not alter the first kept output frame.");
+    }
+
+    const auto report = format_encode_job_report(summary);
+    if (!contains_text(report, "job.input.main_trim.in_us=250000") ||
+        !contains_text(report, "job.input.main_trim.out_us=1250000")) {
+        return fail("The trimmed subtitle burn-in report did not include the trim range.");
+    }
+
+    const auto observer_result = assert_observer_flow(observer, 1);
+    if (observer_result != 0) {
+        return observer_result;
+    }
+
+    const auto runtime_result = assert_subtitle_runtime_visibility(
+        observer,
+        summary,
+        current_subtitle_bitmap_mode(),
+        current_subtitle_composition_mode()
+    );
+    if (runtime_result != 0) {
+        return runtime_result;
+    }
+
+    std::cout << build_validation_report(
+        summary,
+        *plain_output_decode.decoded_media_source,
+        *burned_output_decode.decoded_media_source
+    ) << '\n';
+    return 0;
+}
+
 int run_timeline_burn_in_assertion(
     const std::filesystem::path &intro_path,
     const std::filesystem::path &main_path,
@@ -852,6 +962,7 @@ int main(int argc, char *argv[]) {
             "[--render <subtitle>|--render-gradient <subtitle>|--render-unsupported-img <subtitle>|"
             "--h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--h265 <input> <subtitle> <plain-output> <burned-output>|"
+            "--trimmed-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--stress-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--timeline-h264 <intro> <main> <outro> <subtitle> <plain-output> <burned-output>|"
             "--timeline-full-h264 <intro> <main> <outro> <subtitle> <plain-output> <burned-output>]"
@@ -889,6 +1000,15 @@ int main(int argc, char *argv[]) {
             std::filesystem::path(argv[4]),
             std::filesystem::path(argv[5]),
             OutputVideoCodec::h265
+        );
+    }
+
+    if (mode == "--trimmed-h264" && argc == 6) {
+        return run_trimmed_main_burn_in_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4]),
+            std::filesystem::path(argv[5])
         );
     }
 

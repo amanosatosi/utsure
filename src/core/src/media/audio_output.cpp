@@ -133,6 +133,7 @@ ResolvedAudioOutputPlan resolve_audio_output_plan(const AudioOutputResolveReques
     const auto &source_audio = *request.main_source_audio_stream;
     const auto extension = normalized_extension(request.output_path);
     const bool copy_is_safe = request.segment_count == 1U &&
+        !request.main_source_trimmed &&
         !request.settings.sample_rate_hz.has_value() &&
         !request.settings.channel_count.has_value() &&
         container_supports_safe_audio_copy(extension, source_audio.codec_name);
@@ -161,6 +162,9 @@ ResolvedAudioOutputPlan resolve_audio_output_plan(const AudioOutputResolveReques
             if (request.segment_count != 1U) {
                 plan.requested_copy_blocker =
                     "Audio copy is only supported for single-segment jobs in the current streaming pipeline.";
+            } else if (request.main_source_trimmed) {
+                plan.requested_copy_blocker =
+                    "Audio copy is not supported when the main source is trimmed in the current streaming pipeline.";
             } else if (request.settings.sample_rate_hz.has_value() || request.settings.channel_count.has_value()) {
                 plan.requested_copy_blocker =
                     "Audio copy must keep the source sample rate and channel layout unchanged.";

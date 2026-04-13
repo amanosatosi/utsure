@@ -420,6 +420,22 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.job.encode.trim_main
+    COMMAND utsure_core_encode_job_tests --trim-main
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-trim-main.mp4"
+)
+
+add_test(
+    NAME utsure.core.job.encode.timeline.trim_main
+    COMMAND utsure_core_encode_job_tests --timeline-trim-main
+        "${UTSURE_TIMELINE_INTRO_FILE}"
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TIMELINE_OUTRO_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-timeline-trim-main.mp4"
+)
+
+add_test(
     NAME utsure.core.job.encode.streaming_memory_budget
     COMMAND utsure_core_encode_job_tests --streaming-memory-budget
         "${UTSURE_MEMORY_HEAVY_MAIN_FILE}"
@@ -500,6 +516,13 @@ add_test(
         "${UTSURE_SAMPLE_MEDIA_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/missing-subtitle.ass"
         "${UTSURE_TEST_MEDIA_DIR}/preflight-missing-subtitle.mp4"
+)
+
+add_test(
+    NAME utsure.core.job.preflight.invalid_trim
+    COMMAND utsure_core_encode_job_preflight_tests --invalid-trim
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/preflight-invalid-trim.mp4"
 )
 
 add_test(
@@ -689,6 +712,12 @@ add_test(
         "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
 )
 
+add_test(
+    NAME utsure.core.timeline.trimmed_main
+    COMMAND utsure_core_timeline_tests --trimmed-main
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+)
+
 add_executable(utsure_core_subtitle_renderer_tests
     subtitle_renderer_tests.cpp
 )
@@ -800,6 +829,15 @@ add_test(
         "${UTSURE_SUBTITLE_SAMPLE_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-plain-h265.mp4"
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-h265.mp4"
+)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.trimmed.h264
+    COMMAND utsure_core_subtitle_burn_in_tests --trimmed-h264
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/subtitle-trimmed-plain-h264.mp4"
+        "${UTSURE_TEST_MEDIA_DIR}/subtitle-trimmed-burn-h264.mp4"
 )
 
 add_test(

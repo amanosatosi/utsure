@@ -190,6 +190,8 @@ timeline::TimelineAssemblyRequest build_timeline_request(const EncodeJob &job) {
     return timeline::TimelineAssemblyRequest{
         .intro_source_path = job.input.intro_source_path,
         .main_source_path = job.input.main_source_path,
+        .main_source_trim_in_us = job.input.main_source_trim_in_us,
+        .main_source_trim_out_us = job.input.main_source_trim_out_us,
         .outro_source_path = job.input.outro_source_path,
         .subtitles_present = job.subtitles.has_value(),
         .subtitle_timing_mode = job.subtitles.has_value()

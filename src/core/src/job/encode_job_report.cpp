@@ -94,6 +94,16 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
         report << "job.input.intro=" << format_optional_path_leaf(encode_job_summary.job.input.intro_source_path) << '\n';
     }
     report << "job.input.main_source=" << format_path_leaf(encode_job_summary.job.input.main_source_path) << '\n';
+    report << "job.input.main_trim.in_us="
+           << (encode_job_summary.job.input.main_source_trim_in_us.has_value()
+                   ? std::to_string(*encode_job_summary.job.input.main_source_trim_in_us)
+                   : std::string("none"))
+           << '\n';
+    report << "job.input.main_trim.out_us="
+           << (encode_job_summary.job.input.main_source_trim_out_us.has_value()
+                   ? std::to_string(*encode_job_summary.job.input.main_source_trim_out_us)
+                   : std::string("none"))
+           << '\n';
     report << "job.input.outro.present=" << (encode_job_summary.job.input.outro_source_path.has_value() ? "yes" : "no") << '\n';
     if (encode_job_summary.job.input.outro_source_path.has_value()) {
         report << "job.input.outro=" << format_optional_path_leaf(encode_job_summary.job.input.outro_source_path) << '\n';

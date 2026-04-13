@@ -65,6 +65,8 @@ public:
 struct EncodeJobInput final {
     std::optional<std::filesystem::path> intro_source_path{};
     std::filesystem::path main_source_path{};
+    std::optional<std::int64_t> main_source_trim_in_us{};
+    std::optional<std::int64_t> main_source_trim_out_us{};
     std::optional<std::filesystem::path> outro_source_path{};
 };
 

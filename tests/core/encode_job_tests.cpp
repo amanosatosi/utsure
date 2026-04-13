@@ -783,6 +783,194 @@ int run_timeline_h264_assertion(
     return 0;
 }
 
+int run_trimmed_main_job_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &output_path
+) {
+    CollectingObserver observer{};
+    EncodeJob job{
+        .input = {
+            .main_source_path = main_path,
+            .main_source_trim_in_us = 500000,
+            .main_source_trim_out_us = 1500000
+        },
+        .output = {
+            .output_path = output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!job_result.succeeded()) {
+        const std::string error_message =
+            "The trimmed main-source encode job failed unexpectedly: " +
+            job_result.error->message +
+            " Hint: " +
+            job_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const MediaDecodeResult output_decode_result = MediaDecoder::decode(output_path);
+    if (!output_decode_result.succeeded()) {
+        const std::string error_message =
+            "The trimmed main-source output decode failed unexpectedly: " +
+            output_decode_result.error->message +
+            " Hint: " +
+            output_decode_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const auto &decoded_output = *output_decode_result.decoded_media_source;
+    if (assert_output_decode(decoded_output, 24U, true) != 0) {
+        return 1;
+    }
+
+    const auto &summary = *job_result.encode_job_summary;
+    if (summary.job.input.main_source_trim_in_us != std::optional<std::int64_t>(500000) ||
+        summary.job.input.main_source_trim_out_us != std::optional<std::int64_t>(1500000) ||
+        summary.timeline_summary.segments.size() != 1 ||
+        summary.timeline_summary.segments[0].kind != TimelineSegmentKind::main ||
+        summary.timeline_summary.segments[0].start_microseconds != 0 ||
+        summary.timeline_summary.segments[0].duration_microseconds != 1000000 ||
+        summary.timeline_summary.output_duration_microseconds != 1000000 ||
+        summary.timeline_summary.output_video_frame_count != 24 ||
+        summary.timeline_summary.output_audio_block_count != 47 ||
+        format_rational(summary.timeline_summary.output_frame_rate) != "24/1" ||
+        summary.encoded_media_summary.resolved_audio_output.resolved_mode != ResolvedAudioOutputMode::encode_aac) {
+        return fail("Unexpected trimmed main-source summary state.");
+    }
+
+    if (decoded_output.video_frames[0].timestamp.start_microseconds != 0 ||
+        decoded_output.video_frames[23].timestamp.start_microseconds != 958333) {
+        return fail("Unexpected trimmed main-source output video timestamps.");
+    }
+
+    const auto av_duration_delta = std::llabs(
+        decoded_video_end_microseconds(decoded_output) -
+        decoded_audio_end_microseconds(decoded_output)
+    );
+    if (av_duration_delta > 100000) {
+        return fail("The trimmed main-source output audio/video durations drifted too far apart.");
+    }
+
+    const auto trim_report = format_encode_job_report(summary);
+    if (!contains_text(trim_report, "job.input.main_trim.in_us=500000") ||
+        !contains_text(trim_report, "job.input.main_trim.out_us=1500000")) {
+        return fail("The trimmed main-source report did not include the selected trim range.");
+    }
+
+    if (assert_observer_flow(observer, 1, false) != 0) {
+        return 1;
+    }
+
+    if (assert_fine_encode_progress(observer, summary) != 0) {
+        return 1;
+    }
+
+    if (assert_runtime_visibility(observer, summary) != 0) {
+        return 1;
+    }
+
+    std::cout << build_validation_report(summary, decoded_output) << '\n';
+    return 0;
+}
+
+int run_timeline_trimmed_main_assertion(
+    const std::filesystem::path &intro_path,
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &outro_path,
+    const std::filesystem::path &output_path
+) {
+    CollectingObserver observer{};
+    EncodeJob job{
+        .input = {
+            .intro_source_path = intro_path,
+            .main_source_path = main_path,
+            .main_source_trim_in_us = 500000,
+            .main_source_trim_out_us = 1500000,
+            .outro_source_path = outro_path
+        },
+        .output = {
+            .output_path = output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!job_result.succeeded()) {
+        const std::string error_message =
+            "The intro/trimmed-main/outro encode job failed unexpectedly: " +
+            job_result.error->message +
+            " Hint: " +
+            job_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const MediaDecodeResult output_decode_result = MediaDecoder::decode(output_path);
+    if (!output_decode_result.succeeded()) {
+        const std::string error_message =
+            "The intro/trimmed-main/outro output decode failed unexpectedly: " +
+            output_decode_result.error->message +
+            " Hint: " +
+            output_decode_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const auto &decoded_output = *output_decode_result.decoded_media_source;
+    if (assert_output_decode(decoded_output, 72U, true) != 0) {
+        return 1;
+    }
+
+    const auto &summary = *job_result.encode_job_summary;
+    if (summary.timeline_summary.segments.size() != 3 ||
+        summary.timeline_summary.segments[0].kind != TimelineSegmentKind::intro ||
+        summary.timeline_summary.segments[1].kind != TimelineSegmentKind::main ||
+        summary.timeline_summary.segments[2].kind != TimelineSegmentKind::outro ||
+        summary.timeline_summary.segments[0].duration_microseconds != 1000000 ||
+        summary.timeline_summary.segments[1].start_microseconds != 1000000 ||
+        summary.timeline_summary.segments[1].duration_microseconds != 1000000 ||
+        summary.timeline_summary.segments[2].start_microseconds != 2000000 ||
+        summary.timeline_summary.output_duration_microseconds != 3000000 ||
+        summary.timeline_summary.output_video_frame_count != 72 ||
+        summary.timeline_summary.output_audio_block_count != 141) {
+        return fail("Unexpected intro/trimmed-main/outro summary state.");
+    }
+
+    if (decoded_output.video_frames[24].timestamp.start_microseconds != 1000000 ||
+        decoded_output.video_frames[48].timestamp.start_microseconds != 2000000) {
+        return fail("Unexpected intro/trimmed-main/outro output boundary timestamps.");
+    }
+
+    if (assert_observer_flow(observer, 3, false) != 0) {
+        return 1;
+    }
+
+    if (assert_fine_encode_progress(observer, summary) != 0) {
+        return 1;
+    }
+
+    if (assert_runtime_visibility(observer, summary) != 0) {
+        return 1;
+    }
+
+    std::cout << build_validation_report(summary, decoded_output) << '\n';
+    return 0;
+}
+
 int run_streaming_memory_budget_assertion(
     const std::filesystem::path &main_path,
     const std::filesystem::path &output_path
@@ -1341,6 +1529,8 @@ int main(int argc, char *argv[]) {
             "[--threading-modes] | "
             "[--h264|--h265] <input> <output> | "
             "[--timeline-h264] <intro> <main> <outro> <output> | "
+            "[--trim-main] <input> <output> | "
+            "[--timeline-trim-main] <intro> <main> <outro> <output> | "
             "[--streaming-memory-budget] <input> <output> | "
             "[--disable-audio] <input> <output> | "
             "[--copy-audio] <input> <output> | "
@@ -1376,6 +1566,22 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--timeline-h264" && argc == 6) {
         return run_timeline_h264_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4]),
+            std::filesystem::path(argv[5])
+        );
+    }
+
+    if (mode == "--trim-main" && argc == 4) {
+        return run_trimmed_main_job_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
+        );
+    }
+
+    if (mode == "--timeline-trim-main" && argc == 6) {
+        return run_timeline_trimmed_main_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3]),
             std::filesystem::path(argv[4]),

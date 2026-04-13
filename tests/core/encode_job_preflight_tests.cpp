@@ -58,6 +58,16 @@ bool issues_contain(
     return false;
 }
 
+bool issues_contain_text(const EncodeJobPreflightResult &result, std::string_view needle) {
+    for (const auto &issue : result.issues) {
+        if (contains_text(issue.message, needle) || contains_text(issue.actionable_hint, needle)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 EncodeJob make_base_job(
     const std::filesystem::path &main_source_path,
     const std::filesystem::path &output_path
@@ -204,6 +214,40 @@ int run_missing_subtitle_assertion(
     }
 
     std::cout << "subtitle_validation=failed\n";
+    return 0;
+}
+
+int run_invalid_trim_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &output_path
+) {
+    remove_file_if_present(output_path);
+
+    auto job = make_base_job(main_path, output_path);
+    job.input.main_source_trim_in_us = 1500000;
+    job.input.main_source_trim_out_us = 500000;
+
+    const auto result = EncodeJobPreflight::inspect(job);
+    if (result.can_start_encode()) {
+        return fail("An invalid-trim preflight job passed unexpectedly.");
+    }
+
+    if (!issues_contain(
+            result,
+            EncodeJobPreflightIssueCode::timeline_validation_failed,
+            EncodeJobPreflightIssueSeverity::error)) {
+        return fail("The invalid-trim preflight job did not report the expected timeline error.");
+    }
+
+    if (!issues_contain_text(result, "trim")) {
+        return fail("The invalid-trim preflight job did not mention the trim range explicitly.");
+    }
+
+    if (result.preview_summary.has_value()) {
+        return fail("An invalid-trim preflight job unexpectedly produced a preview summary.");
+    }
+
+    std::cout << "trim_validation=failed\n";
     return 0;
 }
 
@@ -372,6 +416,7 @@ int main(int argc, char *argv[]) {
             "[--valid-preview <intro> <main> <outro> <subtitle> <output>|"
             "--mismatched-fps-preview <main> <bad-intro> <output>|"
             "--missing-subtitle <main> <missing-subtitle> <output>|"
+            "--invalid-trim <main> <output>|"
             "--overwrite-warning <main> <output>|"
             "--output-conflicts-main <main>|"
             "--streaming-memory-budget <main> <output>|"
@@ -405,6 +450,13 @@ int main(int argc, char *argv[]) {
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3]),
             std::filesystem::path(argv[4])
+        );
+    }
+
+    if (mode == "--invalid-trim" && argc == 4) {
+        return run_invalid_trim_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
         );
     }
 

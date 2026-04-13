@@ -26,6 +26,8 @@ enum class SubtitleTimingMode : std::uint8_t {
 struct TimelineAssemblyRequest final {
     std::optional<std::filesystem::path> intro_source_path{};
     std::filesystem::path main_source_path{};
+    std::optional<std::int64_t> main_source_trim_in_us{};
+    std::optional<std::int64_t> main_source_trim_out_us{};
     std::optional<std::filesystem::path> outro_source_path{};
     bool subtitles_present{false};
     SubtitleTimingMode subtitle_timing_mode{SubtitleTimingMode::main_segment_only};
@@ -35,7 +37,13 @@ struct TimelineSegmentPlan final {
     TimelineSegmentKind kind{TimelineSegmentKind::main};
     std::filesystem::path source_path{};
     media::MediaSourceInfo inspected_source_info{};
+    std::int64_t source_trim_in_microseconds{0};
+    std::optional<std::int64_t> source_trim_out_microseconds{};
     bool subtitles_enabled{false};
+
+    [[nodiscard]] bool has_source_trim() const noexcept {
+        return source_trim_in_microseconds > 0 || source_trim_out_microseconds.has_value();
+    }
 };
 
 struct TimelinePlan final {

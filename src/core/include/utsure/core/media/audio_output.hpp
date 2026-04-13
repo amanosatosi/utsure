@@ -55,6 +55,7 @@ struct AudioOutputResolveRequest final {
     std::filesystem::path output_path{};
     AudioEncodeSettings settings{};
     std::size_t segment_count{0};
+    bool main_source_trimmed{false};
     const AudioStreamInfo *main_source_audio_stream{nullptr};
 };
 
