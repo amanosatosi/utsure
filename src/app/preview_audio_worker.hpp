@@ -6,6 +6,7 @@
 #include <QString>
 
 #include <memory>
+#include <optional>
 
 namespace utsure::core::media {
 class AudioPreviewSession;
@@ -15,6 +16,8 @@ struct PreviewAudioChunkRequest final {
     quint64 request_token{0};
     QString source_path{};
     qint64 requested_time_us{0};
+    qint64 trim_in_us{0};
+    std::optional<qint64> trim_out_us{};
     bool reset_session{true};
     int sample_rate{0};
     int channel_count{0};

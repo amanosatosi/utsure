@@ -1,6 +1,7 @@
 #include "preview_audio_worker.hpp"
 
 #include "utsure/core/media/media_decoder.hpp"
+#include "utsure/core/media/preview_trim.hpp"
 
 #include <QFile>
 #include <QLoggingCategory>
@@ -158,6 +159,10 @@ PreviewAudioWorker::~PreviewAudioWorker() = default;
 void PreviewAudioWorker::decode_chunk(const PreviewAudioChunkRequest &request) {
     try {
         const QString normalized_source_path = request.source_path.trimmed();
+        const auto trim_range = utsure::core::media::normalize_preview_trim_range(
+            request.trim_in_us,
+            request.trim_out_us
+        );
         if (normalized_source_path.isEmpty()) {
             emit audio_chunk_failed(
                 request.request_token,
@@ -225,12 +230,19 @@ void PreviewAudioWorker::decode_chunk(const PreviewAudioChunkRequest &request) {
         }
 
         const auto decode_result =
-            (request.reset_session || session_context_changed)
-                ? audio_session_->seek_and_decode_window_at_time(
-                    request.requested_time_us,
-                    request.minimum_duration_us
-                )
-                : audio_session_->decode_next_window(request.minimum_duration_us);
+            ([&]() {
+                qint64 decode_request_time_us = std::max(request.requested_time_us, trim_range.trim_in_microseconds);
+                if (trim_range.trim_out_microseconds.has_value()) {
+                    decode_request_time_us = std::min(decode_request_time_us, *trim_range.trim_out_microseconds);
+                }
+
+                return (request.reset_session || session_context_changed)
+                    ? audio_session_->seek_and_decode_window_at_time(
+                        decode_request_time_us,
+                        request.minimum_duration_us
+                    )
+                    : audio_session_->decode_next_window(request.minimum_duration_us);
+            })();
         if (!decode_result.succeeded()) {
             emit audio_chunk_failed(
                 request.request_token,
@@ -242,32 +254,55 @@ void PreviewAudioWorker::decode_chunk(const PreviewAudioChunkRequest &request) {
             return;
         }
 
-        const qint64 chunk_start_us =
-            !decode_result.audio_blocks->empty()
-                ? decode_result.audio_blocks->front().timestamp.start_microseconds
+        auto audio_blocks = std::move(*decode_result.audio_blocks);
+        const qint64 decoded_chunk_start_us =
+            !audio_blocks.empty()
+                ? audio_blocks.front().timestamp.start_microseconds
                 : request.requested_time_us;
-        const qint64 chunk_end_us =
-            !decode_result.audio_blocks->empty()
-                ? decode_result.audio_blocks->back().timestamp.start_microseconds +
-                    decode_result.audio_blocks->back().timestamp.duration_microseconds.value_or(0)
-                : chunk_start_us;
-        const QByteArray pcm_bytes = interleave_audio_blocks(*decode_result.audio_blocks, request.sample_format);
+        const qint64 decoded_chunk_end_us =
+            !audio_blocks.empty()
+                ? audio_blocks.back().timestamp.start_microseconds +
+                    audio_blocks.back().timestamp.duration_microseconds.value_or(0)
+                : decoded_chunk_start_us;
+        auto trimmed_audio_blocks = utsure::core::media::trim_preview_audio_blocks(
+            std::move(audio_blocks),
+            trim_range
+        );
+        const qint64 chunk_start_us =
+            !trimmed_audio_blocks.empty()
+                ? trimmed_audio_blocks.front().timestamp.start_microseconds
+                : decoded_chunk_start_us;
+        qint64 chunk_end_us =
+            !trimmed_audio_blocks.empty()
+                ? trimmed_audio_blocks.back().timestamp.start_microseconds +
+                    trimmed_audio_blocks.back().timestamp.duration_microseconds.value_or(0)
+                : decoded_chunk_end_us;
+        bool exhausted = decode_result.exhausted;
+        if (trim_range.trim_out_microseconds.has_value() &&
+            (request.requested_time_us >= *trim_range.trim_out_microseconds ||
+             decoded_chunk_end_us >= *trim_range.trim_out_microseconds)) {
+            chunk_end_us = std::min(chunk_end_us, *trim_range.trim_out_microseconds);
+            exhausted = true;
+        }
+        const QByteArray pcm_bytes = interleave_audio_blocks(trimmed_audio_blocks, request.sample_format);
 
         qCInfo(previewAudioWorkerLog).noquote()
-            << QString("decode_chunk token=%1 requested=%2 start=%3 end=%4 bytes=%5 exhausted=%6")
+            << QString("decode_chunk token=%1 requested=%2 trim_in=%3 trim_out=%4 start=%5 end=%6 bytes=%7 exhausted=%8")
                    .arg(request.request_token)
                    .arg(request.requested_time_us)
+                   .arg(trim_range.trim_in_microseconds)
+                   .arg(trim_range.trim_out_microseconds.has_value() ? QString::number(*trim_range.trim_out_microseconds) : QString("none"))
                    .arg(chunk_start_us)
                    .arg(chunk_end_us)
                    .arg(pcm_bytes.size())
-                   .arg(decode_result.exhausted ? "true" : "false");
+                   .arg(exhausted ? "true" : "false");
 
         emit audio_chunk_ready(
             request.request_token,
             chunk_start_us,
             chunk_end_us,
             pcm_bytes,
-            decode_result.exhausted
+            exhausted
         );
     } catch (const std::exception &exception) {
         emit audio_chunk_failed(request.request_token, to_qstring(exception.what()));

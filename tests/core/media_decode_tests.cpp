@@ -1,6 +1,7 @@
 #include "utsure/core/media/audio_stream_selection.hpp"
 #include "utsure/core/media/media_decode_report.hpp"
 #include "utsure/core/media/media_decoder.hpp"
+#include "utsure/core/media/preview_trim.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -17,9 +18,15 @@ using utsure::core::media::MediaDecodeResult;
 using utsure::core::media::MediaDecoder;
 using utsure::core::media::NormalizedAudioSampleFormat;
 using utsure::core::media::NormalizedVideoPixelFormat;
+using utsure::core::media::PreviewTrimRange;
 using utsure::core::media::TimestampOrigin;
 using utsure::core::media::audio_stream_has_explicit_japanese_metadata;
 using utsure::core::media::format_media_decode_report;
+using utsure::core::media::normalize_preview_trim_range;
+using utsure::core::media::select_trimmed_preview_frame;
+using utsure::core::media::trim_preview_audio_blocks;
+using utsure::core::media::trim_preview_video_frames;
+using utsure::core::media::trimmed_preview_frames_cover_time;
 
 constexpr std::string_view kExpectedSampleReport =
     "input.name=inspection-sample.avi\n"
@@ -97,6 +104,10 @@ constexpr std::string_view kExpectedSampleReport =
 int fail(std::string_view message) {
     std::cerr << message << '\n';
     return 1;
+}
+
+std::int64_t audio_block_end_us(const utsure::core::media::DecodedAudioSamples &audio_block) {
+    return audio_block.timestamp.start_microseconds + audio_block.timestamp.duration_microseconds.value_or(0);
 }
 
 int assert_decoded_structure(const DecodedMediaSource &decoded_media_source) {
@@ -408,6 +419,162 @@ int run_preview_audio_session_assertion(const std::filesystem::path &sample_path
     return 0;
 }
 
+int run_preview_video_trim_window_assertion(const std::filesystem::path &sample_path) {
+    DecodeNormalizationPolicy normalization_policy{};
+    normalization_policy.video_max_width = 320;
+    normalization_policy.video_max_height = 180;
+
+    auto session_result = MediaDecoder::create_video_preview_session(sample_path, normalization_policy);
+    if (!session_result.succeeded()) {
+        const std::string error_message =
+            "Trimmed preview video session creation failed unexpectedly: " +
+            session_result.error->message +
+            " Hint: " +
+            session_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    constexpr std::int64_t kTrimInUs = 500000;
+    constexpr std::int64_t kTrimOutUs = 1500000;
+    const PreviewTrimRange trim_range = normalize_preview_trim_range(kTrimInUs, kTrimOutUs);
+
+    auto trim_in_window_result = session_result.session->seek_and_decode_window_at_time(kTrimInUs, 8);
+    if (!trim_in_window_result.succeeded()) {
+        const std::string error_message =
+            "The trimmed preview video seek at trim-in failed unexpectedly: " +
+            trim_in_window_result.error->message +
+            " Hint: " +
+            trim_in_window_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    auto trimmed_trim_in_window = trim_preview_video_frames(
+        std::move(*trim_in_window_result.video_frames),
+        trim_range
+    );
+    if (trimmed_trim_in_window.empty()) {
+        return fail("The trimmed preview video seek at trim-in did not preserve any presentable frames.");
+    }
+
+    for (const auto &frame : trimmed_trim_in_window) {
+        if (frame.timestamp.start_microseconds < kTrimInUs ||
+            frame.timestamp.start_microseconds >= kTrimOutUs) {
+            return fail("The trimmed preview video window still exposed a frame outside the trim range.");
+        }
+    }
+
+    if (!trimmed_preview_frames_cover_time(trimmed_trim_in_window, kTrimInUs, trim_range)) {
+        return fail("The trimmed preview video cache did not cover the trim-in boundary.");
+    }
+
+    const auto *frame_at_trim_in = select_trimmed_preview_frame(trimmed_trim_in_window, kTrimInUs, trim_range);
+    if (frame_at_trim_in == nullptr || frame_at_trim_in->timestamp.start_microseconds < kTrimInUs) {
+        return fail("The trimmed preview video selection still chose a frame before trim-in.");
+    }
+
+    auto trim_out_window_result = session_result.session->seek_and_decode_window_at_time(kTrimOutUs, 8);
+    if (!trim_out_window_result.succeeded()) {
+        const std::string error_message =
+            "The trimmed preview video seek at trim-out failed unexpectedly: " +
+            trim_out_window_result.error->message +
+            " Hint: " +
+            trim_out_window_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    auto trimmed_trim_out_window = trim_preview_video_frames(
+        std::move(*trim_out_window_result.video_frames),
+        trim_range
+    );
+    const auto *frame_at_trim_out = select_trimmed_preview_frame(trimmed_trim_out_window, kTrimOutUs, trim_range);
+    if (frame_at_trim_out == nullptr || frame_at_trim_out->timestamp.start_microseconds >= kTrimOutUs) {
+        return fail("The trimmed preview video selection did not stay inside trim-out.");
+    }
+
+    std::cout << "trimmed_preview_video.first_start_us=" << frame_at_trim_in->timestamp.start_microseconds << '\n';
+    std::cout << "trimmed_preview_video.last_boundary_start_us=" << frame_at_trim_out->timestamp.start_microseconds << '\n';
+    return 0;
+}
+
+int run_preview_audio_trim_window_assertion(const std::filesystem::path &sample_path) {
+    DecodeNormalizationPolicy normalization_policy{};
+    normalization_policy.audio_block_samples = 1024;
+
+    auto session_result = MediaDecoder::create_audio_preview_session(
+        sample_path,
+        AudioPreviewOutputConfig{
+            .sample_rate_hz = 44100,
+            .channel_count = 2
+        },
+        normalization_policy
+    );
+    if (!session_result.succeeded()) {
+        const std::string error_message =
+            "Trimmed preview audio session creation failed unexpectedly: " +
+            session_result.error->message +
+            " Hint: " +
+            session_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    constexpr std::int64_t kTrimInUs = 500000;
+    constexpr std::int64_t kTrimOutUs = 1500000;
+    constexpr std::int64_t kChunkDurationUs = 250000;
+    const PreviewTrimRange trim_range = normalize_preview_trim_range(kTrimInUs, kTrimOutUs);
+
+    auto trim_in_chunk_result = session_result.session->seek_and_decode_window_at_time(kTrimInUs, kChunkDurationUs);
+    if (!trim_in_chunk_result.succeeded()) {
+        const std::string error_message =
+            "The trimmed preview audio seek at trim-in failed unexpectedly: " +
+            trim_in_chunk_result.error->message +
+            " Hint: " +
+            trim_in_chunk_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    auto trimmed_trim_in_chunk = trim_preview_audio_blocks(
+        std::move(*trim_in_chunk_result.audio_blocks),
+        trim_range
+    );
+    if (trimmed_trim_in_chunk.empty()) {
+        return fail("The trimmed preview audio seek at trim-in did not preserve any audible samples.");
+    }
+
+    if (trimmed_trim_in_chunk.front().timestamp.start_microseconds < kTrimInUs) {
+        return fail("The trimmed preview audio chunk still started before trim-in.");
+    }
+
+    auto trim_out_chunk_result = session_result.session->seek_and_decode_window_at_time(1400000, kChunkDurationUs);
+    if (!trim_out_chunk_result.succeeded()) {
+        const std::string error_message =
+            "The trimmed preview audio seek near trim-out failed unexpectedly: " +
+            trim_out_chunk_result.error->message +
+            " Hint: " +
+            trim_out_chunk_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    auto trimmed_trim_out_chunk = trim_preview_audio_blocks(
+        std::move(*trim_out_chunk_result.audio_blocks),
+        trim_range
+    );
+    if (trimmed_trim_out_chunk.empty()) {
+        return fail("The trimmed preview audio seek near trim-out did not preserve any audible samples.");
+    }
+
+    if (audio_block_end_us(trimmed_trim_out_chunk.back()) > kTrimOutUs) {
+        return fail("The trimmed preview audio chunk still extended beyond trim-out.");
+    }
+
+    std::cout << "trimmed_preview_audio.first_start_us="
+              << trimmed_trim_in_chunk.front().timestamp.start_microseconds
+              << '\n';
+    std::cout << "trimmed_preview_audio.last_end_us="
+              << audio_block_end_us(trimmed_trim_out_chunk.back())
+              << '\n';
+    return 0;
+}
+
 int run_multi_audio_selected_assertion(const std::filesystem::path &sample_path) {
     const MediaDecodeResult result = MediaDecoder::decode(sample_path);
     if (!result.succeeded()) {
@@ -445,7 +612,8 @@ int main(int argc, char *argv[]) {
     if (argc != 3) {
         return fail(
             "Usage: utsure_core_media_decode_tests "
-            "[--sample|--missing|--preview-session-sequential|--preview-audio-session|--multi-audio-selected] <path>"
+            "[--sample|--missing|--preview-session-sequential|--preview-audio-session|"
+            "--preview-video-trim-window|--preview-audio-trim-window|--multi-audio-selected] <path>"
         );
     }
 
@@ -468,12 +636,20 @@ int main(int argc, char *argv[]) {
         return run_preview_audio_session_assertion(path);
     }
 
+    if (mode == "--preview-video-trim-window") {
+        return run_preview_video_trim_window_assertion(path);
+    }
+
+    if (mode == "--preview-audio-trim-window") {
+        return run_preview_audio_trim_window_assertion(path);
+    }
+
     if (mode == "--multi-audio-selected") {
         return run_multi_audio_selected_assertion(path);
     }
 
     return fail(
-        "Unknown mode. Use --sample, --missing, --preview-session-sequential, --preview-audio-session, or "
-        "--multi-audio-selected."
+        "Unknown mode. Use --sample, --missing, --preview-session-sequential, --preview-audio-session, "
+        "--preview-video-trim-window, --preview-audio-trim-window, or --multi-audio-selected."
     );
 }

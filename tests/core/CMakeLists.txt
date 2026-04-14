@@ -373,6 +373,16 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.media.preview_video_trim_window
+    COMMAND utsure_core_media_decode_tests --preview-video-trim-window "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
+)
+
+add_test(
+    NAME utsure.core.media.preview_audio_trim_window
+    COMMAND utsure_core_media_decode_tests --preview-audio-trim-window "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
+)
+
+add_test(
     NAME utsure.core.media.decode.multi_audio_selected
     COMMAND utsure_core_media_decode_tests --multi-audio-selected "${UTSURE_MULTI_AUDIO_JAPANESE_FILE}"
 )

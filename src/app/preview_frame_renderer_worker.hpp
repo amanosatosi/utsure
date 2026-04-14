@@ -22,6 +22,8 @@ struct PreviewFrameRenderRequest final {
     qint64 enqueued_steady_us{0};
     QString source_path{};
     qint64 requested_time_us{0};
+    qint64 trim_in_us{0};
+    std::optional<qint64> trim_out_us{};
     bool playback_active{false};
     bool subtitle_enabled{false};
     QString subtitle_path{};
@@ -62,7 +64,6 @@ private:
         const utsure::core::media::DecodedVideoFrame &preview_frame
     );
     [[nodiscard]] bool cached_preview_window_covers(const QString &source_path, qint64 requested_time_us) const;
-    [[nodiscard]] const utsure::core::media::DecodedVideoFrame *select_cached_preview_frame(qint64 requested_time_us) const;
     [[nodiscard]] bool should_decode_next_preview_window(const PreviewFrameRenderRequest &request) const;
     [[nodiscard]] bool should_start_sequential_prefetch(const PreviewFrameRenderRequest &request) const;
     [[nodiscard]] bool request_is_superseded(const PreviewFrameRenderRequest &request) const;
@@ -72,6 +73,8 @@ private:
     std::unique_ptr<utsure::core::media::VideoPreviewSession> preview_session_{};
     std::unique_ptr<utsure::core::media::VideoPreviewSession> prefetch_session_{};
     QString prefetch_session_source_path_{};
+    qint64 cached_trim_in_us_{0};
+    std::optional<qint64> cached_trim_out_us_{};
     quint64 preview_cache_generation_{0};
     bool prefetch_in_progress_{false};
     qint64 prefetch_window_start_us_{-1};

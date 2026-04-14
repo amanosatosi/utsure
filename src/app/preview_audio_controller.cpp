@@ -172,7 +172,14 @@ bool PreviewAudioController::start_preview(const PreviewAudioPlaybackRequest &re
     sample_format_ = audio_format_.sampleFormat();
     block_samples_ = std::max(request.block_samples, 1);
     chunk_duration_us_ = std::max<qint64>(request.chunk_duration_us, 100000);
-    playback_anchor_time_us_ = std::max<qint64>(request.requested_time_us, 0);
+    trim_in_us_ = std::max<qint64>(request.trim_in_us, 0);
+    trim_out_us_ = request.trim_out_us.has_value()
+        ? std::optional<qint64>(std::max(*request.trim_out_us, trim_in_us_))
+        : std::nullopt;
+    playback_anchor_time_us_ = std::max<qint64>(request.requested_time_us, trim_in_us_);
+    if (trim_out_us_.has_value()) {
+        playback_anchor_time_us_ = std::min(playback_anchor_time_us_, *trim_out_us_);
+    }
     next_chunk_time_us_ = playback_anchor_time_us_;
     target_buffer_bytes_ = std::max<qint64>(bytes_for_duration_or_default(audio_format_, 350000), 1);
     low_watermark_bytes_ = std::max<qint64>(bytes_for_duration_or_default(audio_format_, 125000), 1);
@@ -225,7 +232,12 @@ qint64 PreviewAudioController::current_playback_time_us() const noexcept {
     // has processed since start(). Subtracting bytesFree()-derived queue time
     // makes the preview video chase an earlier clock and visibly lag audio.
     const qint64 processed_audio_us = std::max<qint64>(audio_sink_->processedUSecs(), 0);
-    return playback_anchor_time_us_ + processed_audio_us;
+    const qint64 current_time_us = playback_anchor_time_us_ + processed_audio_us;
+    if (trim_out_us_.has_value()) {
+        return std::min(current_time_us, *trim_out_us_);
+    }
+
+    return current_time_us;
 }
 
 std::optional<PreviewAudioChunkRequest> PreviewAudioController::build_chunk_request(const bool reset_session) const {
@@ -241,6 +253,8 @@ std::optional<PreviewAudioChunkRequest> PreviewAudioController::build_chunk_requ
         .request_token = request_token_,
         .source_path = source_path_,
         .requested_time_us = next_chunk_time_us_,
+        .trim_in_us = trim_in_us_,
+        .trim_out_us = trim_out_us_,
         .reset_session = reset_session,
         .sample_rate = sample_rate_,
         .channel_count = channel_count_,
@@ -379,6 +393,8 @@ void PreviewAudioController::reset_playback_state(const bool clear_worker_sessio
     end_of_stream_ = false;
     playback_anchor_time_us_ = 0;
     next_chunk_time_us_ = 0;
+    trim_in_us_ = 0;
+    trim_out_us_.reset();
     source_path_.clear();
     sample_rate_ = 0;
     channel_count_ = 0;
@@ -424,6 +440,10 @@ void PreviewAudioController::handle_audio_chunk_ready(
 
     end_of_stream_ = exhausted;
     next_chunk_time_us_ = std::max(chunk_end_us, chunk_start_us);
+    if (trim_out_us_.has_value()) {
+        next_chunk_time_us_ = std::min(next_chunk_time_us_, *trim_out_us_);
+        end_of_stream_ = end_of_stream_ || next_chunk_time_us_ >= *trim_out_us_;
+    }
 
     if (!pcm_bytes.isEmpty() && audio_buffer_device_ != nullptr) {
         if (!audio_sink_started_) {

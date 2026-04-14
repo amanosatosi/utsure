@@ -18,6 +18,7 @@ add_library(utsure_encoder_core STATIC
     src/media/media_inspector.cpp
     src/media/media_inspection_report.cpp
     src/media/source_import_paths.cpp
+    src/media/preview_trim.cpp
     src/media/streaming_transcode_pipeline.cpp
     src/subtitles/subtitle_bitmap_compositor.cpp
     src/subtitles/subtitle_burn_in.cpp

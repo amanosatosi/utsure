@@ -17,6 +17,8 @@ class QTimer;
 struct PreviewAudioPlaybackRequest final {
     QString source_path{};
     qint64 requested_time_us{0};
+    qint64 trim_in_us{0};
+    std::optional<qint64> trim_out_us{};
     utsure::core::media::AudioStreamInfo source_audio_stream_info{};
     qint64 chunk_duration_us{250000};
     int block_samples{1024};
@@ -75,6 +77,8 @@ private:
     bool end_of_stream_{false};
     qint64 playback_anchor_time_us_{0};
     qint64 next_chunk_time_us_{0};
+    qint64 trim_in_us_{0};
+    std::optional<qint64> trim_out_us_{};
     qint64 chunk_duration_us_{250000};
     qint64 low_watermark_bytes_{0};
     qint64 target_buffer_bytes_{0};

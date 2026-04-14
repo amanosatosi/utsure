@@ -185,6 +185,7 @@ private:
     void apply_automatic_subtitle_selection(int job_index, bool force_auto_mode, QString *decision_summary = nullptr);
     void request_selected_job_preview_frame();
     void clear_preview_surface();
+    void reset_preview_pipeline_for_trim_change();
     void start_preview_playback();
     void pause_preview_playback();
     void stop_preview_playback();
@@ -265,6 +266,8 @@ private:
     int preview_requested_job_index_{-1};
     qint64 preview_requested_time_us_{-1};
     qint64 preview_next_playback_time_us_{-1};
+    qint64 preview_requested_trim_in_us_{0};
+    qint64 preview_requested_trim_out_us_{-1};
     QString preview_requested_source_path_{};
     QString preview_requested_subtitle_path_{};
     QString preview_requested_subtitle_format_hint_{"auto"};
