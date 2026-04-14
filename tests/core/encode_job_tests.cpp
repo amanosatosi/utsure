@@ -74,6 +74,14 @@ bool rational_is_positive(const Rational &value) {
     return value.is_valid() && value.numerator > 0 && value.denominator > 0;
 }
 
+bool rationals_equal(const Rational &left, const Rational &right) {
+    if (!left.is_valid() || !right.is_valid()) {
+        return false;
+    }
+
+    return (left.numerator * right.denominator) == (right.numerator * left.denominator);
+}
+
 bool rational_has_finer_precision(const Rational &left, const Rational &right) {
     if (!rational_is_positive(left)) {
         return false;
