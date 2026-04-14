@@ -254,7 +254,7 @@ void PreviewAudioWorker::decode_chunk(const PreviewAudioChunkRequest &request) {
             return;
         }
 
-        auto audio_blocks = std::move(*decode_result.audio_blocks);
+        auto audio_blocks = *decode_result.audio_blocks;
         const qint64 decoded_chunk_start_us =
             !audio_blocks.empty()
                 ? audio_blocks.front().timestamp.start_microseconds

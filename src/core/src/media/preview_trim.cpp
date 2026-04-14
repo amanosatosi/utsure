@@ -1,7 +1,8 @@
 #include "utsure/core/media/preview_trim.hpp"
 
+extern "C" {
 #include <libavutil/avutil.h>
-#include <libavutil/rational.h>
+}
 
 #include <algorithm>
 #include <cstddef>
@@ -12,7 +13,10 @@ namespace utsure::core::media {
 namespace {
 
 AVRational to_av_rational(const Rational &value) {
-    return AVRational{value.numerator, value.denominator};
+    return AVRational{
+        .num = static_cast<int>(value.numerator),
+        .den = static_cast<int>(value.denominator)
+    };
 }
 
 std::int64_t frame_coverage_end_us(const DecodedVideoFrame &frame) {
