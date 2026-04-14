@@ -21,6 +21,7 @@ using utsure::core::media::NormalizedVideoPixelFormat;
 using utsure::core::media::PreviewTrimRange;
 using utsure::core::media::TimestampOrigin;
 using utsure::core::media::audio_stream_has_explicit_japanese_metadata;
+using utsure::core::media::effective_trimmed_preview_frame_time;
 using utsure::core::media::format_media_decode_report;
 using utsure::core::media::normalize_preview_trim_range;
 using utsure::core::media::select_trimmed_preview_frame;
@@ -472,7 +473,12 @@ int run_preview_video_trim_window_assertion(const std::filesystem::path &sample_
         return fail("The trimmed preview video selection still chose a frame before trim-in.");
     }
 
-    auto trim_out_window_result = session_result.session->seek_and_decode_window_at_time(kTrimOutUs, 8);
+    const auto trim_out_decode_request_us = effective_trimmed_preview_frame_time(kTrimOutUs, trim_range);
+    if (trim_out_decode_request_us >= kTrimOutUs) {
+        return fail("The trimmed preview video trim-out request did not clamp to the last presentable instant.");
+    }
+
+    auto trim_out_window_result = session_result.session->seek_and_decode_window_at_time(trim_out_decode_request_us, 8);
     if (!trim_out_window_result.succeeded()) {
         const std::string error_message =
             "The trimmed preview video seek at trim-out failed unexpectedly: " +
@@ -486,6 +492,9 @@ int run_preview_video_trim_window_assertion(const std::filesystem::path &sample_
         std::move(*trim_out_window_result.video_frames),
         trim_range
     );
+    if (!trimmed_preview_frames_cover_time(trimmed_trim_out_window, kTrimOutUs, trim_range)) {
+        return fail("The trimmed preview video cache did not cover trim-out with the runtime decode request.");
+    }
     const auto *frame_at_trim_out = select_trimmed_preview_frame(trimmed_trim_out_window, kTrimOutUs, trim_range);
     if (frame_at_trim_out == nullptr || frame_at_trim_out->timestamp.start_microseconds >= kTrimOutUs) {
         return fail("The trimmed preview video selection did not stay inside trim-out.");
