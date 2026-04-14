@@ -907,6 +907,38 @@ int run_trimmed_main_job_assertion(
     return 0;
 }
 
+int run_trimmed_main_sar_seek_repro_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &output_path
+) {
+    const MediaInspectionResult inspection_result = MediaInspector::inspect(main_path);
+    if (!inspection_result.succeeded()) {
+        return fail("The trimmed-main SAR repro input failed inspection.");
+    }
+
+    const MediaDecodeResult decode_result = MediaDecoder::decode(main_path);
+    if (!decode_result.succeeded()) {
+        return fail("The trimmed-main SAR repro input failed decode.");
+    }
+
+    if (!inspection_result.media_source_info->primary_video_stream.has_value() ||
+        decode_result.decoded_media_source->video_frames.empty()) {
+        return fail("The trimmed-main SAR repro input did not expose a usable video stream.");
+    }
+
+    const auto inspected_sar = inspection_result.media_source_info->primary_video_stream->sample_aspect_ratio;
+    const auto decoded_sar = decode_result.decoded_media_source->video_frames.front().sample_aspect_ratio;
+    if (rationals_equal(inspected_sar, decoded_sar)) {
+        return fail(
+            "The trimmed-main SAR repro input did not preserve the expected inspected-vs-decoded SAR disagreement."
+        );
+    }
+
+    std::cout << "trim.sar_repro.input.inspected_sar=" << format_rational(inspected_sar) << '\n';
+    std::cout << "trim.sar_repro.input.decoded_sar=" << format_rational(decoded_sar) << '\n';
+    return run_trimmed_main_job_assertion(main_path, output_path);
+}
+
 int run_timeline_trimmed_main_assertion(
     const std::filesystem::path &intro_path,
     const std::filesystem::path &main_path,
@@ -1558,6 +1590,7 @@ int main(int argc, char *argv[]) {
             "[--h264|--h265] <input> <output> | "
             "[--timeline-h264] <intro> <main> <outro> <output> | "
             "[--trim-main] <input> <output> | "
+            "[--trim-main-sar-seek-repro] <input> <output> | "
             "[--timeline-trim-main] <intro> <main> <outro> <output> | "
             "[--streaming-memory-budget] <input> <output> | "
             "[--disable-audio] <input> <output> | "
@@ -1603,6 +1636,13 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--trim-main" && argc == 4) {
         return run_trimmed_main_job_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
+        );
+    }
+
+    if (mode == "--trim-main-sar-seek-repro" && argc == 4) {
+        return run_trimmed_main_sar_seek_repro_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3])
         );

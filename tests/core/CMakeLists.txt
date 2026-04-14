@@ -9,6 +9,7 @@ set(UTSURE_TIMELINE_OUTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-outro.avi")
 set(UTSURE_TIMELINE_BAD_FPS_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-bad-fps.avi")
 set(UTSURE_NTSC_COARSE_TIMEBASE_FILE "${UTSURE_TEST_MEDIA_DIR}/ntsc-coarse-timebase.mp4")
 set(UTSURE_IRREGULAR_TIMESTAMP_FILE "${UTSURE_TEST_MEDIA_DIR}/irregular-timestamp-main.mp4")
+set(UTSURE_TRIM_SAR_SEEK_REPRO_FILE "${UTSURE_TEST_MEDIA_DIR}/trim-sar-seek-repro.mp4")
 set(UTSURE_MULTI_AUDIO_JAPANESE_FILE "${UTSURE_TEST_MEDIA_DIR}/multi-audio-japanese.mkv")
 set(UTSURE_MULTI_AUDIO_DEFAULT_FILE "${UTSURE_TEST_MEDIA_DIR}/multi-audio-default.mp4")
 set(UTSURE_MULTI_AUDIO_FALLBACK_FILE "${UTSURE_TEST_MEDIA_DIR}/multi-audio-fallback.mkv")
@@ -155,6 +156,26 @@ add_custom_command(
 )
 
 add_custom_command(
+    OUTPUT "${UTSURE_TRIM_SAR_SEEK_REPRO_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "testsrc=size=320x180:rate=24,setsar=4/3"
+        -f lavfi -i "sine=frequency=730:sample_rate=48000:duration=2"
+        -t 2
+        -c:v libx264
+        -preset ultrafast
+        -pix_fmt yuv420p
+        -aspect 16:9
+        -g 48
+        -keyint_min 48
+        -sc_threshold 0
+        -c:a aac
+        -b:a 128k
+        -shortest
+        "${UTSURE_TRIM_SAR_SEEK_REPRO_FILE}"
+    VERBATIM
+)
+
+add_custom_command(
     OUTPUT "${UTSURE_MULTI_AUDIO_JAPANESE_FILE}"
     COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
         -f lavfi -i "testsrc=size=320x180:rate=24"
@@ -261,6 +282,7 @@ add_custom_target(
         "${UTSURE_TIMELINE_BAD_FPS_FILE}"
         "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
         "${UTSURE_IRREGULAR_TIMESTAMP_FILE}"
+        "${UTSURE_TRIM_SAR_SEEK_REPRO_FILE}"
         "${UTSURE_MULTI_AUDIO_JAPANESE_FILE}"
         "${UTSURE_MULTI_AUDIO_DEFAULT_FILE}"
         "${UTSURE_MULTI_AUDIO_FALLBACK_FILE}"
@@ -424,6 +446,13 @@ add_test(
     COMMAND utsure_core_encode_job_tests --trim-main
         "${UTSURE_SAMPLE_MEDIA_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/job-trim-main.mp4"
+)
+
+add_test(
+    NAME utsure.core.job.encode.trim_main.sar_seek_repro
+    COMMAND utsure_core_encode_job_tests --trim-main-sar-seek-repro
+        "${UTSURE_TRIM_SAR_SEEK_REPRO_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-trim-main-sar-seek-repro.mp4"
 )
 
 add_test(

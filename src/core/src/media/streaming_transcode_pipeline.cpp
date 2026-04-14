@@ -346,6 +346,10 @@ bool rationals_equal(const Rational &left, const Rational &right) {
     return (left.numerator * right.denominator) == (right.numerator * left.denominator);
 }
 
+Rational normalize_sample_aspect_ratio(const Rational &value) {
+    return rational_is_positive(value) ? value : Rational{1, 1};
+}
+
 std::int64_t rescale_value(
     const std::int64_t value,
     const Rational &source_time_base,
@@ -782,12 +786,12 @@ std::optional<std::int64_t> choose_packet_timestamp_seed(const AVPacket &packet)
 Rational choose_sample_aspect_ratio(const AVFrame &frame, const AVStream &stream) {
     const Rational frame_sample_aspect_ratio = ffmpeg_support::to_rational(frame.sample_aspect_ratio);
     if (rational_is_positive(frame_sample_aspect_ratio)) {
-        return frame_sample_aspect_ratio;
+        return normalize_sample_aspect_ratio(frame_sample_aspect_ratio);
     }
 
     const Rational stream_sample_aspect_ratio = ffmpeg_support::to_rational(stream.sample_aspect_ratio);
     if (rational_is_positive(stream_sample_aspect_ratio)) {
-        return stream_sample_aspect_ratio;
+        return normalize_sample_aspect_ratio(stream_sample_aspect_ratio);
     }
 
     return Rational{1, 1};
@@ -3005,9 +3009,7 @@ VideoOutputPlan build_video_output_plan(const timeline::TimelinePlan &timeline_p
         .height = main_video_stream.height,
         .time_base = timeline_plan.output_video_time_base,
         .average_frame_rate = timeline_plan.output_frame_rate,
-        .sample_aspect_ratio = rational_is_positive(main_video_stream.sample_aspect_ratio)
-            ? main_video_stream.sample_aspect_ratio
-            : Rational{1, 1},
+        .sample_aspect_ratio = normalize_sample_aspect_ratio(main_video_stream.sample_aspect_ratio),
         .frame_duration_pts = frame_duration_pts,
         .frame_duration_microseconds = rescale_to_microseconds(frame_duration_pts, timeline_plan.output_video_time_base)
     };
@@ -3126,6 +3128,7 @@ ResolvedVideoFrameTiming resolve_video_frame_timing_for_segment(
     const VideoOutputPlan &video_output_plan,
     const Rational &output_video_time_base,
     const std::int64_t segment_output_start_pts,
+    const bool allow_trimmed_main_sample_aspect_ratio_mismatch,
     std::optional<std::int64_t> &first_source_pts_in_output_time_base,
     std::optional<std::int64_t> &previous_source_pts,
     Rational &previous_source_time_base
@@ -3137,8 +3140,10 @@ ResolvedVideoFrameTiming resolve_video_frame_timing_for_segment(
         );
     }
 
-    if (rational_is_positive(video_output_plan.sample_aspect_ratio) &&
-        !rationals_equal(frame.metadata.sample_aspect_ratio, video_output_plan.sample_aspect_ratio)) {
+    const auto normalized_frame_sample_aspect_ratio = normalize_sample_aspect_ratio(frame.metadata.sample_aspect_ratio);
+    if (!allow_trimmed_main_sample_aspect_ratio_mismatch &&
+        rational_is_positive(video_output_plan.sample_aspect_ratio) &&
+        !rationals_equal(normalized_frame_sample_aspect_ratio, video_output_plan.sample_aspect_ratio)) {
         throw std::runtime_error(
             "The " + std::string(timeline::to_string(kind)) +
             " segment decoded with a sample aspect ratio that does not match the main segment."
@@ -3316,6 +3321,8 @@ SegmentProcessResult process_segment(
         segment_plan.inspected_source_info.primary_audio_stream.has_value() && rational_is_positive(audio_stream_time_base)
             ? av_rescale_q(segment_trim_in_us, AV_TIME_BASE_Q, to_av_rational(audio_stream_time_base))
             : 0;
+    const bool allow_trimmed_main_sample_aspect_ratio_mismatch =
+        segment_plan.kind == timeline::TimelineSegmentKind::main && segment_has_source_trim(segment_plan);
 
     std::int64_t next_fallback_source_pts = segment_has_source_trim(segment_plan)
         ? requested_video_trim_start_pts
@@ -3824,6 +3831,7 @@ SegmentProcessResult process_segment(
             video_output_plan,
             timeline_plan.output_video_time_base,
             segment_output_start_pts,
+            allow_trimmed_main_sample_aspect_ratio_mismatch,
             first_video_source_pts_in_output_time_base,
             previous_video_source_pts,
             previous_video_source_time_base
@@ -4224,9 +4232,7 @@ PreparedSubtitleSession create_subtitle_session(
         .format_hint = subtitle_settings.format_hint,
         .canvas_width = video_stream.width,
         .canvas_height = video_stream.height,
-        .sample_aspect_ratio = rational_is_positive(video_stream.sample_aspect_ratio)
-            ? video_stream.sample_aspect_ratio
-            : Rational{1, 1}
+        .sample_aspect_ratio = normalize_sample_aspect_ratio(video_stream.sample_aspect_ratio)
     });
 
     if (!prepared_request.font_recovery_report.message.empty()) {
