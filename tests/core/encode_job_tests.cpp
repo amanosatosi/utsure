@@ -924,26 +924,27 @@ int run_trimmed_main_sar_seek_repro_assertion(
         return fail("The trimmed-main SAR repro input failed inspection.");
     }
 
-    const MediaDecodeResult decode_result = MediaDecoder::decode(main_path);
-    if (!decode_result.succeeded()) {
-        return fail("The trimmed-main SAR repro input failed decode.");
+    const auto seek_decode_result = MediaDecoder::decode_video_frame_window_at_time(main_path, 500000, 1);
+    if (!seek_decode_result.succeeded()) {
+        return fail("The trimmed-main SAR repro input failed seek decode.");
     }
 
     if (!inspection_result.media_source_info->primary_video_stream.has_value() ||
-        decode_result.decoded_media_source->video_frames.empty()) {
-        return fail("The trimmed-main SAR repro input did not expose a usable video stream.");
+        !seek_decode_result.video_frames.has_value() ||
+        seek_decode_result.video_frames->empty()) {
+        return fail("The trimmed-main SAR repro input did not expose a usable seek-decoded video frame.");
     }
 
     const auto inspected_sar = inspection_result.media_source_info->primary_video_stream->sample_aspect_ratio;
-    const auto decoded_sar = decode_result.decoded_media_source->video_frames.front().sample_aspect_ratio;
+    const auto decoded_sar = seek_decode_result.video_frames->front().sample_aspect_ratio;
     if (rationals_equal(inspected_sar, decoded_sar)) {
         return fail(
-            "The trimmed-main SAR repro input did not preserve the expected inspected-vs-decoded SAR disagreement."
+            "The trimmed-main SAR repro input did not preserve the expected inspected-vs-seek-decoded SAR disagreement."
         );
     }
 
     std::cout << "trim.sar_repro.input.inspected_sar=" << format_rational(inspected_sar) << '\n';
-    std::cout << "trim.sar_repro.input.decoded_sar=" << format_rational(decoded_sar) << '\n';
+    std::cout << "trim.sar_repro.input.seek_decoded_sar=" << format_rational(decoded_sar) << '\n';
     return run_trimmed_main_job_assertion(main_path, output_path);
 }
 

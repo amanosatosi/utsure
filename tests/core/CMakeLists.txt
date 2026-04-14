@@ -10,6 +10,7 @@ set(UTSURE_TIMELINE_BAD_FPS_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-bad-fps.avi"
 set(UTSURE_NTSC_COARSE_TIMEBASE_FILE "${UTSURE_TEST_MEDIA_DIR}/ntsc-coarse-timebase.mp4")
 set(UTSURE_IRREGULAR_TIMESTAMP_FILE "${UTSURE_TEST_MEDIA_DIR}/irregular-timestamp-main.mp4")
 set(UTSURE_TRIM_SAR_SEEK_REPRO_FILE "${UTSURE_TEST_MEDIA_DIR}/trim-sar-seek-repro.mp4")
+set(UTSURE_TRIM_SAR_SEEK_REPRO_SOURCE_FILE "${UTSURE_TEST_MEDIA_DIR}/trim-sar-seek-repro-source.mp4")
 set(UTSURE_MULTI_AUDIO_JAPANESE_FILE "${UTSURE_TEST_MEDIA_DIR}/multi-audio-japanese.mkv")
 set(UTSURE_MULTI_AUDIO_DEFAULT_FILE "${UTSURE_TEST_MEDIA_DIR}/multi-audio-default.mp4")
 set(UTSURE_MULTI_AUDIO_FALLBACK_FILE "${UTSURE_TEST_MEDIA_DIR}/multi-audio-fallback.mkv")
@@ -157,6 +158,7 @@ add_custom_command(
 
 add_custom_command(
     OUTPUT "${UTSURE_TRIM_SAR_SEEK_REPRO_FILE}"
+    BYPRODUCTS "${UTSURE_TRIM_SAR_SEEK_REPRO_SOURCE_FILE}"
     COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
         -f lavfi -i "testsrc=size=320x180:rate=24,setsar=4/3"
         -f lavfi -i "sine=frequency=730:sample_rate=48000:duration=2"
@@ -164,13 +166,19 @@ add_custom_command(
         -c:v libx264
         -preset ultrafast
         -pix_fmt yuv420p
-        -aspect 16:9
         -g 48
         -keyint_min 48
         -sc_threshold 0
         -c:a aac
         -b:a 128k
         -shortest
+        "${UTSURE_TRIM_SAR_SEEK_REPRO_SOURCE_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -i "${UTSURE_TRIM_SAR_SEEK_REPRO_SOURCE_FILE}"
+        -map 0:v:0
+        -map 0:a:0
+        -c copy
+        -aspect 16:9
         "${UTSURE_TRIM_SAR_SEEK_REPRO_FILE}"
     VERBATIM
 )
