@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <optional>
@@ -65,6 +66,70 @@ bool audio_block_is_silent(const DecodedAudioSamples &audio_block) {
     }
 
     return true;
+}
+
+std::int64_t decoded_video_end_microseconds(const DecodedMediaSource &decoded_media_source) {
+    if (decoded_media_source.video_frames.empty()) {
+        return 0;
+    }
+
+    const auto &last_frame = decoded_media_source.video_frames.back();
+    return last_frame.timestamp.start_microseconds + last_frame.timestamp.duration_microseconds.value_or(0);
+}
+
+std::int64_t decoded_audio_end_microseconds(const DecodedMediaSource &decoded_media_source) {
+    if (decoded_media_source.audio_blocks.empty()) {
+        return 0;
+    }
+
+    const auto &last_block = decoded_media_source.audio_blocks.back();
+    return last_block.timestamp.start_microseconds + last_block.timestamp.duration_microseconds.value_or(0);
+}
+
+std::int64_t count_audio_samples(const DecodedMediaSource &decoded_media_source) {
+    std::int64_t total_samples = 0;
+    for (const auto &audio_block : decoded_media_source.audio_blocks) {
+        total_samples += audio_block.samples_per_channel;
+    }
+
+    return total_samples;
+}
+
+int assert_trimmed_audio_window(
+    const DecodedMediaSource &decoded_media_source,
+    const std::int64_t expected_duration_us,
+    const std::int64_t boundary_tolerance_us,
+    const std::int64_t av_sync_tolerance_us
+) {
+    if (decoded_media_source.audio_blocks.empty()) {
+        return fail("The trimmed timeline output unexpectedly dropped audio.");
+    }
+
+    const auto audio_start_us = decoded_media_source.audio_blocks.front().timestamp.start_microseconds;
+    const auto audio_end_us = decoded_audio_end_microseconds(decoded_media_source);
+    const auto video_end_us = decoded_video_end_microseconds(decoded_media_source);
+    const auto expected_sample_count =
+        (expected_duration_us * decoded_media_source.audio_blocks.front().sample_rate + 500000) / 1000000;
+    const auto actual_sample_count = count_audio_samples(decoded_media_source);
+
+    if (audio_start_us < 0 || audio_start_us > boundary_tolerance_us) {
+        return fail("The trimmed timeline audio did not start near the requested trim boundary.");
+    }
+
+    if (audio_end_us > expected_duration_us + boundary_tolerance_us ||
+        std::llabs(audio_end_us - expected_duration_us) > boundary_tolerance_us) {
+        return fail("The trimmed timeline audio end drifted outside the requested trim window tolerance.");
+    }
+
+    if (std::llabs(video_end_us - audio_end_us) > av_sync_tolerance_us) {
+        return fail("The trimmed timeline audio/video durations drifted too far apart.");
+    }
+
+    if (std::llabs(actual_sample_count - expected_sample_count) > 1) {
+        return fail("The trimmed timeline audio sample count did not match the requested kept range.");
+    }
+
+    return 0;
 }
 
 std::string build_summary(const TimelineCompositionOutput &output) {
@@ -422,15 +487,17 @@ int assert_trimmed_main(const std::filesystem::path &main_path) {
         summary.segments[0].start_microseconds != 0 ||
         summary.segments[0].duration_microseconds != 1000000 ||
         summary.output_duration_microseconds != 1000000 ||
-        summary.output_video_frame_count != 24 ||
-        summary.output_audio_block_count != 48) {
+        summary.output_video_frame_count != 24) {
         return fail("Unexpected trimmed-main timeline counts or durations.");
     }
 
     if (decoded.video_frames[0].timestamp.start_microseconds != 0 ||
-        decoded.video_frames[23].timestamp.start_microseconds != 958333 ||
-        decoded.audio_blocks[0].timestamp.start_microseconds != 0) {
+        decoded.video_frames[23].timestamp.start_microseconds != 958333) {
         return fail("Unexpected trimmed-main output timestamps.");
+    }
+
+    if (assert_trimmed_audio_window(decoded, 1000000, 25000, 25000) != 0) {
+        return 1;
     }
 
     if (context->plan.segments[0].source_trim_in_microseconds != 500000 ||

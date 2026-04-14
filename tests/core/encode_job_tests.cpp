@@ -132,6 +132,36 @@ std::int64_t decoded_audio_end_microseconds(const DecodedMediaSource &decoded_ou
     return last_block.timestamp.start_microseconds + last_block.timestamp.duration_microseconds.value_or(0);
 }
 
+int assert_trimmed_audio_window(
+    const DecodedMediaSource &decoded_output,
+    const std::int64_t expected_duration_us,
+    const std::int64_t boundary_tolerance_us,
+    const std::int64_t av_sync_tolerance_us,
+    std::string_view context
+) {
+    if (decoded_output.audio_blocks.empty()) {
+        return fail(std::string(context) + " unexpectedly dropped audio.");
+    }
+
+    const auto audio_start_us = decoded_output.audio_blocks.front().timestamp.start_microseconds;
+    const auto audio_end_us = decoded_audio_end_microseconds(decoded_output);
+    const auto video_end_us = decoded_video_end_microseconds(decoded_output);
+    if (audio_start_us < 0 || audio_start_us > boundary_tolerance_us) {
+        return fail(std::string(context) + " audio did not start near the requested trim boundary.");
+    }
+
+    if (audio_end_us > expected_duration_us + boundary_tolerance_us ||
+        std::llabs(audio_end_us - expected_duration_us) > boundary_tolerance_us) {
+        return fail(std::string(context) + " audio extended beyond the requested trim duration tolerance.");
+    }
+
+    if (std::llabs(video_end_us - audio_end_us) > av_sync_tolerance_us) {
+        return fail(std::string(context) + " audio/video durations drifted too far apart.");
+    }
+
+    return 0;
+}
+
 bool has_irregular_video_timestamp_deltas(const DecodedMediaSource &decoded_output) {
     if (decoded_output.video_frames.size() < 3U) {
         return false;
@@ -841,7 +871,6 @@ int run_trimmed_main_job_assertion(
         summary.timeline_summary.segments[0].duration_microseconds != 1000000 ||
         summary.timeline_summary.output_duration_microseconds != 1000000 ||
         summary.timeline_summary.output_video_frame_count != 24 ||
-        summary.timeline_summary.output_audio_block_count != 48 ||
         format_rational(summary.timeline_summary.output_frame_rate) != "24/1" ||
         summary.encoded_media_summary.resolved_audio_output.resolved_mode != ResolvedAudioOutputMode::encode_aac) {
         return fail("Unexpected trimmed main-source summary state.");
@@ -852,12 +881,8 @@ int run_trimmed_main_job_assertion(
         return fail("Unexpected trimmed main-source output video timestamps.");
     }
 
-    const auto av_duration_delta = std::llabs(
-        decoded_video_end_microseconds(decoded_output) -
-        decoded_audio_end_microseconds(decoded_output)
-    );
-    if (av_duration_delta > 100000) {
-        return fail("The trimmed main-source output audio/video durations drifted too far apart.");
+    if (assert_trimmed_audio_window(decoded_output, 1000000, 100000, 100000, "The trimmed main-source output") != 0) {
+        return 1;
     }
 
     const auto trim_report = format_encode_job_report(summary);
@@ -945,14 +970,17 @@ int run_timeline_trimmed_main_assertion(
         summary.timeline_summary.segments[1].duration_microseconds != 1000000 ||
         summary.timeline_summary.segments[2].start_microseconds != 2000000 ||
         summary.timeline_summary.output_duration_microseconds != 3000000 ||
-        summary.timeline_summary.output_video_frame_count != 72 ||
-        summary.timeline_summary.output_audio_block_count != 142) {
+        summary.timeline_summary.output_video_frame_count != 72) {
         return fail("Unexpected intro/trimmed-main/outro summary state.");
     }
 
     if (decoded_output.video_frames[24].timestamp.start_microseconds != 1000000 ||
         decoded_output.video_frames[48].timestamp.start_microseconds != 2000000) {
         return fail("Unexpected intro/trimmed-main/outro output boundary timestamps.");
+    }
+
+    if (assert_trimmed_audio_window(decoded_output, 3000000, 100000, 100000, "The intro/trimmed-main/outro output") != 0) {
+        return 1;
     }
 
     if (assert_observer_flow(observer, 3, false) != 0) {

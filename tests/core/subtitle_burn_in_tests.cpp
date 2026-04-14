@@ -126,6 +126,54 @@ std::string format_path_leaf(const std::filesystem::path &path) {
     return path.lexically_normal().string();
 }
 
+std::int64_t decoded_video_end_microseconds(const DecodedMediaSource &decoded_output) {
+    if (decoded_output.video_frames.empty()) {
+        return 0;
+    }
+
+    const auto &last_frame = decoded_output.video_frames.back();
+    return last_frame.timestamp.start_microseconds + last_frame.timestamp.duration_microseconds.value_or(0);
+}
+
+std::int64_t decoded_audio_end_microseconds(const DecodedMediaSource &decoded_output) {
+    if (decoded_output.audio_blocks.empty()) {
+        return 0;
+    }
+
+    const auto &last_block = decoded_output.audio_blocks.back();
+    return last_block.timestamp.start_microseconds + last_block.timestamp.duration_microseconds.value_or(0);
+}
+
+int assert_trimmed_audio_window(
+    const DecodedMediaSource &decoded_output,
+    const std::int64_t expected_duration_us,
+    const std::int64_t boundary_tolerance_us,
+    const std::int64_t av_sync_tolerance_us,
+    std::string_view context
+) {
+    if (decoded_output.audio_blocks.empty()) {
+        return fail(std::string(context) + " unexpectedly dropped audio.");
+    }
+
+    const auto audio_start_us = decoded_output.audio_blocks.front().timestamp.start_microseconds;
+    const auto audio_end_us = decoded_audio_end_microseconds(decoded_output);
+    const auto video_end_us = decoded_video_end_microseconds(decoded_output);
+    if (audio_start_us < 0 || audio_start_us > boundary_tolerance_us) {
+        return fail(std::string(context) + " audio did not start near the requested trim boundary.");
+    }
+
+    if (audio_end_us > expected_duration_us + boundary_tolerance_us ||
+        std::llabs(audio_end_us - expected_duration_us) > boundary_tolerance_us) {
+        return fail(std::string(context) + " audio extended beyond the requested trim duration tolerance.");
+    }
+
+    if (std::llabs(video_end_us - audio_end_us) > av_sync_tolerance_us) {
+        return fail(std::string(context) + " audio/video durations drifted too far apart.");
+    }
+
+    return 0;
+}
+
 bool frames_are_identical(
     const DecodedMediaSource &left,
     const DecodedMediaSource &right,
@@ -590,6 +638,23 @@ int run_trimmed_main_burn_in_assertion(
 
     if (assert_decoded_output(*plain_output_decode.decoded_media_source, 24U, true) != 0 ||
         assert_decoded_output(*burned_output_decode.decoded_media_source, 24U, true) != 0) {
+        return 1;
+    }
+
+    if (assert_trimmed_audio_window(
+            *plain_output_decode.decoded_media_source,
+            1000000,
+            100000,
+            100000,
+            "The plain trimmed subtitle-baseline output"
+        ) != 0 ||
+        assert_trimmed_audio_window(
+            *burned_output_decode.decoded_media_source,
+            1000000,
+            100000,
+            100000,
+            "The trimmed subtitle burn-in output"
+        ) != 0) {
         return 1;
     }
 
