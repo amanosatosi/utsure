@@ -804,6 +804,39 @@ add_test(
     COMMAND utsure_core_subtitle_renderer_tests --error
 )
 
+add_executable(utsure_core_libassmod_subtitle_adapter_tests
+    libassmod_subtitle_adapter_tests.cpp
+)
+
+target_link_libraries(utsure_core_libassmod_subtitle_adapter_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_include_directories(utsure_core_libassmod_subtitle_adapter_tests
+    PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/core/src"
+)
+
+target_compile_features(utsure_core_libassmod_subtitle_adapter_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_libassmod_subtitle_adapter_tests)
+
+add_test(
+    NAME utsure.core.subtitles.libassmod.adapter.empty_copied
+    COMMAND utsure_core_libassmod_subtitle_adapter_tests --empty-copied
+)
+
+add_test(
+    NAME utsure.core.subtitles.libassmod.adapter.empty_direct
+    COMMAND utsure_core_libassmod_subtitle_adapter_tests --empty-direct
+)
+
+add_test(
+    NAME utsure.core.subtitles.libassmod.adapter.invalid_positive
+    COMMAND utsure_core_libassmod_subtitle_adapter_tests --invalid-positive
+)
+
 add_executable(utsure_core_subtitle_bitmap_compositor_tests
     subtitle_bitmap_compositor_tests.cpp
 )

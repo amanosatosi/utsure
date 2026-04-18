@@ -1,4 +1,5 @@
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
+#include "libassmod_rgba_bitmap_validation.hpp"
 #include "../../subtitles/subtitle_bitmap_compositor.hpp"
 #include "../../subtitles/subtitle_composition_diagnostics.hpp"
 #include "../../subtitles/subtitle_runtime_options.hpp"
@@ -16,7 +17,6 @@ extern "C" {
 #include <filesystem>
 #include <fstream>
 #include <iterator>
-#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -72,16 +72,6 @@ using ImageRgbaListHandle = std::unique_ptr<ASS_ImageRGBA, ImageRgbaListDeleter>
 
 struct ScriptFeatureScan final {
     bool references_tag_images{false};
-};
-
-enum class AssImageRgbaValidationResult : std::uint8_t {
-    empty = 0,
-    drawable
-};
-
-struct DrawableAssImageRgba final {
-    std::size_t bitmap_index{0};
-    const ASS_ImageRGBA *image{nullptr};
 };
 
 std::string path_to_utf8_string(const std::filesystem::path &path) {
@@ -231,52 +221,6 @@ TrackHandle load_track(
     return track;
 }
 
-[[nodiscard]] AssImageRgbaValidationResult validate_ass_image_rgba(
-    const ASS_ImageRGBA &image,
-    const std::size_t bitmap_index,
-    const std::string &subtitle_path_string,
-    const int session_instance_id
-) {
-    if (image.w <= 0 || image.h <= 0) {
-        return AssImageRgbaValidationResult::empty;
-    }
-
-    const auto minimum_stride = static_cast<std::int64_t>(image.w) * 4LL;
-    if (minimum_stride > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
-        std::ostringstream message;
-        message << "libassmod produced a subtitle bitmap whose row size overflowed the host stride range"
-                << " for '" << subtitle_path_string << "'"
-                << " (session " << session_instance_id << ", bitmap " << bitmap_index << "): origin="
-                << image.dst_x << ',' << image.dst_y
-                << ", width=" << image.w << ", height=" << image.h << '.';
-        throw std::runtime_error(message.str());
-    }
-
-    if (image.stride <= 0 || static_cast<std::int64_t>(image.stride) < minimum_stride) {
-        std::ostringstream message;
-        message << "libassmod produced an invalid RGBA subtitle bitmap stride"
-                << " for '" << subtitle_path_string << "'"
-                << " (session " << session_instance_id << ", bitmap " << bitmap_index << "): origin="
-                << image.dst_x << ',' << image.dst_y
-                << ", width=" << image.w << ", height=" << image.h
-                << ", stride=" << image.stride << '.';
-        throw std::runtime_error(message.str());
-    }
-
-    if (image.rgba == nullptr) {
-        std::ostringstream message;
-        message << "libassmod produced a subtitle bitmap with null RGBA bytes"
-                << " for '" << subtitle_path_string << "'"
-                << " (session " << session_instance_id << ", bitmap " << bitmap_index << "): origin="
-                << image.dst_x << ',' << image.dst_y
-                << ", width=" << image.w << ", height=" << image.h
-                << ", stride=" << image.stride << '.';
-        throw std::runtime_error(message.str());
-    }
-
-    return AssImageRgbaValidationResult::drawable;
-}
-
 SubtitleBitmap copy_ass_image_rgba(const ASS_ImageRGBA &image) {
     const int line_stride_bytes = image.w * 4;
     std::vector<std::uint8_t> bytes(detail::required_rgba_buffer_size(
@@ -324,46 +268,6 @@ std::vector<ASS_ImageRGBA *> collect_ass_image_rgba_nodes(ASS_ImageRGBA *images)
     return bitmaps;
 }
 
-std::vector<DrawableAssImageRgba> collect_drawable_ass_image_rgba_nodes(
-    const std::vector<ASS_ImageRGBA *> &image_nodes,
-    const SubtitleRenderRequest &request,
-    const std::string_view bitmap_mode,
-    const std::string &subtitle_path_string,
-    const int session_instance_id
-) {
-    std::vector<DrawableAssImageRgba> drawable_bitmaps{};
-    drawable_bitmaps.reserve(image_nodes.size());
-    for (std::size_t bitmap_index = 0; bitmap_index < image_nodes.size(); ++bitmap_index) {
-        const ASS_ImageRGBA &image = *image_nodes[bitmap_index];
-        const auto validation_result = validate_ass_image_rgba(
-            image,
-            bitmap_index,
-            subtitle_path_string,
-            session_instance_id
-        );
-        if (validation_result == AssImageRgbaValidationResult::empty) {
-            detail::maybe_log_skipped_empty_subtitle_bitmap_diagnostics(
-                request,
-                bitmap_index,
-                image.dst_x,
-                image.dst_y,
-                image.w,
-                image.h,
-                image.stride,
-                bitmap_mode
-            );
-            continue;
-        }
-
-        drawable_bitmaps.push_back(DrawableAssImageRgba{
-            .bitmap_index = bitmap_index,
-            .image = &image
-        });
-    }
-
-    return drawable_bitmaps;
-}
-
 class LibassmodSubtitleRenderSession final : public SubtitleRenderSession {
 public:
     LibassmodSubtitleRenderSession(
@@ -394,7 +298,7 @@ public:
             [[maybe_unused]] const auto access_guard = begin_session_access("render");
             auto images_rgba = render_images_rgba(request);
             const auto image_nodes = collect_ass_image_rgba_nodes(images_rgba.get());
-            const auto drawable_image_nodes = collect_drawable_ass_image_rgba_nodes(
+            const auto drawable_image_nodes = detail::libassmod::collect_drawable_ass_image_rgba_nodes(
                 image_nodes,
                 request,
                 "copied",
@@ -440,7 +344,7 @@ public:
 
             auto images_rgba = render_images_rgba(request);
             const auto image_nodes = collect_ass_image_rgba_nodes(images_rgba.get());
-            const auto drawable_image_nodes = collect_drawable_ass_image_rgba_nodes(
+            const auto drawable_image_nodes = detail::libassmod::collect_drawable_ass_image_rgba_nodes(
                 image_nodes,
                 request,
                 runtime::to_string(runtime_options_.bitmap_transfer_mode),

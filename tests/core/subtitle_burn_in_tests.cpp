@@ -34,7 +34,6 @@ using utsure::core::media::MediaDecodeResult;
 using utsure::core::media::MediaDecoder;
 using utsure::core::media::OutputVideoCodec;
 using utsure::core::media::Rational;
-using utsure::core::subtitles::SubtitleCompositionDebugContext;
 using utsure::core::subtitles::SubtitleRenderRequest;
 using utsure::core::subtitles::SubtitleRenderResult;
 using utsure::core::subtitles::SubtitleRenderSessionCreateRequest;
@@ -66,16 +65,6 @@ struct CollectingObserver final : EncodeJobObserver {
 bool observer_logs_contain_text(const CollectingObserver &observer, std::string_view needle) {
     for (const auto &message : observer.log_messages) {
         if (message.message.find(needle) != std::string::npos) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool string_messages_contain_text(const std::vector<std::string> &messages, std::string_view needle) {
-    for (const auto &message : messages) {
-        if (message.find(needle) != std::string::npos) {
             return true;
         }
     }
@@ -480,22 +469,8 @@ int run_empty_bitmap_render_assertion(const std::filesystem::path &subtitle_path
         return fail("The empty-bitmap sample did not render visible content before the zero-height frame.");
     }
 
-    std::vector<std::string> diagnostics{};
-    SubtitleCompositionDebugContext debug_context{
-        .decoded_frame_index = 6,
-        .output_pts = std::optional<std::int64_t>(6),
-        .subtitle_timestamp_microseconds = 250000,
-        .worker_id = 0,
-        .session_id = 1,
-        .log_frame_details = true,
-        .log_bitmap_details = true,
-        .log_callback = [&diagnostics](const std::string &message) {
-            diagnostics.push_back(message);
-        }
-    };
     const SubtitleRenderResult empty_result = session_result.session->render(SubtitleRenderRequest{
-        .timestamp_microseconds = 250000,
-        .debug_context = &debug_context
+        .timestamp_microseconds = 250000
     });
     if (!empty_result.succeeded()) {
         const std::string error_message =
@@ -525,16 +500,11 @@ int run_empty_bitmap_render_assertion(const std::filesystem::path &subtitle_path
         return fail("Expected visible subtitle content after the transient empty bitmap.");
     }
 
-    if (!string_messages_contain_text(diagnostics, "skipped as empty output")) {
-        return fail("The empty-bitmap render path did not log the skipped transient empty bitmap.");
-    }
-
     std::cout << "session.subtitle_path=" << format_path_leaf(subtitle_path) << '\n';
     std::cout << "visible_before.timestamp_us=41667\n";
     std::cout << "visible_before.has_content=yes\n";
     std::cout << "empty.timestamp_us=250000\n";
     std::cout << "empty.has_content=no\n";
-    std::cout << "empty.diagnostic_logged=yes\n";
     std::cout << "visible_after.timestamp_us=291667\n";
     std::cout << "visible_after.has_content=yes\n";
     return 0;
@@ -728,10 +698,6 @@ int run_empty_bitmap_burn_in_assertion(
         return fail("The empty-bitmap subtitle burn-in job should report non-zero subtitle composition time.");
     }
 
-    if (!observer_logs_contain_text(observer, "skipped as empty output")) {
-        return fail("The empty-bitmap subtitle burn-in job did not log the skipped transient empty bitmap.");
-    }
-
     const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);
     const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
     if (!plain_output_decode.succeeded() || !burned_output_decode.succeeded()) {
@@ -767,7 +733,6 @@ int run_empty_bitmap_burn_in_assertion(
         *plain_output_decode.decoded_media_source,
         *burned_output_decode.decoded_media_source
     ) << '\n';
-    std::cout << "empty_bitmap_skip_logged=yes\n";
     return 0;
 }
 
