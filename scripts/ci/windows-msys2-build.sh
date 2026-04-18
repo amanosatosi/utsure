@@ -63,6 +63,7 @@ cmake --build "${build_dir}" --target utsure_core_subtitle_auto_selection_tests 
 cmake --build "${build_dir}" --target utsure_core_subtitle_font_recovery_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_timeline_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_subtitle_renderer_tests --parallel
+cmake --build "${build_dir}" --target utsure_core_libassmod_subtitle_adapter_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_subtitle_bitmap_compositor_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_subtitle_burn_in_tests --parallel
 
