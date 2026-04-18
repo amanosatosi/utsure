@@ -61,51 +61,10 @@ jobs:
             libtool
             make
 
-      - name: Capture FFmpeg cache metadata
-        id: ffmpeg-cache-meta
-        env:
-          UTSURE_FFMPEG_RECIPE_HASH: ${{ hashFiles('.github/workflows/windows-msys2.yml', 'scripts/ci/windows-msys2-build-ffmpeg.sh') }}
-        run: |
-          compiler_version="$(c++ -dumpfullversion 2>/dev/null || c++ -dumpversion)"
-          toolchain_id="${UTSURE_TOOLCHAIN_ID_PREFIX}-${compiler_version}"
-          configure_flags_hash="$(printf '%s' "${UTSURE_FFMPEG_CONFIGURE_FLAGS}" | sha256sum | cut -c1-16)"
-          build_id="ffmpeg-${UTSURE_FFMPEG_VERSION}-${toolchain_id}-${configure_flags_hash}-${UTSURE_FFMPEG_RECIPE_HASH}"
-          {
-            echo "toolchain_id=${toolchain_id}"
-            echo "configure_flags_hash=${configure_flags_hash}"
-            echo "recipe_hash=${UTSURE_FFMPEG_RECIPE_HASH}"
-            echo "build_id=${build_id}"
-          } >> "${GITHUB_OUTPUT}"
-
-      - name: Restore FFmpeg cache
-        id: ffmpeg-cache
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            .deps/ffmpeg/prefix
-            .deps/ffmpeg/ffmpeg-${{ env.UTSURE_FFMPEG_VERSION }}.tar.xz
-          key: >-
-            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-${{ steps.ffmpeg-cache-meta.outputs.configure_flags_hash }}-${{ steps.ffmpeg-cache-meta.outputs.recipe_hash }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-${{ steps.ffmpeg-cache-meta.outputs.configure_flags_hash }}-
-            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-
-            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-
-
+      # TODO(2026-05-01): Re-add the FFmpeg actions/cache restore/save steps around this build
+      # once the temporary cache disablement is no longer needed.
       - name: Build FFmpeg
-        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
-        env:
-          UTSURE_FFMPEG_BUILD_ID: ${{ steps.ffmpeg-cache-meta.outputs.build_id }}
         run: ./scripts/ci/windows-msys2-build-ffmpeg.sh
-
-      - name: Save FFmpeg cache
-        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            .deps/ffmpeg/prefix
-            .deps/ffmpeg/ffmpeg-${{ env.UTSURE_FFMPEG_VERSION }}.tar.xz
-          key: >-
-            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-${{ steps.ffmpeg-cache-meta.outputs.configure_flags_hash }}-${{ steps.ffmpeg-cache-meta.outputs.recipe_hash }}
 
       - name: Build libassmod
         run: ./scripts/ci/windows-msys2-build-libassmod.sh
@@ -188,51 +147,10 @@ jobs:
             libtool
             make
 
-      - name: Capture FFmpeg cache metadata
-        id: ffmpeg-cache-meta
-        env:
-          UTSURE_FFMPEG_RECIPE_HASH: ${{ hashFiles('.github/workflows/windows-msys2.yml', 'scripts/ci/windows-msys2-build-ffmpeg.sh') }}
-        run: |
-          compiler_version="$(c++ -dumpfullversion 2>/dev/null || c++ -dumpversion)"
-          toolchain_id="${UTSURE_TOOLCHAIN_ID_PREFIX}-${compiler_version}"
-          configure_flags_hash="$(printf '%s' "${UTSURE_FFMPEG_CONFIGURE_FLAGS}" | sha256sum | cut -c1-16)"
-          build_id="ffmpeg-${UTSURE_FFMPEG_VERSION}-${toolchain_id}-${configure_flags_hash}-${UTSURE_FFMPEG_RECIPE_HASH}"
-          {
-            echo "toolchain_id=${toolchain_id}"
-            echo "configure_flags_hash=${configure_flags_hash}"
-            echo "recipe_hash=${UTSURE_FFMPEG_RECIPE_HASH}"
-            echo "build_id=${build_id}"
-          } >> "${GITHUB_OUTPUT}"
-
-      - name: Restore FFmpeg cache
-        id: ffmpeg-cache
-        uses: actions/cache/restore@v5
-        with:
-          path: |
-            .deps/ffmpeg/prefix
-            .deps/ffmpeg/ffmpeg-${{ env.UTSURE_FFMPEG_VERSION }}.tar.xz
-          key: >-
-            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-${{ steps.ffmpeg-cache-meta.outputs.configure_flags_hash }}-${{ steps.ffmpeg-cache-meta.outputs.recipe_hash }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-${{ steps.ffmpeg-cache-meta.outputs.configure_flags_hash }}-
-            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-
-            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-
-
+      # TODO(2026-05-01): Re-add the FFmpeg actions/cache restore/save steps around this build
+      # once the temporary cache disablement is no longer needed.
       - name: Build FFmpeg
-        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
-        env:
-          UTSURE_FFMPEG_BUILD_ID: ${{ steps.ffmpeg-cache-meta.outputs.build_id }}
         run: ./scripts/ci/windows-msys2-build-ffmpeg.sh
-
-      - name: Save FFmpeg cache
-        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            .deps/ffmpeg/prefix
-            .deps/ffmpeg/ffmpeg-${{ env.UTSURE_FFMPEG_VERSION }}.tar.xz
-          key: >-
-            ${{ runner.os }}-${{ runner.arch }}-ffmpeg-${{ env.UTSURE_FFMPEG_SERIES }}-${{ steps.ffmpeg-cache-meta.outputs.toolchain_id }}-${{ steps.ffmpeg-cache-meta.outputs.configure_flags_hash }}-${{ steps.ffmpeg-cache-meta.outputs.recipe_hash }}
 
       - name: Build libassmod
         run: ./scripts/ci/windows-msys2-build-libassmod.sh
