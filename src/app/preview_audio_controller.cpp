@@ -187,6 +187,7 @@ bool PreviewAudioController::start_preview(const PreviewAudioPlaybackRequest &re
     target_buffer_bytes_ = std::max<qint64>(bytes_for_duration_or_default(audio_format_, kPreviewAudioTargetBufferUs), 1);
     low_watermark_bytes_ = std::max<qint64>(bytes_for_duration_or_default(audio_format_, kPreviewAudioLowWatermarkUs), 1);
     playback_active_ = true;
+    audio_sink_start_requested_ = !request.defer_output_start;
 
     recreate_audio_sink();
     if (audio_sink_ == nullptr) {
@@ -198,6 +199,15 @@ bool PreviewAudioController::start_preview(const PreviewAudioPlaybackRequest &re
     request_audio_chunk(true);
     refill_timer_->start();
     return true;
+}
+
+void PreviewAudioController::start_output() {
+    if (!playback_active_) {
+        return;
+    }
+
+    audio_sink_start_requested_ = true;
+    maybe_start_audio_output();
 }
 
 void PreviewAudioController::stop_preview() {
@@ -322,6 +332,23 @@ void PreviewAudioController::destroy_audio_output_path() {
     }
 }
 
+void PreviewAudioController::maybe_start_audio_output() {
+    if (!playback_active_ ||
+        audio_sink_started_ ||
+        !audio_sink_start_requested_ ||
+        audio_sink_ == nullptr ||
+        audio_buffer_device_ == nullptr) {
+        return;
+    }
+
+    if (static_cast<PreviewAudioBufferDevice *>(audio_buffer_device_)->buffered_byte_count() <= 0) {
+        return;
+    }
+
+    audio_sink_->start(audio_buffer_device_);
+    audio_sink_started_ = true;
+}
+
 void PreviewAudioController::recreate_audio_sink() {
     destroy_audio_output_path();
 
@@ -341,9 +368,11 @@ void PreviewAudioController::recreate_audio_sink() {
             return;
         }
 
+        auto *buffer_device = static_cast<PreviewAudioBufferDevice *>(audio_buffer_device_);
         if (state == QtAudio::IdleState) {
             if (end_of_stream_ &&
-                static_cast<PreviewAudioBufferDevice *>(audio_buffer_device_)->buffered_byte_count() <= 0) {
+                buffer_device != nullptr &&
+                buffer_device->buffered_byte_count() <= 0) {
                 playback_active_ = false;
                 audio_sink_started_ = false;
                 refill_timer_->stop();
@@ -358,7 +387,9 @@ void PreviewAudioController::recreate_audio_sink() {
             playback_active_ = false;
             audio_sink_started_ = false;
             refill_timer_->stop();
-            static_cast<PreviewAudioBufferDevice *>(audio_buffer_device_)->clear_buffer();
+            if (buffer_device != nullptr) {
+                buffer_device->clear_buffer();
+            }
         }
     });
 }
@@ -393,6 +424,7 @@ void PreviewAudioController::reset_playback_state(const bool clear_worker_sessio
     request_in_flight_ = false;
     playback_active_ = false;
     audio_sink_started_ = false;
+    audio_sink_start_requested_ = false;
     end_of_stream_ = false;
     playback_anchor_time_us_ = 0;
     next_chunk_time_us_ = 0;
@@ -448,20 +480,18 @@ void PreviewAudioController::handle_audio_chunk_ready(
         end_of_stream_ = end_of_stream_ || next_chunk_time_us_ >= *trim_out_us_;
     }
 
-    if (!pcm_bytes.isEmpty() && audio_buffer_device_ != nullptr) {
+    auto *buffer_device = static_cast<PreviewAudioBufferDevice *>(audio_buffer_device_);
+    if (!pcm_bytes.isEmpty() && buffer_device != nullptr) {
         if (!audio_sink_started_) {
             playback_anchor_time_us_ = chunk_start_us;
         }
-        static_cast<PreviewAudioBufferDevice *>(audio_buffer_device_)->append_bytes(pcm_bytes);
-        if (audio_sink_ != nullptr && !audio_sink_started_) {
-            audio_sink_->start(audio_buffer_device_);
-            audio_sink_started_ = true;
-        }
+        buffer_device->append_bytes(pcm_bytes);
+        maybe_start_audio_output();
     }
 
     if (end_of_stream_ &&
         pcm_bytes.isEmpty() &&
-        static_cast<PreviewAudioBufferDevice *>(audio_buffer_device_)->buffered_byte_count() <= 0) {
+        (buffer_device == nullptr || buffer_device->buffered_byte_count() <= 0)) {
         playback_active_ = false;
         audio_sink_started_ = false;
         refill_timer_->stop();
@@ -469,7 +499,8 @@ void PreviewAudioController::handle_audio_chunk_ready(
     }
 
     if (!end_of_stream_ &&
-        static_cast<PreviewAudioBufferDevice *>(audio_buffer_device_)->buffered_byte_count() < target_buffer_bytes_) {
+        buffer_device != nullptr &&
+        buffer_device->buffered_byte_count() < target_buffer_bytes_) {
         request_audio_chunk(false);
     }
 }

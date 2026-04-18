@@ -829,7 +829,7 @@ bool PreviewFrameRendererWorker::cached_preview_window_covers(
 }
 
 bool PreviewFrameRendererWorker::should_decode_next_preview_window(const PreviewFrameRenderRequest &request) const {
-    if (!preview_session_ || cached_preview_frames_.empty()) {
+    if (!request.playback_active || !preview_session_ || cached_preview_frames_.empty()) {
         return false;
     }
 

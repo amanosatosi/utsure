@@ -22,6 +22,7 @@ struct PreviewAudioPlaybackRequest final {
     utsure::core::media::AudioStreamInfo source_audio_stream_info{};
     qint64 chunk_duration_us{120000};
     int block_samples{1024};
+    bool defer_output_start{false};
 };
 
 class PreviewAudioController final : public QObject {
@@ -32,6 +33,7 @@ public:
     ~PreviewAudioController() override;
 
     [[nodiscard]] bool start_preview(const PreviewAudioPlaybackRequest &request);
+    void start_output();
     void stop_preview();
     void clear();
 
@@ -51,6 +53,7 @@ private:
     [[nodiscard]] std::optional<ResolvedOutputFormat> resolve_output_format(
         const utsure::core::media::AudioStreamInfo &source_audio_stream_info
     ) const;
+    void maybe_start_audio_output();
     void destroy_audio_output_path();
     void recreate_audio_sink();
     void request_audio_chunk(bool reset_session);
@@ -74,12 +77,13 @@ private:
     bool playback_active_{false};
     bool request_in_flight_{false};
     bool audio_sink_started_{false};
+    bool audio_sink_start_requested_{false};
     bool end_of_stream_{false};
     qint64 playback_anchor_time_us_{0};
     qint64 next_chunk_time_us_{0};
     qint64 trim_in_us_{0};
     std::optional<qint64> trim_out_us_{};
-    qint64 chunk_duration_us_{250000};
+    qint64 chunk_duration_us_{120000};
     qint64 low_watermark_bytes_{0};
     qint64 target_buffer_bytes_{0};
     int block_samples_{1024};

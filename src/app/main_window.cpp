@@ -2799,6 +2799,8 @@ void MainWindow::clear_preview_surface() {
     preview_requested_job_index_ = -1;
     preview_requested_time_us_ = -1;
     preview_next_playback_time_us_ = -1;
+    preview_audio_start_pending_ = false;
+    preview_audio_queued_start_time_us_ = -1;
     preview_requested_trim_in_us_ = 0;
     preview_requested_trim_out_us_ = -1;
     preview_requested_source_path_.clear();
@@ -2816,6 +2818,56 @@ void MainWindow::clear_preview_surface() {
 
 void MainWindow::reset_preview_pipeline_for_trim_change() {
     pause_preview_playback();
+}
+
+void MainWindow::queue_preview_audio_for_playback(const UiEncodeJob &job, const qint64 start_time_us) {
+    preview_audio_start_pending_ = false;
+    preview_audio_queued_start_time_us_ = -1;
+
+    if (preview_audio_controller_ == nullptr) {
+        return;
+    }
+
+    if (!(job.inspected_source_info.has_value() && job.inspected_source_info->primary_audio_stream.has_value())) {
+        preview_audio_controller_->stop_preview();
+        return;
+    }
+
+    const qint64 bounded_start_time_us = clamp_preview_time_to_job_duration(job, start_time_us);
+    const bool preview_audio_started = preview_audio_controller_->start_preview(PreviewAudioPlaybackRequest{
+        .source_path = job.source_path.trimmed(),
+        .requested_time_us = bounded_start_time_us,
+        .trim_in_us = 0,
+        .trim_out_us = std::nullopt,
+        .source_audio_stream_info = *job.inspected_source_info->primary_audio_stream,
+        .defer_output_start = true
+    });
+    if (!preview_audio_started) {
+        qCInfo(previewPlaybackLog) << "queue_preview_audio_for_playback audio path unavailable for the selected source";
+        return;
+    }
+
+    preview_audio_start_pending_ = true;
+    preview_audio_queued_start_time_us_ = bounded_start_time_us;
+}
+
+void MainWindow::begin_pending_preview_audio_output(const qint64 frame_time_us) {
+    if (!preview_audio_start_pending_) {
+        return;
+    }
+
+    qCInfo(previewPlaybackLog).noquote()
+        << QString("begin_pending_preview_audio_output frame=%1 (%2) queued_start=%3 (%4)")
+               .arg(frame_time_us)
+               .arg(format_time_us(frame_time_us))
+               .arg(preview_audio_queued_start_time_us_)
+               .arg(format_time_us(std::max<qint64>(preview_audio_queued_start_time_us_, 0)));
+
+    preview_audio_start_pending_ = false;
+    preview_audio_queued_start_time_us_ = -1;
+    if (preview_audio_controller_ != nullptr) {
+        preview_audio_controller_->start_output();
+    }
 }
 
 void MainWindow::start_preview_playback() {
@@ -2840,23 +2892,7 @@ void MainWindow::start_preview_playback() {
         ? std::clamp<qint64>(job.current_time_us + selected_job_frame_step_us(), 0, bounded_duration_us)
         : std::clamp<qint64>(job.current_time_us, 0, bounded_duration_us);
     preview_playing_ = true;
-
-    if (preview_audio_controller_ != nullptr) {
-        if (job.inspected_source_info.has_value() && job.inspected_source_info->primary_audio_stream.has_value()) {
-            const bool preview_audio_started = preview_audio_controller_->start_preview(PreviewAudioPlaybackRequest{
-                .source_path = job.source_path.trimmed(),
-                .requested_time_us = job.current_time_us,
-                .trim_in_us = 0,
-                .trim_out_us = std::nullopt,
-                .source_audio_stream_info = *job.inspected_source_info->primary_audio_stream
-            });
-            if (!preview_audio_started) {
-                qCInfo(previewPlaybackLog) << "start_preview_playback audio path unavailable for the selected source";
-            }
-        } else {
-            preview_audio_controller_->stop_preview();
-        }
-    }
+    queue_preview_audio_for_playback(job, preview_next_playback_time_us_);
 
     preview_playback_timer_->setInterval(
         std::clamp<int>(static_cast<int>(selected_job_frame_step_us() / 1000), 16, 67)
@@ -2886,6 +2922,8 @@ void MainWindow::pause_preview_playback() {
     preview_requested_time_us_ = -1;
     preview_next_playback_time_us_ = -1;
     preview_playing_ = false;
+    preview_audio_start_pending_ = false;
+    preview_audio_queued_start_time_us_ = -1;
     if (preview_playback_timer_ != nullptr) {
         preview_playback_timer_->stop();
     }
@@ -3075,6 +3113,7 @@ void MainWindow::handle_preview_ready(
     preview_surface_widget_->set_frame_image(image);
     preview_time_badge_->setText(format_time_us(job.current_time_us));
     refresh_trim_controls();
+    begin_pending_preview_audio_output(normalized_frame_time_us);
 
     qCInfo(previewPlaybackLog).noquote()
         << QString("handle_preview_ready applied current=%1 (%2) next=%3 (%4) timer_interval_ms=%5")

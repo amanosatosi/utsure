@@ -368,6 +368,11 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.media.preview_session.seek_churn
+    COMMAND utsure_core_media_decode_tests --preview-session-seek-churn "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
+)
+
+add_test(
     NAME utsure.core.media.preview_audio_session.sequential
     COMMAND utsure_core_media_decode_tests --preview-audio-session "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
 )

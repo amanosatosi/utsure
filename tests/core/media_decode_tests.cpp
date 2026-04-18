@@ -319,6 +319,76 @@ int run_preview_session_sequential_assertion(const std::filesystem::path &sample
     return 0;
 }
 
+int run_preview_session_seek_churn_assertion(const std::filesystem::path &sample_path) {
+    DecodeNormalizationPolicy normalization_policy{};
+    normalization_policy.video_max_width = 320;
+    normalization_policy.video_max_height = 180;
+
+    auto session_result = MediaDecoder::create_video_preview_session(sample_path, normalization_policy);
+    if (!session_result.succeeded()) {
+        const std::string error_message =
+            "Preview seek-churn session creation failed unexpectedly: " +
+            session_result.error->message +
+            " Hint: " +
+            session_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    constexpr std::int64_t kSeekRequestTimesUs[] = {
+        0,
+        1000000,
+        250000,
+        1250000,
+        500000,
+        750000,
+        1500000
+    };
+
+    for (const std::int64_t requested_time_us : kSeekRequestTimesUs) {
+        auto seek_window_result = session_result.session->seek_and_decode_window_at_time(requested_time_us, 8);
+        if (!seek_window_result.succeeded()) {
+            const std::string error_message =
+                "Preview seek failed unexpectedly during churn coverage: " +
+                seek_window_result.error->message +
+                " Hint: " +
+                seek_window_result.error->actionable_hint;
+            return fail(error_message);
+        }
+
+        const auto &seek_window = *seek_window_result.video_frames;
+        if (seek_window.empty()) {
+            return fail("Preview seek churn coverage unexpectedly returned an empty seek window.");
+        }
+
+        if (select_trimmed_preview_frame(seek_window, requested_time_us, PreviewTrimRange{}) == nullptr) {
+            return fail("Preview seek churn coverage could not select a frame for the requested seek time.");
+        }
+
+        auto next_window_result = session_result.session->decode_next_window(12);
+        if (!next_window_result.succeeded()) {
+            const std::string error_message =
+                "Preview sequential refill failed unexpectedly after a churn seek: " +
+                next_window_result.error->message +
+                " Hint: " +
+                next_window_result.error->actionable_hint;
+            return fail(error_message);
+        }
+
+        const auto &next_window = *next_window_result.video_frames;
+        if (next_window.empty()) {
+            return fail("Preview seek churn coverage unexpectedly returned an empty sequential refill window.");
+        }
+
+        if (next_window.front().timestamp.start_microseconds <=
+            seek_window.back().timestamp.start_microseconds) {
+            return fail("Preview sequential refill did not advance beyond the preceding churn seek window.");
+        }
+    }
+
+    std::cout << "preview_seek_churn.iterations=" << (sizeof(kSeekRequestTimesUs) / sizeof(kSeekRequestTimesUs[0])) << '\n';
+    return 0;
+}
+
 int run_preview_audio_session_assertion(const std::filesystem::path &sample_path) {
     DecodeNormalizationPolicy normalization_policy{};
     normalization_policy.audio_block_samples = 1024;
@@ -660,7 +730,7 @@ int main(int argc, char *argv[]) {
     if (argc != 3) {
         return fail(
             "Usage: utsure_core_media_decode_tests "
-            "[--sample|--missing|--preview-session-sequential|--preview-audio-session|"
+            "[--sample|--missing|--preview-session-sequential|--preview-session-seek-churn|--preview-audio-session|"
             "--preview-video-trim-window|--preview-video-end-selection|--preview-audio-trim-window|"
             "--multi-audio-selected] <path>"
         );
@@ -679,6 +749,10 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--preview-session-sequential") {
         return run_preview_session_sequential_assertion(path);
+    }
+
+    if (mode == "--preview-session-seek-churn") {
+        return run_preview_session_seek_churn_assertion(path);
     }
 
     if (mode == "--preview-audio-session") {
@@ -702,7 +776,8 @@ int main(int argc, char *argv[]) {
     }
 
     return fail(
-        "Unknown mode. Use --sample, --missing, --preview-session-sequential, --preview-audio-session, "
+        "Unknown mode. Use --sample, --missing, --preview-session-sequential, --preview-session-seek-churn, "
+        "--preview-audio-session, "
         "--preview-video-trim-window, --preview-video-end-selection, --preview-audio-trim-window, "
         "or --multi-audio-selected."
     );

@@ -186,6 +186,8 @@ private:
     void request_selected_job_preview_frame();
     void clear_preview_surface();
     void reset_preview_pipeline_for_trim_change();
+    void queue_preview_audio_for_playback(const UiEncodeJob &job, qint64 start_time_us);
+    void begin_pending_preview_audio_output(qint64 frame_time_us);
     void start_preview_playback();
     void pause_preview_playback();
     void stop_preview_playback();
@@ -275,6 +277,8 @@ private:
     QString preview_requested_subtitle_format_hint_{"auto"};
     bool preview_requested_subtitle_enabled_{false};
     bool preview_request_in_flight_{false};
+    bool preview_audio_start_pending_{false};
+    qint64 preview_audio_queued_start_time_us_{-1};
 
     QWidget *source_drop_overlay_{nullptr};
     QTableWidget *queue_table_{nullptr};
