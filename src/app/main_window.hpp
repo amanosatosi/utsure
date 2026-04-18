@@ -205,6 +205,8 @@ private:
     void handle_preview_surface_clicked();
     void handle_preview_play_pause_requested();
     void handle_preview_stop_requested();
+    void show_preview_jump_dialog();
+    void jump_selected_job_to_time(qint64 target_time_us);
     void handle_preview_playback_tick();
 
     void refresh_all_views();

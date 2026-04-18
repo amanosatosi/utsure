@@ -20,7 +20,7 @@ struct PreviewAudioPlaybackRequest final {
     qint64 trim_in_us{0};
     std::optional<qint64> trim_out_us{};
     utsure::core::media::AudioStreamInfo source_audio_stream_info{};
-    qint64 chunk_duration_us{250000};
+    qint64 chunk_duration_us{120000};
     int block_samples{1024};
 };
 

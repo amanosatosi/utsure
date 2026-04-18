@@ -27,14 +27,15 @@ namespace {
 
 using SteadyClock = std::chrono::steady_clock;
 
-constexpr std::size_t kInteractivePreviewWindowFrameCount = 1;
+constexpr std::size_t kInteractivePreviewWindowFrameCount = 8;
 constexpr std::size_t kInteractiveTrimmedPreviewWindowFrameCount = 8;
-constexpr std::size_t kPlaybackPreviewWindowFrameCount = 96;
+constexpr std::size_t kPlaybackStartupPreviewWindowFrameCount = 24;
+constexpr std::size_t kPlaybackPreviewWindowFrameCount = 48;
 constexpr std::size_t kRetainedPreviewFrameCount = 192;
 constexpr int kPreviewDecodeMaxWidth = 960;
 constexpr int kPreviewDecodeMaxHeight = 540;
 constexpr qint64 kSequentialPreviewRefillToleranceUs = 1000000;
-constexpr std::size_t kSequentialPreviewPrefetchLeadFrames = kPlaybackPreviewWindowFrameCount;
+constexpr std::size_t kSequentialPreviewPrefetchLeadFrames = 24;
 
 Q_LOGGING_CATEGORY(previewWorkerLog, "utsure.preview.worker")
 
@@ -334,7 +335,7 @@ void PreviewFrameRendererWorker::render_request(const PreviewFrameRenderRequest 
 
             const bool use_sequential_refill = should_decode_next_preview_window(request);
             const std::size_t refill_frame_count = request.playback_active
-                ? kPlaybackPreviewWindowFrameCount
+                ? (use_sequential_refill ? kPlaybackPreviewWindowFrameCount : kPlaybackStartupPreviewWindowFrameCount)
                 : (trim_range.has_trim() ? kInteractiveTrimmedPreviewWindowFrameCount : kInteractivePreviewWindowFrameCount);
             const qint64 decode_request_time_us =
                 utsure::core::media::effective_trimmed_preview_frame_time(request.requested_time_us, trim_range);
@@ -828,7 +829,11 @@ bool PreviewFrameRendererWorker::cached_preview_window_covers(
 }
 
 bool PreviewFrameRendererWorker::should_decode_next_preview_window(const PreviewFrameRenderRequest &request) const {
-    if (!request.playback_active || !preview_session_ || cached_preview_frames_.empty()) {
+    if (!preview_session_ || cached_preview_frames_.empty()) {
+        return false;
+    }
+
+    if (cached_source_path_ != request.source_path.trimmed()) {
         return false;
     }
 

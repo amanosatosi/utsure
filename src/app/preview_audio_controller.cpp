@@ -20,6 +20,9 @@ namespace {
 
 Q_LOGGING_CATEGORY(previewAudioControllerLog, "utsure.preview.audio.controller")
 
+constexpr qint64 kPreviewAudioTargetBufferUs = 180000;
+constexpr qint64 kPreviewAudioLowWatermarkUs = 60000;
+
 class PreviewAudioBufferDevice final : public QIODevice {
 public:
     explicit PreviewAudioBufferDevice(QObject *parent = nullptr) : QIODevice(parent) {
@@ -181,8 +184,8 @@ bool PreviewAudioController::start_preview(const PreviewAudioPlaybackRequest &re
         playback_anchor_time_us_ = std::min(playback_anchor_time_us_, *trim_out_us_);
     }
     next_chunk_time_us_ = playback_anchor_time_us_;
-    target_buffer_bytes_ = std::max<qint64>(bytes_for_duration_or_default(audio_format_, 350000), 1);
-    low_watermark_bytes_ = std::max<qint64>(bytes_for_duration_or_default(audio_format_, 125000), 1);
+    target_buffer_bytes_ = std::max<qint64>(bytes_for_duration_or_default(audio_format_, kPreviewAudioTargetBufferUs), 1);
+    low_watermark_bytes_ = std::max<qint64>(bytes_for_duration_or_default(audio_format_, kPreviewAudioLowWatermarkUs), 1);
     playback_active_ = true;
 
     recreate_audio_sink();

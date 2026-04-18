@@ -209,6 +209,148 @@ double rational_to_double(const utsure::core::media::Rational &value) {
     return static_cast<double>(value.numerator) / static_cast<double>(value.denominator);
 }
 
+struct PreviewJumpTiming final {
+    double frame_rate{0.0};
+    QString frame_rate_summary{};
+};
+
+PreviewJumpTiming preview_jump_timing_for_job(const MainWindow::UiEncodeJob &job) {
+    if (job.inspected_source_info.has_value() && job.inspected_source_info->primary_video_stream.has_value()) {
+        const auto &frame_rate = job.inspected_source_info->primary_video_stream->average_frame_rate;
+        const double frame_rate_value = rational_to_double(frame_rate);
+        if (frame_rate_value > 0.0) {
+            return PreviewJumpTiming{
+                .frame_rate = frame_rate_value,
+                .frame_rate_summary = QString("%1/%2 (%3 fps)")
+                                          .arg(frame_rate.numerator)
+                                          .arg(frame_rate.denominator)
+                                          .arg(QString::number(frame_rate_value, 'f', 3))
+            };
+        }
+    }
+
+    constexpr qint64 kFallbackFrameStepUs = 41708;
+    const double fallback_frame_rate = 1000000.0 / static_cast<double>(kFallbackFrameStepUs);
+    return PreviewJumpTiming{
+        .frame_rate = fallback_frame_rate,
+        .frame_rate_summary = QString("Approx. %1 fps").arg(QString::number(fallback_frame_rate, 'f', 3))
+    };
+}
+
+qint64 preview_frame_index_for_time_us(const qint64 time_us, const PreviewJumpTiming &timing) {
+    if (timing.frame_rate <= 0.0) {
+        return 0;
+    }
+
+    const long double frame_index =
+        (static_cast<long double>(std::max<qint64>(time_us, 0)) * static_cast<long double>(timing.frame_rate)) /
+        1000000.0L;
+    return std::max<qint64>(0, static_cast<qint64>(std::llround(frame_index)));
+}
+
+qint64 preview_time_us_for_frame_index(const qint64 frame_index, const PreviewJumpTiming &timing) {
+    if (timing.frame_rate <= 0.0) {
+        return 0;
+    }
+
+    const long double time_us =
+        (static_cast<long double>(std::max<qint64>(frame_index, 0)) * 1000000.0L) /
+        static_cast<long double>(timing.frame_rate);
+    return std::max<qint64>(0, static_cast<qint64>(std::llround(time_us)));
+}
+
+std::optional<qint64> parse_nonnegative_integer_text(const QString &text) {
+    bool ok = false;
+    const qlonglong value = text.trimmed().toLongLong(&ok, 10);
+    if (!ok || value < 0) {
+        return std::nullopt;
+    }
+
+    return static_cast<qint64>(value);
+}
+
+std::optional<qint64> parse_preview_jump_time_text(const QString &text, const PreviewJumpTiming &timing) {
+    const QString normalized = text.trimmed();
+    if (normalized.isEmpty()) {
+        return std::nullopt;
+    }
+
+    const QStringList parts = normalized.split(':');
+    if (parts.isEmpty() || parts.size() > 4) {
+        return std::nullopt;
+    }
+
+    if (parts.size() == 4) {
+        bool hours_ok = false;
+        bool minutes_ok = false;
+        bool seconds_ok = false;
+        bool frames_ok = false;
+        const qlonglong hours = parts[0].trimmed().toLongLong(&hours_ok, 10);
+        const qlonglong minutes = parts[1].trimmed().toLongLong(&minutes_ok, 10);
+        const qlonglong seconds = parts[2].trimmed().toLongLong(&seconds_ok, 10);
+        const qlonglong frame_in_second = parts[3].trimmed().toLongLong(&frames_ok, 10);
+        if (!hours_ok || !minutes_ok || !seconds_ok || !frames_ok ||
+            hours < 0 || minutes < 0 || seconds < 0 || frame_in_second < 0 || timing.frame_rate <= 0.0) {
+            return std::nullopt;
+        }
+
+        const qint64 nominal_frames_per_second =
+            std::max<qint64>(1, static_cast<qint64>(std::ceil(timing.frame_rate)));
+        if (frame_in_second >= nominal_frames_per_second) {
+            return std::nullopt;
+        }
+
+        const long double whole_seconds = static_cast<long double>(hours * 3600 + minutes * 60 + seconds);
+        const long double frame_offset_us =
+            (static_cast<long double>(frame_in_second) * 1000000.0L) /
+            static_cast<long double>(timing.frame_rate);
+        return std::max<qint64>(
+            0,
+            static_cast<qint64>(std::llround((whole_seconds * 1000000.0L) + frame_offset_us))
+        );
+    }
+
+    qlonglong hours = 0;
+    qlonglong minutes = 0;
+    long double seconds = 0.0L;
+
+    if (parts.size() == 3) {
+        bool hours_ok = false;
+        bool minutes_ok = false;
+        bool seconds_ok = false;
+        hours = parts[0].trimmed().toLongLong(&hours_ok, 10);
+        minutes = parts[1].trimmed().toLongLong(&minutes_ok, 10);
+        seconds = parts[2].trimmed().toDouble(&seconds_ok);
+        if (!hours_ok || !minutes_ok || !seconds_ok) {
+            return std::nullopt;
+        }
+    } else if (parts.size() == 2) {
+        bool minutes_ok = false;
+        bool seconds_ok = false;
+        minutes = parts[0].trimmed().toLongLong(&minutes_ok, 10);
+        seconds = parts[1].trimmed().toDouble(&seconds_ok);
+        if (!minutes_ok || !seconds_ok) {
+            return std::nullopt;
+        }
+    } else {
+        bool seconds_ok = false;
+        seconds = parts[0].trimmed().toDouble(&seconds_ok);
+        if (!seconds_ok) {
+            return std::nullopt;
+        }
+    }
+
+    if (hours < 0 || minutes < 0 || seconds < 0.0L) {
+        return std::nullopt;
+    }
+
+    const long double total_seconds =
+        (static_cast<long double>(hours) * 3600.0L) +
+        (static_cast<long double>(minutes) * 60.0L) +
+        seconds;
+    return std::max<qint64>(0, static_cast<qint64>(std::llround(total_seconds * 1000000.0L)));
+}
+
 QString format_audio_track_display(const utsure::core::media::MediaSourceInfo &source_info) {
     if (!source_info.primary_audio_stream.has_value()) {
         return "No source audio detected";
@@ -1470,6 +1612,8 @@ QLabel#PreviewTimeBadge {
     preview_corner_layout->setSpacing(8);
     preview_time_badge_ = new QLabel("00:00:00.000", preview_corner_widget);
     preview_time_badge_->setObjectName("PreviewTimeBadge");
+    preview_time_badge_->setCursor(Qt::PointingHandCursor);
+    preview_time_badge_->setToolTip("Double-click or right-click to jump to a timecode or frame.");
     current_time_value_ = preview_time_badge_;
     preview_enabled_check_ = new QCheckBox("Preview", preview_corner_widget);
     preview_enabled_check_->setCursor(Qt::PointingHandCursor);
@@ -1583,6 +1727,7 @@ QLabel#PreviewTimeBadge {
 
     preview_surface_widget_->installEventFilter(this);
     preview_controls_panel_->installEventFilter(this);
+    preview_time_badge_->installEventFilter(this);
     right_tabs->addTab(preview_tab, "Preview");
 
     auto *task_log_tab = new QWidget(right_tabs);
@@ -1813,6 +1958,17 @@ void MainWindow::resizeEvent(QResizeEvent *event) {
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == preview_time_badge_ && event != nullptr) {
+        switch (event->type()) {
+        case QEvent::MouseButtonDblClick:
+        case QEvent::ContextMenu:
+            show_preview_jump_dialog();
+            return true;
+        default:
+            break;
+        }
+    }
+
     if ((watched == preview_surface_widget_ || watched == preview_controls_panel_) && event != nullptr) {
         switch (event->type()) {
         case QEvent::Enter:
@@ -2995,6 +3151,147 @@ void MainWindow::handle_preview_stop_requested() {
         preview_surface_widget_->setFocus(Qt::OtherFocusReason);
     }
     stop_preview_playback();
+}
+
+void MainWindow::show_preview_jump_dialog() {
+    if (!is_valid_job_index(selected_job_index_)) {
+        return;
+    }
+
+    const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    const PreviewJumpTiming timing = preview_jump_timing_for_job(job);
+
+    QDialog dialog(this);
+    dialog.setWindowTitle("Jump Preview");
+    dialog.setModal(true);
+    dialog.setMinimumWidth(380);
+
+    auto *dialog_layout = new QVBoxLayout(&dialog);
+    dialog_layout->setContentsMargins(12, 12, 12, 12);
+    dialog_layout->setSpacing(8);
+
+    auto *summary_label = new QLabel(
+        QString("Range: 00:00:00.000 to %1\nFPS: %2\nTime accepts HH:MM:SS.mmm or HH:MM:SS:FF. Frame entry is 0-based.")
+            .arg(format_time_us(std::max<qint64>(job.duration_us, 0)))
+            .arg(timing.frame_rate_summary),
+        &dialog
+    );
+    summary_label->setWordWrap(true);
+    dialog_layout->addWidget(summary_label);
+
+    auto *form_layout = new QFormLayout();
+    form_layout->setContentsMargins(0, 0, 0, 0);
+    form_layout->setSpacing(8);
+
+    auto *time_edit = new QLineEdit(format_time_us(job.current_time_us), &dialog);
+    time_edit->setPlaceholderText("HH:MM:SS.mmm or HH:MM:SS:FF");
+    auto *frame_edit = new QLineEdit(
+        QString::number(preview_frame_index_for_time_us(job.current_time_us, timing)),
+        &dialog
+    );
+    frame_edit->setPlaceholderText("0-based frame index");
+
+    form_layout->addRow("Time / TC", time_edit);
+    form_layout->addRow("Frame", frame_edit);
+    dialog_layout->addLayout(form_layout);
+
+    auto *error_label = new QLabel(&dialog);
+    error_label->setWordWrap(true);
+    error_label->setStyleSheet("color: #ff9b9b;");
+    dialog_layout->addWidget(error_label);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    dialog_layout->addWidget(buttons);
+
+    auto *ok_button = buttons->button(QDialogButtonBox::Ok);
+    std::optional<qint64> resolved_target_time_us{job.current_time_us};
+    bool syncing_fields = false;
+
+    const auto apply_valid_state = [&](const qint64 target_time_us) {
+        resolved_target_time_us = target_time_us;
+        error_label->clear();
+        if (ok_button != nullptr) {
+            ok_button->setEnabled(true);
+        }
+    };
+
+    const auto apply_invalid_state = [&](const QString &message) {
+        resolved_target_time_us.reset();
+        error_label->setText(message);
+        if (ok_button != nullptr) {
+            ok_button->setEnabled(false);
+        }
+    };
+
+    const auto sync_from_time = [&]() {
+        if (syncing_fields) {
+            return;
+        }
+
+        const auto parsed_time_us = parse_preview_jump_time_text(time_edit->text(), timing);
+        if (!parsed_time_us.has_value()) {
+            apply_invalid_state("Enter a valid time as HH:MM:SS.mmm, MM:SS.mmm, SS.mmm, or HH:MM:SS:FF.");
+            return;
+        }
+
+        const qint64 clamped_time_us = clamp_preview_time_to_job_duration(job, *parsed_time_us);
+        syncing_fields = true;
+        frame_edit->setText(QString::number(preview_frame_index_for_time_us(clamped_time_us, timing)));
+        syncing_fields = false;
+        apply_valid_state(clamped_time_us);
+    };
+
+    const auto sync_from_frame = [&]() {
+        if (syncing_fields) {
+            return;
+        }
+
+        const auto parsed_frame_index = parse_nonnegative_integer_text(frame_edit->text());
+        if (!parsed_frame_index.has_value()) {
+            apply_invalid_state("Enter a non-negative 0-based frame number.");
+            return;
+        }
+
+        const qint64 clamped_time_us = clamp_preview_time_to_job_duration(
+            job,
+            preview_time_us_for_frame_index(*parsed_frame_index, timing)
+        );
+        syncing_fields = true;
+        time_edit->setText(format_time_us(clamped_time_us));
+        syncing_fields = false;
+        apply_valid_state(clamped_time_us);
+    };
+
+    connect(time_edit, &QLineEdit::textEdited, &dialog, [sync_from_time](const QString &) { sync_from_time(); });
+    connect(frame_edit, &QLineEdit::textEdited, &dialog, [sync_from_frame](const QString &) { sync_from_frame(); });
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    sync_from_time();
+    time_edit->selectAll();
+    time_edit->setFocus(Qt::OtherFocusReason);
+
+    if (dialog.exec() != QDialog::Accepted || !resolved_target_time_us.has_value()) {
+        return;
+    }
+
+    jump_selected_job_to_time(*resolved_target_time_us);
+}
+
+void MainWindow::jump_selected_job_to_time(const qint64 target_time_us) {
+    if (!is_valid_job_index(selected_job_index_)) {
+        return;
+    }
+
+    if (preview_surface_widget_ != nullptr) {
+        preview_surface_widget_->setFocus(Qt::OtherFocusReason);
+    }
+
+    pause_preview_playback();
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    job.current_time_us = clamp_preview_time_to_job_duration(job, target_time_us);
+    refresh_trim_controls();
+    refresh_selected_job_preview();
 }
 
 void MainWindow::handle_preview_playback_tick() {
