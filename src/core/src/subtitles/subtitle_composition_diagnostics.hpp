@@ -174,4 +174,15 @@ inline void maybe_log_skipped_empty_subtitle_bitmap_diagnostics(
     );
 }
 
+inline void maybe_log_subtitle_renderer_quirk_diagnostic(
+    const SubtitleRenderRequest &request,
+    const std::string_view message
+) {
+    if (!should_log_subtitle_frame_diagnostics(request)) {
+        return;
+    }
+
+    request.debug_context->log_callback(std::string(message));
+}
+
 }  // namespace utsure::core::subtitles::detail

@@ -34,6 +34,7 @@ using utsure::core::media::MediaDecodeResult;
 using utsure::core::media::MediaDecoder;
 using utsure::core::media::OutputVideoCodec;
 using utsure::core::media::Rational;
+using utsure::core::subtitles::SubtitleCompositionDebugContext;
 using utsure::core::subtitles::SubtitleRenderRequest;
 using utsure::core::subtitles::SubtitleRenderResult;
 using utsure::core::subtitles::SubtitleRenderSessionCreateRequest;
@@ -65,6 +66,16 @@ struct CollectingObserver final : EncodeJobObserver {
 bool observer_logs_contain_text(const CollectingObserver &observer, std::string_view needle) {
     for (const auto &message : observer.log_messages) {
         if (message.message.find(needle) != std::string::npos) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool string_messages_contain_text(const std::vector<std::string> &messages, std::string_view needle) {
+    for (const auto &message : messages) {
+        if (message.find(needle) != std::string::npos) {
             return true;
         }
     }
@@ -525,16 +536,47 @@ int run_unsupported_img_render_assertion(const std::filesystem::path &subtitle_p
     };
 
     auto session_result = subtitle_renderer->create_session(session_request);
-    if (session_result.succeeded() || !session_result.error.has_value()) {
-        return fail("The unsupported libassmod img subtitle sample unexpectedly created a render session.");
+    if (!session_result.succeeded()) {
+        return fail("The best-effort libassmod img subtitle sample unexpectedly failed session creation.");
     }
 
-    if (session_result.error->message.find("\\img") == std::string::npos) {
-        return fail("The unsupported libassmod img subtitle sample did not report an img-specific error.");
+    std::vector<std::string> diagnostics{};
+    const SubtitleCompositionDebugContext debug_context{
+        .decoded_frame_index = 0,
+        .output_pts = 0,
+        .subtitle_timestamp_microseconds = 0,
+        .worker_id = 0,
+        .session_id = 1,
+        .log_frame_details = true,
+        .log_bitmap_details = false,
+        .log_callback = [&diagnostics](const std::string &message) {
+            diagnostics.push_back(message);
+        }
+    };
+
+    const auto render_result = session_result.session->render(SubtitleRenderRequest{
+        .timestamp_microseconds = 0,
+        .debug_context = &debug_context
+    });
+    if (!render_result.succeeded()) {
+        const std::string error_message =
+            "The best-effort libassmod img subtitle sample failed to render: " +
+            render_result.error->message +
+            " Hint: " +
+            render_result.error->actionable_hint;
+        return fail(error_message);
     }
 
-    std::cout << session_result.error->message << '\n';
-    std::cout << session_result.error->actionable_hint << '\n';
+    if (!string_messages_contain_text(diagnostics, "\\img") ||
+        !string_messages_contain_text(diagnostics, "unsupported effect details may be skipped")) {
+        return fail("The best-effort libassmod img subtitle sample did not log the expected quirk diagnostics.");
+    }
+
+    std::cout << "session.subtitle_path=" << format_path_leaf(subtitle_path) << '\n';
+    std::cout << "session.created=yes\n";
+    std::cout << "quirk.diagnostic_logged=yes\n";
+    std::cout << "render.succeeded=yes\n";
+    std::cout << "render.bitmap_count=" << render_result.rendered_frame->bitmaps.size() << '\n';
     return 0;
 }
 
@@ -733,6 +775,109 @@ int run_empty_bitmap_burn_in_assertion(
         *plain_output_decode.decoded_media_source,
         *burned_output_decode.decoded_media_source
     ) << '\n';
+    return 0;
+}
+
+int run_best_effort_img_burn_in_assertion(
+    const std::filesystem::path &sample_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &plain_output_path,
+    const std::filesystem::path &burned_output_path
+) {
+    CollectingObserver observer{};
+    const EncodeJob plain_job{
+        .input = {
+            .main_source_path = sample_path
+        },
+        .output = {
+            .output_path = plain_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJob burned_job{
+        .input = {
+            .main_source_path = sample_path
+        },
+        .subtitles = utsure::core::job::EncodeJobSubtitleSettings{
+            .subtitle_path = subtitle_path,
+            .format_hint = "ass"
+        },
+        .output = {
+            .output_path = burned_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJobResult plain_job_result = EncodeJobRunner::run(plain_job);
+    if (!plain_job_result.succeeded()) {
+        return fail("Plain encode job failed unexpectedly before the best-effort img regression check.");
+    }
+
+    const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!burned_job_result.succeeded()) {
+        return fail("The best-effort img subtitle burn-in job failed unexpectedly.");
+    }
+
+    const auto &summary = *burned_job_result.encode_job_summary;
+    if (summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
+        return fail("The best-effort img subtitle burn-in job should report non-zero subtitle composition time.");
+    }
+
+    if (!observer_logs_contain_text(observer, "\\img") ||
+        !observer_logs_contain_text(observer, "unsupported effect details may be skipped")) {
+        return fail("The best-effort img subtitle burn-in job did not log the expected quirk diagnostics.");
+    }
+
+    const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);
+    const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
+    if (!plain_output_decode.succeeded() || !burned_output_decode.succeeded()) {
+        return fail("The best-effort img regression output decode failed unexpectedly.");
+    }
+
+    if (assert_decoded_output(*plain_output_decode.decoded_media_source, 48U, true) != 0 ||
+        assert_decoded_output(*burned_output_decode.decoded_media_source, 48U, true) != 0) {
+        return 1;
+    }
+
+    const auto observer_result = assert_observer_flow(observer, 1);
+    if (observer_result != 0) {
+        return observer_result;
+    }
+
+    const auto runtime_result = assert_subtitle_runtime_visibility(
+        observer,
+        summary,
+        current_subtitle_bitmap_mode(),
+        current_subtitle_composition_mode()
+    );
+    if (runtime_result != 0) {
+        return runtime_result;
+    }
+
+    std::cout << build_validation_report(
+        summary,
+        *plain_output_decode.decoded_media_source,
+        *burned_output_decode.decoded_media_source
+    ) << '\n';
+    std::cout << "quirk.diagnostic_logged=yes\n";
+    std::cout << "best_effort.encode_succeeded=yes\n";
+    std::cout << "best_effort.frame0.changed="
+              << (frames_are_identical(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U)
+                    ? "no"
+                    : "yes")
+              << '\n';
     return 0;
 }
 
@@ -1204,6 +1349,7 @@ int main(int argc, char *argv[]) {
             "--render-unsupported-img <subtitle>|"
             "--h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--empty-bitmap-h264 <input> <subtitle> <plain-output> <burned-output>|"
+            "--best-effort-img-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--h265 <input> <subtitle> <plain-output> <burned-output>|"
             "--trimmed-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--stress-h264 <input> <subtitle> <plain-output> <burned-output>|"
@@ -1242,6 +1388,15 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--empty-bitmap-h264" && argc == 6) {
         return run_empty_bitmap_burn_in_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4]),
+            std::filesystem::path(argv[5])
+        );
+    }
+
+    if (mode == "--best-effort-img-h264" && argc == 6) {
+        return run_best_effort_img_burn_in_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3]),
             std::filesystem::path(argv[4]),

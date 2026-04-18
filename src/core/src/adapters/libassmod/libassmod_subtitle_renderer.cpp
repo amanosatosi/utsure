@@ -74,6 +74,18 @@ struct ScriptFeatureScan final {
     bool references_tag_images{false};
 };
 
+std::vector<std::string> build_script_feature_quirk_messages(const ScriptFeatureScan &scan) {
+    std::vector<std::string> messages{};
+    if (scan.references_tag_images) {
+        messages.push_back(
+            "libassmod best-effort note: script references \\img tags, but this build does not register host-side "
+            "RGBA tag images; unsupported effect details may be skipped."
+        );
+    }
+
+    return messages;
+}
+
 std::string path_to_utf8_string(const std::filesystem::path &path) {
 #if defined(_WIN32)
     const auto normalized = path.lexically_normal().u8string();
@@ -273,12 +285,14 @@ public:
     LibassmodSubtitleRenderSession(
         SubtitleRenderSessionCreateRequest create_request,
         std::string subtitle_path_string,
+        std::vector<std::string> quirk_messages,
         LibraryHandle library,
         RendererHandle renderer,
         TrackHandle track
     )
         : create_request_(std::move(create_request)),
           subtitle_path_string_(std::move(subtitle_path_string)),
+          quirk_messages_(std::move(quirk_messages)),
           library_(std::move(library)),
           renderer_(std::move(renderer)),
           track_(std::move(track)),
@@ -296,6 +310,7 @@ public:
     [[nodiscard]] SubtitleRenderResult render(const SubtitleRenderRequest &request) noexcept override {
         try {
             [[maybe_unused]] const auto access_guard = begin_session_access("render");
+            maybe_log_quirk_diagnostics(request);
             auto images_rgba = render_images_rgba(request);
             const auto image_nodes = collect_ass_image_rgba_nodes(images_rgba.get());
             const auto drawable_image_nodes = detail::libassmod::collect_drawable_ass_image_rgba_nodes(
@@ -341,6 +356,7 @@ public:
         try {
             [[maybe_unused]] const auto access_guard = begin_session_access("compose");
             detail::validate_rgba_frame_surface(video_frame, "Subtitle composition");
+            maybe_log_quirk_diagnostics(request);
 
             auto images_rgba = render_images_rgba(request);
             const auto image_nodes = collect_ass_image_rgba_nodes(images_rgba.get());
@@ -405,6 +421,21 @@ public:
     }
 
 private:
+    void maybe_log_quirk_diagnostics(const SubtitleRenderRequest &request) {
+        if (quirk_messages_.empty() || quirk_diagnostics_logged_) {
+            return;
+        }
+
+        if (!detail::should_log_subtitle_frame_diagnostics(request)) {
+            return;
+        }
+
+        for (const auto &message : quirk_messages_) {
+            detail::maybe_log_subtitle_renderer_quirk_diagnostic(request, message);
+        }
+        quirk_diagnostics_logged_ = true;
+    }
+
     class SessionAccessGuard final {
     public:
         explicit SessionAccessGuard(std::atomic<bool> &in_use) noexcept
@@ -489,6 +520,7 @@ private:
 
     SubtitleRenderSessionCreateRequest create_request_{};
     std::string subtitle_path_string_{};
+    std::vector<std::string> quirk_messages_{};
     LibraryHandle library_{};
     RendererHandle renderer_{};
     TrackHandle track_{};
@@ -496,6 +528,7 @@ private:
     int session_instance_id_{0};
     std::atomic<bool> in_use_{false};
     std::atomic<bool> destroyed_{false};
+    bool quirk_diagnostics_logged_{false};
 };
 
 class LibassmodSubtitleRenderer final : public SubtitleRenderer {
@@ -575,14 +608,7 @@ public:
             configure_library_fonts(*library, request);
             auto renderer = create_renderer(*library, request);
             const auto script_feature_scan = scan_script_features(normalized_path);
-            if (script_feature_scan.references_tag_images) {
-                return make_session_error(
-                    request,
-                    "The subtitle script uses libassmod \\img tags, but this build does not register host-side RGBA "
-                    "image resources.",
-                    "Remove \\img usage or add the libassmod tag-image registration path before burn-in."
-                );
-            }
+            auto quirk_messages = build_script_feature_quirk_messages(script_feature_scan);
 
             auto track = load_track(*library, request);
 
@@ -590,6 +616,7 @@ public:
                 .session = std::make_unique<LibassmodSubtitleRenderSession>(
                     request,
                     normalized_path.string(),
+                    std::move(quirk_messages),
                     std::move(library),
                     std::move(renderer),
                     std::move(track)
