@@ -74,6 +74,16 @@ struct ScriptFeatureScan final {
     bool references_tag_images{false};
 };
 
+enum class AssImageRgbaValidationResult : std::uint8_t {
+    empty = 0,
+    drawable
+};
+
+struct DrawableAssImageRgba final {
+    std::size_t bitmap_index{0};
+    const ASS_ImageRGBA *image{nullptr};
+};
+
 std::string path_to_utf8_string(const std::filesystem::path &path) {
 #if defined(_WIN32)
     const auto normalized = path.lexically_normal().u8string();
@@ -221,20 +231,14 @@ TrackHandle load_track(
     return track;
 }
 
-void require_valid_ass_image_rgba(
+[[nodiscard]] AssImageRgbaValidationResult validate_ass_image_rgba(
     const ASS_ImageRGBA &image,
     const std::size_t bitmap_index,
     const std::string &subtitle_path_string,
     const int session_instance_id
 ) {
     if (image.w <= 0 || image.h <= 0) {
-        std::ostringstream message;
-        message << "libassmod produced an invalid RGBA subtitle bitmap with a non-positive size"
-                << " for '" << subtitle_path_string << "'"
-                << " (session " << session_instance_id << ", bitmap " << bitmap_index << "): origin="
-                << image.dst_x << ',' << image.dst_y
-                << ", width=" << image.w << ", height=" << image.h << '.';
-        throw std::runtime_error(message.str());
+        return AssImageRgbaValidationResult::empty;
     }
 
     const auto minimum_stride = static_cast<std::int64_t>(image.w) * 4LL;
@@ -269,6 +273,8 @@ void require_valid_ass_image_rgba(
                 << ", stride=" << image.stride << '.';
         throw std::runtime_error(message.str());
     }
+
+    return AssImageRgbaValidationResult::drawable;
 }
 
 SubtitleBitmap copy_ass_image_rgba(const ASS_ImageRGBA &image) {
@@ -318,6 +324,46 @@ std::vector<ASS_ImageRGBA *> collect_ass_image_rgba_nodes(ASS_ImageRGBA *images)
     return bitmaps;
 }
 
+std::vector<DrawableAssImageRgba> collect_drawable_ass_image_rgba_nodes(
+    const std::vector<ASS_ImageRGBA *> &image_nodes,
+    const SubtitleRenderRequest &request,
+    const std::string_view bitmap_mode,
+    const std::string &subtitle_path_string,
+    const int session_instance_id
+) {
+    std::vector<DrawableAssImageRgba> drawable_bitmaps{};
+    drawable_bitmaps.reserve(image_nodes.size());
+    for (std::size_t bitmap_index = 0; bitmap_index < image_nodes.size(); ++bitmap_index) {
+        const ASS_ImageRGBA &image = *image_nodes[bitmap_index];
+        const auto validation_result = validate_ass_image_rgba(
+            image,
+            bitmap_index,
+            subtitle_path_string,
+            session_instance_id
+        );
+        if (validation_result == AssImageRgbaValidationResult::empty) {
+            detail::maybe_log_skipped_empty_subtitle_bitmap_diagnostics(
+                request,
+                bitmap_index,
+                image.dst_x,
+                image.dst_y,
+                image.w,
+                image.h,
+                image.stride,
+                bitmap_mode
+            );
+            continue;
+        }
+
+        drawable_bitmaps.push_back(DrawableAssImageRgba{
+            .bitmap_index = bitmap_index,
+            .image = &image
+        });
+    }
+
+    return drawable_bitmaps;
+}
+
 class LibassmodSubtitleRenderSession final : public SubtitleRenderSession {
 public:
     LibassmodSubtitleRenderSession(
@@ -348,12 +394,22 @@ public:
             [[maybe_unused]] const auto access_guard = begin_session_access("render");
             auto images_rgba = render_images_rgba(request);
             const auto image_nodes = collect_ass_image_rgba_nodes(images_rgba.get());
+            const auto drawable_image_nodes = collect_drawable_ass_image_rgba_nodes(
+                image_nodes,
+                request,
+                "copied",
+                subtitle_path_string_,
+                session_instance_id_
+            );
             std::vector<SubtitleBitmap> bitmaps{};
-            bitmaps.reserve(image_nodes.size());
-            for (std::size_t bitmap_index = 0; bitmap_index < image_nodes.size(); ++bitmap_index) {
-                const ASS_ImageRGBA &image = *image_nodes[bitmap_index];
-                require_valid_ass_image_rgba(image, bitmap_index, subtitle_path_string_, session_instance_id_);
-                bitmaps.push_back(copy_ass_image_rgba(image));
+            bitmaps.reserve(drawable_image_nodes.size());
+            for (const auto &drawable_image : drawable_image_nodes) {
+                if (drawable_image.image == nullptr) {
+                    continue;
+                }
+
+                const ASS_ImageRGBA &bitmap = *drawable_image.image;
+                bitmaps.push_back(copy_ass_image_rgba(bitmap));
             }
 
             return SubtitleRenderResult{
@@ -384,19 +440,29 @@ public:
 
             auto images_rgba = render_images_rgba(request);
             const auto image_nodes = collect_ass_image_rgba_nodes(images_rgba.get());
+            const auto drawable_image_nodes = collect_drawable_ass_image_rgba_nodes(
+                image_nodes,
+                request,
+                runtime::to_string(runtime_options_.bitmap_transfer_mode),
+                subtitle_path_string_,
+                session_instance_id_
+            );
             detail::maybe_log_subtitle_frame_diagnostics(
                 request,
                 video_frame,
-                image_nodes.size(),
+                drawable_image_nodes.size(),
                 runtime::to_string(runtime_options_.bitmap_transfer_mode)
             );
             bool subtitles_applied = false;
-            for (std::size_t bitmap_index = 0; bitmap_index < image_nodes.size(); ++bitmap_index) {
-                const ASS_ImageRGBA &image = *image_nodes[bitmap_index];
-                require_valid_ass_image_rgba(image, bitmap_index, subtitle_path_string_, session_instance_id_);
+            for (const auto &drawable_image : drawable_image_nodes) {
+                if (drawable_image.image == nullptr) {
+                    continue;
+                }
+
+                const ASS_ImageRGBA &image = *drawable_image.image;
                 detail::maybe_log_subtitle_bitmap_diagnostics(
                     request,
-                    bitmap_index,
+                    drawable_image.bitmap_index,
                     image.dst_x,
                     image.dst_y,
                     image.w,

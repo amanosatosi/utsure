@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -33,6 +34,7 @@ using utsure::core::media::MediaDecodeResult;
 using utsure::core::media::MediaDecoder;
 using utsure::core::media::OutputVideoCodec;
 using utsure::core::media::Rational;
+using utsure::core::subtitles::SubtitleCompositionDebugContext;
 using utsure::core::subtitles::SubtitleRenderRequest;
 using utsure::core::subtitles::SubtitleRenderResult;
 using utsure::core::subtitles::SubtitleRenderSessionCreateRequest;
@@ -64,6 +66,16 @@ struct CollectingObserver final : EncodeJobObserver {
 bool observer_logs_contain_text(const CollectingObserver &observer, std::string_view needle) {
     for (const auto &message : observer.log_messages) {
         if (message.message.find(needle) != std::string::npos) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool string_messages_contain_text(const std::vector<std::string> &messages, std::string_view needle) {
+    for (const auto &message : messages) {
+        if (message.find(needle) != std::string::npos) {
             return true;
         }
     }
@@ -437,6 +449,97 @@ int run_render_assertion(
     return 0;
 }
 
+int run_empty_bitmap_render_assertion(const std::filesystem::path &subtitle_path) {
+    auto subtitle_renderer = create_default_subtitle_renderer();
+    if (!subtitle_renderer) {
+        return fail("The default subtitle renderer could not be created.");
+    }
+
+    const SubtitleRenderSessionCreateRequest session_request{
+        .subtitle_path = subtitle_path,
+        .format_hint = "ass",
+        .canvas_width = 320,
+        .canvas_height = 180,
+        .sample_aspect_ratio = Rational{1, 1}
+    };
+
+    auto session_result = subtitle_renderer->create_session(session_request);
+    if (!session_result.succeeded()) {
+        const std::string error_message =
+            "libassmod session creation failed unexpectedly: " +
+            session_result.error->message +
+            " Hint: " +
+            session_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const SubtitleRenderResult visible_before_result = session_result.session->render(SubtitleRenderRequest{
+        .timestamp_microseconds = 41667
+    });
+    if (!visible_before_result.succeeded()) {
+        return fail("The empty-bitmap sample did not render visible content before the zero-height frame.");
+    }
+
+    std::vector<std::string> diagnostics{};
+    SubtitleCompositionDebugContext debug_context{
+        .decoded_frame_index = 6,
+        .output_pts = std::optional<std::int64_t>(6),
+        .subtitle_timestamp_microseconds = 250000,
+        .worker_id = 0,
+        .session_id = 1,
+        .log_frame_details = true,
+        .log_bitmap_details = true,
+        .log_callback = [&diagnostics](const std::string &message) {
+            diagnostics.push_back(message);
+        }
+    };
+    const SubtitleRenderResult empty_result = session_result.session->render(SubtitleRenderRequest{
+        .timestamp_microseconds = 250000,
+        .debug_context = &debug_context
+    });
+    if (!empty_result.succeeded()) {
+        const std::string error_message =
+            "The empty-bitmap render unexpectedly failed at the transient zero-height frame: " +
+            empty_result.error->message +
+            " Hint: " +
+            empty_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const SubtitleRenderResult visible_after_result = session_result.session->render(SubtitleRenderRequest{
+        .timestamp_microseconds = 291667
+    });
+    if (!visible_after_result.succeeded()) {
+        return fail("The empty-bitmap sample did not recover visible content after the zero-height frame.");
+    }
+
+    if (visible_before_result.rendered_frame->bitmaps.empty()) {
+        return fail("Expected visible subtitle content before the transient empty bitmap.");
+    }
+
+    if (!empty_result.rendered_frame->bitmaps.empty()) {
+        return fail("Expected the transient zero-height subtitle bitmap to be skipped as empty output.");
+    }
+
+    if (visible_after_result.rendered_frame->bitmaps.empty()) {
+        return fail("Expected visible subtitle content after the transient empty bitmap.");
+    }
+
+    if (!string_messages_contain_text(diagnostics, "skipped as empty output")) {
+        return fail("The empty-bitmap render path did not log the skipped transient empty bitmap.");
+    }
+
+    std::cout << "session.subtitle_path=" << format_path_leaf(subtitle_path) << '\n';
+    std::cout << "visible_before.timestamp_us=41667\n";
+    std::cout << "visible_before.has_content=yes\n";
+    std::cout << "empty.timestamp_us=250000\n";
+    std::cout << "empty.has_content=no\n";
+    std::cout << "empty.diagnostic_logged=yes\n";
+    std::cout << "visible_after.timestamp_us=291667\n";
+    std::cout << "visible_after.has_content=yes\n";
+    return 0;
+}
+
 int run_unsupported_img_render_assertion(const std::filesystem::path &subtitle_path) {
     auto subtitle_renderer = create_default_subtitle_renderer();
     if (!subtitle_renderer) {
@@ -561,6 +664,110 @@ int run_burn_in_assertion(
         *plain_output_decode.decoded_media_source,
         *burned_output_decode.decoded_media_source
     ) << '\n';
+    return 0;
+}
+
+int run_empty_bitmap_burn_in_assertion(
+    const std::filesystem::path &sample_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &plain_output_path,
+    const std::filesystem::path &burned_output_path
+) {
+    CollectingObserver observer{};
+    const EncodeJob plain_job{
+        .input = {
+            .main_source_path = sample_path
+        },
+        .output = {
+            .output_path = plain_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJob burned_job{
+        .input = {
+            .main_source_path = sample_path
+        },
+        .subtitles = utsure::core::job::EncodeJobSubtitleSettings{
+            .subtitle_path = subtitle_path,
+            .format_hint = "ass"
+        },
+        .output = {
+            .output_path = burned_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJobResult plain_job_result = EncodeJobRunner::run(plain_job);
+    if (!plain_job_result.succeeded()) {
+        return fail("Plain encode job failed unexpectedly before the empty-bitmap regression check.");
+    }
+
+    const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!burned_job_result.succeeded()) {
+        return fail("The empty-bitmap subtitle burn-in job failed unexpectedly.");
+    }
+
+    const auto &summary = *burned_job_result.encode_job_summary;
+    if (summary.subtitled_video_frame_count != 11) {
+        return fail("Unexpected count of subtitled video frames for the empty-bitmap regression sample.");
+    }
+
+    if (summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
+        return fail("The empty-bitmap subtitle burn-in job should report non-zero subtitle composition time.");
+    }
+
+    if (!observer_logs_contain_text(observer, "skipped as empty output")) {
+        return fail("The empty-bitmap subtitle burn-in job did not log the skipped transient empty bitmap.");
+    }
+
+    const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);
+    const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
+    if (!plain_output_decode.succeeded() || !burned_output_decode.succeeded()) {
+        return fail("The empty-bitmap regression output decode failed unexpectedly.");
+    }
+
+    if (assert_decoded_output(*plain_output_decode.decoded_media_source, 48U, true) != 0 ||
+        assert_decoded_output(*burned_output_decode.decoded_media_source, 48U, true) != 0) {
+        return 1;
+    }
+
+    if (frames_are_identical(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U)) {
+        return fail("The empty-bitmap subtitle burn-in regression did not alter the first output frame.");
+    }
+
+    const auto observer_result = assert_observer_flow(observer, 1);
+    if (observer_result != 0) {
+        return observer_result;
+    }
+
+    const auto runtime_result = assert_subtitle_runtime_visibility(
+        observer,
+        summary,
+        current_subtitle_bitmap_mode(),
+        current_subtitle_composition_mode()
+    );
+    if (runtime_result != 0) {
+        return runtime_result;
+    }
+
+    std::cout << build_validation_report(
+        summary,
+        *plain_output_decode.decoded_media_source,
+        *burned_output_decode.decoded_media_source
+    ) << '\n';
+    std::cout << "empty_bitmap_skip_logged=yes\n";
     return 0;
 }
 
@@ -1028,8 +1235,10 @@ int main(int argc, char *argv[]) {
     if (argc < 3) {
         return fail(
             "Usage: utsure_core_subtitle_burn_in_tests "
-            "[--render <subtitle>|--render-gradient <subtitle>|--render-unsupported-img <subtitle>|"
+            "[--render <subtitle>|--render-gradient <subtitle>|--render-empty-effect <subtitle>|"
+            "--render-unsupported-img <subtitle>|"
             "--h264 <input> <subtitle> <plain-output> <burned-output>|"
+            "--empty-bitmap-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--h265 <input> <subtitle> <plain-output> <burned-output>|"
             "--trimmed-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--stress-h264 <input> <subtitle> <plain-output> <burned-output>|"
@@ -1048,6 +1257,10 @@ int main(int argc, char *argv[]) {
         return run_render_assertion(std::filesystem::path(argv[2]), true);
     }
 
+    if (mode == "--render-empty-effect" && argc == 3) {
+        return run_empty_bitmap_render_assertion(std::filesystem::path(argv[2]));
+    }
+
     if (mode == "--render-unsupported-img" && argc == 3) {
         return run_unsupported_img_render_assertion(std::filesystem::path(argv[2]));
     }
@@ -1059,6 +1272,15 @@ int main(int argc, char *argv[]) {
             std::filesystem::path(argv[4]),
             std::filesystem::path(argv[5]),
             OutputVideoCodec::h264
+        );
+    }
+
+    if (mode == "--empty-bitmap-h264" && argc == 6) {
+        return run_empty_bitmap_burn_in_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4]),
+            std::filesystem::path(argv[5])
         );
     }
 

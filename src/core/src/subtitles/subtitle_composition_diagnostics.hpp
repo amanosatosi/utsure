@@ -130,4 +130,48 @@ inline void maybe_log_subtitle_bitmap_diagnostics(
     );
 }
 
+inline std::string format_skipped_empty_subtitle_bitmap_diagnostics(
+    const std::size_t bitmap_index,
+    const int origin_x,
+    const int origin_y,
+    const int width,
+    const int height,
+    const int stride,
+    const std::string_view bitmap_mode
+) {
+    std::ostringstream message;
+    message << "Subtitle bitmap[" << bitmap_index << "] skipped as empty output: mode=" << bitmap_mode
+            << ", origin=" << origin_x << ',' << origin_y
+            << ", size=" << width << 'x' << height
+            << ", stride=" << stride;
+    return message.str();
+}
+
+inline void maybe_log_skipped_empty_subtitle_bitmap_diagnostics(
+    const SubtitleRenderRequest &request,
+    const std::size_t bitmap_index,
+    const int origin_x,
+    const int origin_y,
+    const int width,
+    const int height,
+    const int stride,
+    const std::string_view bitmap_mode
+) {
+    if (!should_log_subtitle_frame_diagnostics(request)) {
+        return;
+    }
+
+    request.debug_context->log_callback(
+        format_skipped_empty_subtitle_bitmap_diagnostics(
+            bitmap_index,
+            origin_x,
+            origin_y,
+            width,
+            height,
+            stride,
+            bitmap_mode
+        )
+    );
+}
+
 }  // namespace utsure::core::subtitles::detail

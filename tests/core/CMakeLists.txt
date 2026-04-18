@@ -16,6 +16,7 @@ set(UTSURE_MULTI_AUDIO_DEFAULT_FILE "${UTSURE_TEST_MEDIA_DIR}/multi-audio-defaul
 set(UTSURE_MULTI_AUDIO_FALLBACK_FILE "${UTSURE_TEST_MEDIA_DIR}/multi-audio-fallback.mkv")
 set(UTSURE_SUBTITLE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-sample.ass")
 set(UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-gradient-sample.ass")
+set(UTSURE_SUBTITLE_EMPTY_BITMAP_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-empty-bitmap-sample.ass")
 set(UTSURE_SUBTITLE_IMG_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-img-sample.ass")
 set(UTSURE_SUBTITLE_STRESS_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-stress-sample.ass")
 set(UTSURE_SUBTITLE_STRESS_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-main.mp4")
@@ -29,6 +30,11 @@ configure_file(
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-gradient-sample.ass"
     "${UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE}"
+    COPYONLY
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-empty-bitmap-sample.ass"
+    "${UTSURE_SUBTITLE_EMPTY_BITMAP_SAMPLE_FILE}"
     COPYONLY
 )
 configure_file(
@@ -857,6 +863,11 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.subtitles.libassmod.render.empty_bitmap_effect
+    COMMAND utsure_core_subtitle_burn_in_tests --render-empty-effect "${UTSURE_SUBTITLE_EMPTY_BITMAP_SAMPLE_FILE}"
+)
+
+add_test(
     NAME utsure.core.subtitles.libassmod.render.img_unsupported
     COMMAND utsure_core_subtitle_burn_in_tests --render-unsupported-img "${UTSURE_SUBTITLE_IMG_SAMPLE_FILE}"
 )
@@ -877,6 +888,17 @@ add_test(
         "${UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-gradient-plain-h264.mp4"
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-gradient-burn-h264.mp4"
+)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.empty_bitmap_effect.h264
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_DIAGNOSTICS=verbose
+        utsure_core_subtitle_burn_in_tests --empty-bitmap-h264
+            "${UTSURE_SAMPLE_MEDIA_FILE}"
+            "${UTSURE_SUBTITLE_EMPTY_BITMAP_SAMPLE_FILE}"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-empty-bitmap-plain-h264.mp4"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-empty-bitmap-burn-h264.mp4"
 )
 
 add_test(
