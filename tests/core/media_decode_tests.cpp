@@ -505,6 +505,45 @@ int run_preview_video_trim_window_assertion(const std::filesystem::path &sample_
     return 0;
 }
 
+int run_preview_video_end_selection_assertion(const std::filesystem::path &) {
+    std::vector<utsure::core::media::DecodedVideoFrame> frames{};
+    frames.push_back(utsure::core::media::DecodedVideoFrame{
+        .frame_index = 0,
+        .timestamp = utsure::core::media::MediaTimestamp{
+            .start_microseconds = 0,
+            .duration_microseconds = 50000
+        }
+    });
+    frames.push_back(utsure::core::media::DecodedVideoFrame{
+        .frame_index = 1,
+        .timestamp = utsure::core::media::MediaTimestamp{
+            .start_microseconds = 50000,
+            .duration_microseconds = 50000
+        }
+    });
+    frames.push_back(utsure::core::media::DecodedVideoFrame{
+        .frame_index = 2,
+        .timestamp = utsure::core::media::MediaTimestamp{
+            .start_microseconds = 100000,
+            .duration_microseconds = 50000
+        }
+    });
+
+    constexpr std::int64_t kExactEndUs = 150000;
+    const PreviewTrimRange trim_range{};
+    if (!trimmed_preview_frames_cover_time(frames, kExactEndUs, trim_range)) {
+        return fail("Preview frame coverage did not treat the exact source end as selectable.");
+    }
+
+    const auto *selected_frame = select_trimmed_preview_frame(frames, kExactEndUs, trim_range);
+    if (selected_frame == nullptr || selected_frame->frame_index != 2) {
+        return fail("Preview frame selection did not keep the last frame available at the exact source end.");
+    }
+
+    std::cout << "preview_video_exact_end.frame_index=" << selected_frame->frame_index << '\n';
+    return 0;
+}
+
 int run_preview_audio_trim_window_assertion(const std::filesystem::path &sample_path) {
     DecodeNormalizationPolicy normalization_policy{};
     normalization_policy.audio_block_samples = 1024;
@@ -622,7 +661,8 @@ int main(int argc, char *argv[]) {
         return fail(
             "Usage: utsure_core_media_decode_tests "
             "[--sample|--missing|--preview-session-sequential|--preview-audio-session|"
-            "--preview-video-trim-window|--preview-audio-trim-window|--multi-audio-selected] <path>"
+            "--preview-video-trim-window|--preview-video-end-selection|--preview-audio-trim-window|"
+            "--multi-audio-selected] <path>"
         );
     }
 
@@ -649,6 +689,10 @@ int main(int argc, char *argv[]) {
         return run_preview_video_trim_window_assertion(path);
     }
 
+    if (mode == "--preview-video-end-selection") {
+        return run_preview_video_end_selection_assertion(path);
+    }
+
     if (mode == "--preview-audio-trim-window") {
         return run_preview_audio_trim_window_assertion(path);
     }
@@ -659,6 +703,7 @@ int main(int argc, char *argv[]) {
 
     return fail(
         "Unknown mode. Use --sample, --missing, --preview-session-sequential, --preview-audio-session, "
-        "--preview-video-trim-window, --preview-audio-trim-window, or --multi-audio-selected."
+        "--preview-video-trim-window, --preview-video-end-selection, --preview-audio-trim-window, "
+        "or --multi-audio-selected."
     );
 }

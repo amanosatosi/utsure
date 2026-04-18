@@ -378,6 +378,11 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.media.preview_video_end_selection
+    COMMAND utsure_core_media_decode_tests --preview-video-end-selection "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
+)
+
+add_test(
     NAME utsure.core.media.preview_audio_trim_window
     COMMAND utsure_core_media_decode_tests --preview-audio-trim-window "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
 )

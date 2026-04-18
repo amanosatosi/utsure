@@ -614,9 +614,9 @@ std::pair<qint64, qint64> preview_trim_bounds_for_job(const MainWindow::UiEncode
     return {trim_in_us, trim_out_us};
 }
 
-qint64 clamp_preview_time_to_job_trim(const MainWindow::UiEncodeJob &job, const qint64 requested_time_us) {
-    const auto [trim_in_us, trim_out_us] = preview_trim_bounds_for_job(job);
-    return std::clamp<qint64>(requested_time_us, trim_in_us, trim_out_us);
+qint64 clamp_preview_time_to_job_duration(const MainWindow::UiEncodeJob &job, const qint64 requested_time_us) {
+    const qint64 bounded_duration_us = std::max<qint64>(job.duration_us, 0);
+    return std::clamp<qint64>(requested_time_us, 0, bounded_duration_us);
 }
 
 }  // namespace
@@ -2535,7 +2535,7 @@ void MainWindow::request_selected_job_preview_frame() {
     }
 
     const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
-    request_preview_frame_for_time(clamp_preview_time_to_job_trim(job, job.current_time_us));
+    request_preview_frame_for_time(clamp_preview_time_to_job_duration(job, job.current_time_us));
 }
 
 void MainWindow::request_preview_frame_for_time(const qint64 requested_time_us) {
@@ -2551,11 +2551,11 @@ void MainWindow::request_preview_frame_for_time(const qint64 requested_time_us) 
         ? subtitle_format_hint_for_path(normalized_subtitle_path)
         : QString("auto");
     const auto [trim_in_us, trim_out_us] = preview_trim_bounds_for_job(job);
-    const qint64 bounded_requested_time_us = std::clamp<qint64>(requested_time_us, trim_in_us, trim_out_us);
+    const qint64 bounded_requested_time_us = clamp_preview_time_to_job_duration(job, requested_time_us);
     const bool preview_context_changed =
         preview_requested_job_index_ != selected_job_index_ ||
-        preview_requested_trim_in_us_ != trim_in_us ||
-        preview_requested_trim_out_us_ != trim_out_us ||
+        preview_requested_trim_in_us_ != 0 ||
+        preview_requested_trim_out_us_ != -1 ||
         preview_requested_source_path_ != normalized_source_path ||
         preview_requested_subtitle_enabled_ != subtitles_enabled ||
         preview_requested_subtitle_path_ != normalized_subtitle_path ||
@@ -2582,8 +2582,8 @@ void MainWindow::request_preview_frame_for_time(const qint64 requested_time_us) 
 
     if (preview_requested_job_index_ == selected_job_index_ &&
         preview_requested_time_us_ == bounded_requested_time_us &&
-        preview_requested_trim_in_us_ == trim_in_us &&
-        preview_requested_trim_out_us_ == trim_out_us &&
+        preview_requested_trim_in_us_ == 0 &&
+        preview_requested_trim_out_us_ == -1 &&
         preview_requested_source_path_ == normalized_source_path &&
         preview_requested_subtitle_enabled_ == subtitles_enabled &&
         preview_requested_subtitle_path_ == normalized_subtitle_path &&
@@ -2608,8 +2608,8 @@ void MainWindow::request_preview_frame_for_time(const qint64 requested_time_us) 
 
     preview_requested_job_index_ = selected_job_index_;
     preview_requested_time_us_ = bounded_requested_time_us;
-    preview_requested_trim_in_us_ = trim_in_us;
-    preview_requested_trim_out_us_ = trim_out_us;
+    preview_requested_trim_in_us_ = 0;
+    preview_requested_trim_out_us_ = -1;
     preview_requested_source_path_ = normalized_source_path;
     preview_requested_subtitle_enabled_ = subtitles_enabled;
     preview_requested_subtitle_path_ = normalized_subtitle_path;
@@ -2624,8 +2624,8 @@ void MainWindow::request_preview_frame_for_time(const qint64 requested_time_us) 
         .request_token = preview_request_token_,
         .source_path = normalized_source_path,
         .requested_time_us = bounded_requested_time_us,
-        .trim_in_us = trim_in_us,
-        .trim_out_us = trim_out_us,
+        .trim_in_us = 0,
+        .trim_out_us = std::nullopt,
         .playback_active = preview_playing_,
         .subtitle_enabled = subtitles_enabled,
         .subtitle_path = normalized_subtitle_path,
@@ -2660,7 +2660,6 @@ void MainWindow::clear_preview_surface() {
 
 void MainWindow::reset_preview_pipeline_for_trim_change() {
     pause_preview_playback();
-    clear_preview_surface();
 }
 
 void MainWindow::start_preview_playback() {
@@ -2669,21 +2668,21 @@ void MainWindow::start_preview_playback() {
     }
 
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
-    const auto [trim_in_us, trim_out_us] = preview_trim_bounds_for_job(job);
+    const qint64 bounded_duration_us = std::max<qint64>(job.duration_us, 0);
 
-    if (job.current_time_us < trim_in_us || job.current_time_us >= trim_out_us) {
-        job.current_time_us = trim_in_us;
+    if (job.current_time_us < 0 || job.current_time_us > bounded_duration_us) {
+        job.current_time_us = clamp_preview_time_to_job_duration(job, job.current_time_us);
         refresh_trim_controls();
     }
 
     const bool resume_from_displayed_frame =
         preview_surface_widget_ != nullptr &&
         preview_surface_widget_->has_frame() &&
-        job.current_time_us >= trim_in_us &&
-        job.current_time_us < trim_out_us;
+        job.current_time_us >= 0 &&
+        job.current_time_us < bounded_duration_us;
     preview_next_playback_time_us_ = resume_from_displayed_frame
-        ? std::clamp<qint64>(job.current_time_us + selected_job_frame_step_us(), trim_in_us, trim_out_us)
-        : std::clamp<qint64>(job.current_time_us, trim_in_us, trim_out_us);
+        ? std::clamp<qint64>(job.current_time_us + selected_job_frame_step_us(), 0, bounded_duration_us)
+        : std::clamp<qint64>(job.current_time_us, 0, bounded_duration_us);
     preview_playing_ = true;
 
     if (preview_audio_controller_ != nullptr) {
@@ -2691,8 +2690,8 @@ void MainWindow::start_preview_playback() {
             const bool preview_audio_started = preview_audio_controller_->start_preview(PreviewAudioPlaybackRequest{
                 .source_path = job.source_path.trimmed(),
                 .requested_time_us = job.current_time_us,
-                .trim_in_us = trim_in_us,
-                .trim_out_us = trim_out_us,
+                .trim_in_us = 0,
+                .trim_out_us = std::nullopt,
                 .source_audio_stream_info = *job.inspected_source_info->primary_audio_stream
             });
             if (!preview_audio_started) {
@@ -2747,7 +2746,7 @@ void MainWindow::stop_preview_playback() {
     }
 
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
-    job.current_time_us = std::clamp<qint64>(job.trim_in_us, 0, std::max<qint64>(job.duration_us, 0));
+    job.current_time_us = clamp_preview_time_to_job_duration(job, 0);
     refresh_trim_controls();
     refresh_selected_job_preview();
 }
@@ -2897,10 +2896,8 @@ void MainWindow::handle_preview_ready(
 
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     const qint64 bounded_duration_us = std::max<qint64>(job.duration_us, 0);
-    const qint64 trim_in_us = std::clamp<qint64>(job.trim_in_us, 0, bounded_duration_us);
-    const qint64 trim_out_us = std::clamp<qint64>(std::max(job.trim_out_us, trim_in_us), trim_in_us, bounded_duration_us);
-    const qint64 normalized_frame_time_us = std::clamp<qint64>(frame_time_us, trim_in_us, trim_out_us);
-    const qint64 normalized_requested_time_us = std::clamp<qint64>(requested_time_us, trim_in_us, trim_out_us);
+    const qint64 normalized_frame_time_us = std::clamp<qint64>(frame_time_us, 0, bounded_duration_us);
+    const qint64 normalized_requested_time_us = std::clamp<qint64>(requested_time_us, 0, bounded_duration_us);
     const qint64 effective_frame_step_us = std::max<qint64>(
         frame_duration_us,
         selected_job_frame_step_us()
@@ -2908,7 +2905,7 @@ void MainWindow::handle_preview_ready(
 
     if (preview_playing_) {
         job.current_time_us = normalized_frame_time_us;
-        preview_next_playback_time_us_ = std::min(trim_out_us, normalized_frame_time_us + effective_frame_step_us);
+        preview_next_playback_time_us_ = std::min(bounded_duration_us, normalized_frame_time_us + effective_frame_step_us);
         if (preview_playback_timer_ != nullptr) {
             preview_playback_timer_->setInterval(
                 std::clamp<int>(static_cast<int>(effective_frame_step_us / 1000), 16, 67)
@@ -2931,7 +2928,7 @@ void MainWindow::handle_preview_ready(
                .arg(format_time_us(std::max<qint64>(preview_next_playback_time_us_, 0)))
                .arg(preview_playback_timer_ != nullptr ? preview_playback_timer_->interval() : -1);
 
-    if (preview_playing_ && job.current_time_us >= trim_out_us) {
+    if (preview_playing_ && job.current_time_us >= bounded_duration_us) {
         pause_preview_playback();
     }
 }
@@ -3022,8 +3019,6 @@ void MainWindow::handle_preview_playback_tick() {
 
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     const qint64 bounded_duration_us = std::max<qint64>(job.duration_us, 0);
-    const qint64 trim_in_us = std::clamp<qint64>(job.trim_in_us, 0, bounded_duration_us);
-    const qint64 trim_out_us = std::clamp<qint64>(std::max(job.trim_out_us, trim_in_us), trim_in_us, bounded_duration_us);
     qint64 requested_time_us = preview_next_playback_time_us_;
 
     if (preview_audio_controller_ != nullptr && preview_audio_controller_->is_audio_playing()) {
@@ -3040,7 +3035,7 @@ void MainWindow::handle_preview_playback_tick() {
                 : job.current_time_us;
     }
 
-    requested_time_us = std::clamp<qint64>(requested_time_us, trim_in_us, trim_out_us);
+    requested_time_us = std::clamp<qint64>(requested_time_us, 0, bounded_duration_us);
     qCInfo(previewPlaybackLog).noquote()
         << QString("handle_preview_playback_tick advancing current=%1 (%2) next=%3 (%4) requested=%5 (%6)")
                .arg(job.current_time_us)
@@ -3049,8 +3044,8 @@ void MainWindow::handle_preview_playback_tick() {
                .arg(format_time_us(std::max<qint64>(preview_next_playback_time_us_, 0)))
                .arg(requested_time_us)
                .arg(format_time_us(requested_time_us));
-    if (requested_time_us >= trim_out_us) {
-        job.current_time_us = trim_out_us;
+    if (requested_time_us >= bounded_duration_us) {
+        job.current_time_us = bounded_duration_us;
         pause_preview_playback();
         refresh_trim_controls();
         return;
@@ -3070,12 +3065,11 @@ void MainWindow::step_selected_job_frame(const int direction) {
     pause_preview_playback();
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     const qint64 frame_step_us = selected_job_frame_step_us();
-    const auto [trim_in_us, trim_out_us] = preview_trim_bounds_for_job(job);
 
     job.current_time_us = std::clamp(
         job.current_time_us + (frame_step_us * direction),
-        trim_in_us,
-        trim_out_us
+        qint64{0},
+        std::max<qint64>(job.duration_us, 0)
     );
     refresh_trim_controls();
     refresh_selected_job_preview();
@@ -3155,7 +3149,7 @@ void MainWindow::handle_timeline_seek(const qint64 time_us) {
     }
     pause_preview_playback();
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
-    job.current_time_us = clamp_preview_time_to_job_trim(job, time_us);
+    job.current_time_us = clamp_preview_time_to_job_duration(job, time_us);
     refresh_trim_controls();
     refresh_selected_job_preview();
 }

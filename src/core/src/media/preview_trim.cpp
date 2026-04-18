@@ -167,6 +167,10 @@ bool trimmed_preview_frames_cover_time(
         return true;
     }
 
+    if (effective_time == frame_coverage_end_us(last_frame)) {
+        return true;
+    }
+
     return effective_time >= first_frame.timestamp.start_microseconds &&
         effective_time < frame_coverage_end_us(last_frame);
 }
@@ -200,7 +204,9 @@ const DecodedVideoFrame *select_trimmed_preview_frame(
     }
 
     if (upper_bound == frames.end()) {
-        return nullptr;
+        return effective_time == frame_coverage_end_us(previous_frame)
+            ? &previous_frame
+            : nullptr;
     }
 
     return &(*upper_bound);
