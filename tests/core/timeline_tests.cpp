@@ -67,11 +67,12 @@ std::int64_t infer_stream_duration_microseconds(const utsure::core::media::Video
         return rescale_to_microseconds(*video_stream.timestamps.duration_pts, video_stream.timestamps.time_base);
     }
 
-    if (video_stream.frame_count > 0 &&
+    if (video_stream.frame_count.has_value() &&
+        *video_stream.frame_count > 0 &&
         video_stream.average_frame_rate.is_valid() &&
         video_stream.average_frame_rate.numerator > 0 &&
         video_stream.average_frame_rate.denominator > 0) {
-        return (video_stream.frame_count * video_stream.average_frame_rate.denominator * 1000000LL +
+        return (*video_stream.frame_count * video_stream.average_frame_rate.denominator * 1000000LL +
                 (video_stream.average_frame_rate.numerator / 2)) /
             video_stream.average_frame_rate.numerator;
     }
