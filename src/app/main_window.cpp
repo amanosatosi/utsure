@@ -950,6 +950,47 @@ QTableWidget {
     background: #14141a;
     color: #e2e2e4;
 }
+QScrollBar:vertical,
+QScrollBar:horizontal {
+    background: #111116;
+    border: 1px solid #2a2a35;
+    border-radius: 6px;
+}
+QScrollBar:vertical {
+    width: 14px;
+    margin: 0;
+}
+QScrollBar:horizontal {
+    height: 14px;
+    margin: 0;
+}
+QScrollBar::handle:vertical,
+QScrollBar::handle:horizontal {
+    background: #ffce2e;
+    border: 1px solid #cca524;
+    border-radius: 6px;
+    min-height: 30px;
+    min-width: 30px;
+}
+QScrollBar::handle:vertical:hover,
+QScrollBar::handle:horizontal:hover {
+    background: #ffd759;
+}
+QScrollBar::handle:vertical:pressed,
+QScrollBar::handle:horizontal:pressed {
+    background: #e0b321;
+}
+QScrollBar::add-line,
+QScrollBar::sub-line {
+    background: none;
+    border: none;
+    width: 0;
+    height: 0;
+}
+QScrollBar::add-page,
+QScrollBar::sub-page {
+    background: transparent;
+}
 QLineEdit,
 QComboBox,
 QSpinBox {
