@@ -1260,6 +1260,108 @@ int run_copy_audio_assertion(
     return 0;
 }
 
+int run_copy_audio_fallback_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &output_path
+) {
+    CollectingObserver observer{};
+    EncodeJob job{
+        .input = {
+            .main_source_path = main_path,
+            .main_source_trim_in_us = 500000,
+            .main_source_trim_out_us = 1500000
+        },
+        .output = {
+            .output_path = output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+    job.output.audio.mode = AudioOutputMode::copy_source;
+
+    const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!job_result.succeeded()) {
+        const std::string error_message =
+            "The copy-audio fallback encode job failed unexpectedly: " +
+            job_result.error->message +
+            " Hint: " +
+            job_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const MediaDecodeResult output_decode_result = MediaDecoder::decode(output_path);
+    if (!output_decode_result.succeeded()) {
+        const std::string error_message =
+            "The copy-audio fallback output decode failed unexpectedly: " +
+            output_decode_result.error->message +
+            " Hint: " +
+            output_decode_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    if (assert_output_decode(*output_decode_result.decoded_media_source, 24U, true) != 0) {
+        return 1;
+    }
+
+    const auto &summary = *job_result.encode_job_summary;
+    if (!summary.encoded_media_summary.output_info.primary_audio_stream.has_value() ||
+        summary.encoded_media_summary.resolved_audio_output.requested_mode != AudioOutputMode::copy_source ||
+        summary.encoded_media_summary.resolved_audio_output.resolved_mode != ResolvedAudioOutputMode::encode_aac ||
+        !summary.encoded_media_summary.resolved_audio_output.requested_mode_adjustment.has_value() ||
+        !contains_text(summary.encoded_media_summary.resolved_audio_output.decision_summary, "Copy fallback")) {
+        return fail("Unexpected output state for the copy-audio fallback encode job.");
+    }
+
+    const auto &output_audio = *summary.encoded_media_summary.output_info.primary_audio_stream;
+    if (output_audio.codec_name != "aac" ||
+        output_audio.sample_rate != 48000 ||
+        output_audio.channel_count != 1) {
+        return fail("The copy-audio fallback encode job did not produce the expected AAC output stream.");
+    }
+
+    if (assert_trimmed_audio_window(
+            *output_decode_result.decoded_media_source,
+            1000000,
+            100000,
+            100000,
+            "The copy-audio fallback output"
+        ) != 0) {
+        return 1;
+    }
+
+    const auto report = format_encode_job_report(summary);
+    if (!contains_text(report, "output.audio.resolved_mode=encode_aac") ||
+        !contains_text(report, "output.audio.decision=AAC 192k 1ch 48000 Hz (Copy fallback)") ||
+        !contains_text(report, "output.audio.adjustment=Requested source-audio copy is not safe")) {
+        return fail("The copy-audio fallback encode job did not preserve the expected report diagnostics.");
+    }
+
+    if (!observer_logs_contain_text(observer, "Audio output warning: Requested source-audio copy is not safe") ||
+        !observer_logs_contain_text(observer, "Falling back to AAC instead.")) {
+        return fail("The copy-audio fallback encode job did not log the expected runtime warning.");
+    }
+
+    if (assert_fine_encode_progress(observer, summary) != 0) {
+        return 1;
+    }
+
+    if (assert_runtime_visibility(observer, summary) != 0) {
+        return 1;
+    }
+
+    std::cout << build_validation_report(
+        *job_result.encode_job_summary,
+        *output_decode_result.decoded_media_source
+    ) << '\n';
+    return 0;
+}
+
 int run_multi_audio_selected_assertion(
     const std::filesystem::path &main_path,
     const std::filesystem::path &output_path
@@ -1604,6 +1706,7 @@ int main(int argc, char *argv[]) {
             "[--streaming-memory-budget] <input> <output> | "
             "[--disable-audio] <input> <output> | "
             "[--copy-audio] <input> <output> | "
+            "[--copy-audio-fallback] <input> <output> | "
             "[--multi-audio-selected] <input> <output> | "
             "[--coarse-timebase-ntsc] <input> <output> | "
             "[--irregular-timestamps] <input> <output>"
@@ -1682,6 +1785,13 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--copy-audio" && argc == 4) {
         return run_copy_audio_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
+        );
+    }
+
+    if (mode == "--copy-audio-fallback" && argc == 4) {
+        return run_copy_audio_fallback_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3])
         );

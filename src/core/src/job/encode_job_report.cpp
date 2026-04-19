@@ -226,6 +226,10 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
            << media::to_string(encode_job_summary.encoded_media_summary.resolved_audio_output.resolved_mode) << '\n';
     report << "output.audio.decision="
            << encode_job_summary.encoded_media_summary.resolved_audio_output.decision_summary << '\n';
+    if (encode_job_summary.encoded_media_summary.resolved_audio_output.requested_mode_adjustment.has_value()) {
+        report << "output.audio.adjustment="
+               << *encode_job_summary.encoded_media_summary.resolved_audio_output.requested_mode_adjustment << '\n';
+    }
     report << "output.encoded_video_frames=" << encode_job_summary.encoded_media_summary.encoded_video_frame_count
            << '\n';
     report << "output.video.present="

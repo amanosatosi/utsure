@@ -520,6 +520,13 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.job.encode.copy_audio_fallback
+    COMMAND utsure_core_encode_job_tests --copy-audio-fallback
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-copy-audio-fallback.mp4"
+)
+
+add_test(
     NAME utsure.core.job.encode.ntsc_coarse_timebase
     COMMAND utsure_core_encode_job_tests --coarse-timebase-ntsc
         "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
@@ -609,10 +616,10 @@ add_test(
 )
 
 add_test(
-    NAME utsure.core.job.preflight.copy_blocked
-    COMMAND utsure_core_encode_job_preflight_tests --copy-blocked
+    NAME utsure.core.job.preflight.copy_fallback_warning
+    COMMAND utsure_core_encode_job_preflight_tests --copy-fallback-warning
         "${UTSURE_SAMPLE_MEDIA_FILE}"
-        "${UTSURE_TEST_MEDIA_DIR}/preflight-copy-blocked.mp4"
+        "${UTSURE_TEST_MEDIA_DIR}/preflight-copy-fallback.mp4"
 )
 
 add_test(

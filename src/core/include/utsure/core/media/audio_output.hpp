@@ -48,7 +48,7 @@ struct ResolvedAudioOutputPlan final {
     std::string channel_layout_name{"unknown"};
     Rational time_base{};
     std::string decision_summary{};
-    std::optional<std::string> requested_copy_blocker{};
+    std::optional<std::string> requested_mode_adjustment{};
 };
 
 struct AudioOutputResolveRequest final {

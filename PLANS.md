@@ -106,6 +106,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M24 CI slice now also includes bumping the Windows GitHub Actions JavaScript actions to Node 24-compatible releases, with a temporary `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` override during validation.
 - The current M24 CI slice also permits one narrow user-requested cache follow-up, limited to temporarily disabling the FFmpeg GitHub Actions cache in the Windows workflow and leaving an explicit reminder to re-enable it on or after May 1, 2026, without changing unrelated build/test behavior.
 - The current M24 slice also permits one narrow user-requested desktop-shell scrollbar follow-up, limited to existing Qt stylesheet accent-color tuning so scrollbars stay visible against the dark shell without changing layout or encode behavior.
+- The current M24 slice also permits one narrow user-requested encoder-policy follow-up, limited to shifting recoverable audio-output-mode mismatches from fatal errors to warned best-effort fallback behavior without weakening existing memory-safety or container-validity guards.
 
 ## Architecture direction
 
@@ -943,6 +944,7 @@ Current slice status:
   * Completed: fixed the Windows CI follow-up from that adapter hardening by adding the new libassmod adapter test executable to the explicit `windows-msys2-build.sh` target list, so CTest no longer registers tests for an unbuilt binary.
   * Completed: relaxed the libassmod adapter policy from strict validation to best-effort render unless unsafe, so empty/no-draw frames and unsupported-effect quirks continue with diagnostics while only positive-size null-buffer and impossible-stride faults remain fatal, with focused render+encode regressions covering the best-effort `\img` behavior.
   * Completed: fixed the follow-up adapter-test compile regression by linking the direct libassmod adapter test target against the pinned subtitle-renderer dependency interface, so it sees the same RGBA-capable libassmod headers as `utsure_encoder_core`.
+  * Completed: relaxed the audio-mode policy so an explicit but unsafe `Copy` request now falls back to AAC with preflight warning plus runtime/report diagnostics instead of aborting the encode, while true codec/container/layout safety checks still remain fatal when no safe output path exists.
   * Pending: capture real before/after timing data for the requested subtitle-enabled comparison encode, because this repository does not allow local compile/run validation and the current workspace does not contain a prebuilt binary to execute.
   * Pending: confirm in CI which isolation combination still reproduces or removes the historical long-session crash window, then decide whether the direct or worker-local modes can safely become default again.
   * Validation note: local validation for this slice was limited to code-path inspection, focused test updates, and `git diff --check`; actual benchmark numbers, sanitizer findings, and end-to-end sustained encode verification still need CI or another approved prebuilt runtime environment.

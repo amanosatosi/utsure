@@ -108,6 +108,33 @@ std::string describe_copied_audio(
     return description.str();
 }
 
+std::string describe_copy_fallback_audio(const ResolvedAudioOutputPlan &plan) {
+    return describe_encoded_audio(plan, false) + " (Copy fallback)";
+}
+
+std::string build_requested_copy_adjustment_reason(
+    const AudioOutputResolveRequest &request,
+    const AudioStreamInfo &source_audio
+) {
+    if (request.segment_count != 1U) {
+        return "Requested source-audio copy is not safe for this job because the current streaming pipeline only "
+               "supports copy on single-segment outputs. Falling back to AAC instead.";
+    }
+
+    if (request.main_source_trimmed) {
+        return "Requested source-audio copy is not safe for this job because trimmed main-source output requires audio "
+               "re-encode. Falling back to AAC instead.";
+    }
+
+    if (request.settings.sample_rate_hz.has_value() || request.settings.channel_count.has_value()) {
+        return "Requested source-audio copy is not safe for this job because output sample rate and channel layout "
+               "must stay unchanged for copy. Falling back to AAC instead.";
+    }
+
+    return "Requested source-audio copy is not safe for this job because the output container is not a safe fit for "
+           "the source audio codec '" + source_audio.codec_name + "'. Falling back to AAC instead.";
+}
+
 }  // namespace
 
 ResolvedAudioOutputPlan resolve_audio_output_plan(const AudioOutputResolveRequest &request) {
@@ -159,21 +186,9 @@ ResolvedAudioOutputPlan resolve_audio_output_plan(const AudioOutputResolveReques
 
     if (request.settings.mode == AudioOutputMode::copy_source) {
         if (!copy_is_safe) {
-            if (request.segment_count != 1U) {
-                plan.requested_copy_blocker =
-                    "Audio copy is only supported for single-segment jobs in the current streaming pipeline.";
-            } else if (request.main_source_trimmed) {
-                plan.requested_copy_blocker =
-                    "Audio copy is not supported when the main source is trimmed in the current streaming pipeline.";
-            } else if (request.settings.sample_rate_hz.has_value() || request.settings.channel_count.has_value()) {
-                plan.requested_copy_blocker =
-                    "Audio copy must keep the source sample rate and channel layout unchanged.";
-            } else {
-                plan.requested_copy_blocker =
-                    "The selected output container is not a safe fit for copying the source audio codec '" +
-                    source_audio.codec_name + "'.";
-            }
-            plan.decision_summary = "Copy blocked";
+            build_encoded_plan();
+            plan.requested_mode_adjustment = build_requested_copy_adjustment_reason(request, source_audio);
+            plan.decision_summary = describe_copy_fallback_audio(plan);
             return plan;
         }
 
@@ -218,7 +233,7 @@ std::string format_source_audio_summary(const std::optional<AudioStreamInfo> &au
 }
 
 std::string format_resolved_audio_output_summary(const ResolvedAudioOutputPlan &plan) {
-    if (plan.requested_copy_blocker.has_value()) {
+    if (!plan.decision_summary.empty()) {
         return plan.decision_summary;
     }
 

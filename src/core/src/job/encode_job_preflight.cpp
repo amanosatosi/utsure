@@ -564,13 +564,13 @@ EncodeJobPreflightResult EncodeJobPreflight::inspect(const EncodeJob &job) noexc
                     ? &*timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info.primary_audio_stream
                     : nullptr
         });
-        if (resolved_audio_output.requested_copy_blocker.has_value()) {
+        if (resolved_audio_output.requested_mode_adjustment.has_value()) {
             append_issue(
                 issues,
-                EncodeJobPreflightIssueSeverity::error,
+                EncodeJobPreflightIssueSeverity::warning,
                 EncodeJobPreflightIssueCode::invalid_audio_settings,
-                "The selected audio copy mode cannot be used for this output.",
-                *resolved_audio_output.requested_copy_blocker + " Use Auto or AAC instead."
+                "The requested source-audio copy mode will fall back to AAC for this output.",
+                *resolved_audio_output.requested_mode_adjustment
             );
         }
 

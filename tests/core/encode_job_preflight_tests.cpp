@@ -348,7 +348,7 @@ int run_streaming_memory_budget_assertion(
     return 0;
 }
 
-int run_copy_blocked_assertion(
+int run_copy_fallback_warning_assertion(
     const std::filesystem::path &main_path,
     const std::filesystem::path &output_path
 ) {
@@ -356,28 +356,39 @@ int run_copy_blocked_assertion(
 
     auto job = make_base_job(main_path, output_path);
     job.output.audio.mode = AudioOutputMode::copy_source;
+    job.input.main_source_trim_in_us = 500000;
+    job.input.main_source_trim_out_us = 1500000;
 
     const auto result = EncodeJobPreflight::inspect(job);
-    if (result.can_start_encode()) {
-        return fail("A copy-blocked preflight job passed unexpectedly.");
+    if (!result.can_start_encode()) {
+        return fail("A copy-fallback preflight job was blocked unexpectedly.");
+    }
+
+    if (!result.has_warnings()) {
+        return fail("A copy-fallback preflight job should report a warning.");
     }
 
     if (!issues_contain(
             result,
             EncodeJobPreflightIssueCode::invalid_audio_settings,
-            EncodeJobPreflightIssueSeverity::error)) {
-        return fail("The copy-blocked preflight job did not report the expected audio-settings error.");
+            EncodeJobPreflightIssueSeverity::warning)) {
+        return fail("The copy-fallback preflight job did not report the expected audio-settings warning.");
     }
 
     if (!result.preview_summary.has_value()) {
-        return fail("A copy-blocked preflight job should still produce a preview summary.");
+        return fail("A copy-fallback preflight job should still produce a preview summary.");
     }
 
-    if (result.preview_summary->output_audio_summary != "Copy blocked") {
-        return fail("The copy-blocked preflight job did not report the expected output audio summary.");
+    if (!contains_text(result.preview_summary->output_audio_summary, "AAC 192k 1ch 48000 Hz") ||
+        !contains_text(result.preview_summary->output_audio_summary, "Copy fallback")) {
+        return fail("The copy-fallback preflight job did not report the expected output audio summary.");
     }
 
-    std::cout << "audio_copy=blocked\n";
+    if (!issues_contain_text(result, "Falling back to AAC instead.")) {
+        return fail("The copy-fallback preflight job did not explain the AAC fallback.");
+    }
+
+    std::cout << "audio_copy=copy_fallback_warning\n";
     return 0;
 }
 
@@ -420,7 +431,7 @@ int main(int argc, char *argv[]) {
             "--overwrite-warning <main> <output>|"
             "--output-conflicts-main <main>|"
             "--streaming-memory-budget <main> <output>|"
-            "--copy-blocked <main> <output>|"
+            "--copy-fallback-warning <main> <output>|"
             "--auto-copy-preview <main> <output>]"
         );
     }
@@ -478,8 +489,8 @@ int main(int argc, char *argv[]) {
         );
     }
 
-    if (mode == "--copy-blocked" && argc == 4) {
-        return run_copy_blocked_assertion(
+    if (mode == "--copy-fallback-warning" && argc == 4) {
+        return run_copy_fallback_warning_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3])
         );

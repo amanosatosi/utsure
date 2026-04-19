@@ -4308,10 +4308,10 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
             .main_source_trimmed = timeline_plan.segments[timeline_plan.main_segment_index].has_source_trim(),
             .main_source_audio_stream = main_source_audio_stream
         });
-        if (resolved_audio_output.requested_copy_blocker.has_value()) {
-            return make_error(
-                "The selected audio mode is not compatible with the requested output.",
-                *resolved_audio_output.requested_copy_blocker + " Use Auto or AAC instead."
+        if (resolved_audio_output.requested_mode_adjustment.has_value()) {
+            emit_runtime_log(
+                request.log_callback,
+                "Audio output warning: " + *resolved_audio_output.requested_mode_adjustment
             );
         }
 
