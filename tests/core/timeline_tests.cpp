@@ -39,6 +39,10 @@ int fail(std::string_view message) {
     return 1;
 }
 
+bool contains_text(const std::string &text, std::string_view needle) {
+    return text.find(needle) != std::string::npos;
+}
+
 std::string format_rational(const Rational &value) {
     if (!value.is_valid()) {
         return "unknown";
@@ -136,6 +140,10 @@ std::string build_summary(const TimelineCompositionOutput &output) {
     std::string summary;
     summary += "timeline.output.video_time_base=" + format_rational(output.timeline_summary.output_video_time_base);
     summary += "\ntimeline.output.frame_rate=" + format_rational(output.timeline_summary.output_frame_rate);
+    summary += "\ntimeline.output.audio_time_base=" +
+        (output.timeline_summary.output_audio_time_base.has_value()
+            ? format_rational(*output.timeline_summary.output_audio_time_base)
+            : std::string("none"));
     summary += "\ntimeline.output.video_frames=" + std::to_string(output.timeline_summary.output_video_frame_count);
     summary += "\ntimeline.output.audio_blocks=" + std::to_string(output.timeline_summary.output_audio_block_count);
     summary += "\ntimeline.output.duration_us=" + std::to_string(output.timeline_summary.output_duration_microseconds);
@@ -468,6 +476,112 @@ int assert_normalized_fps_intro(const std::filesystem::path &intro_path, const s
     return 0;
 }
 
+int assert_normalized_common_mismatches(
+    const std::filesystem::path &intro_path,
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &outro_path
+) {
+    const auto context = compose_timeline(TimelineAssemblyRequest{
+        .intro_source_path = intro_path,
+        .main_source_path = main_path,
+        .outro_source_path = outro_path,
+        .subtitles_present = false,
+        .subtitle_timing_mode = SubtitleTimingMode::main_segment_only
+    });
+    if (!context.has_value()) {
+        return 1;
+    }
+
+    const auto &summary = context->output.timeline_summary;
+    const auto &decoded = context->output.decoded_media_source;
+
+    if (summary.segments.size() != 3 ||
+        summary.segments[0].kind != TimelineSegmentKind::intro ||
+        summary.segments[1].kind != TimelineSegmentKind::main ||
+        summary.segments[2].kind != TimelineSegmentKind::outro) {
+        return fail("Unexpected normalized common-mismatch segment order.");
+    }
+
+    if (format_rational(summary.output_frame_rate) != "24000/1001" ||
+        format_rational(summary.output_video_time_base) != "1/1000" ||
+        !summary.output_audio_time_base.has_value() ||
+        format_rational(*summary.output_audio_time_base) != "1/48000") {
+        return fail("The normalized common-mismatch timeline did not keep the main output timing authoritative.");
+    }
+
+    if (summary.output_video_frame_count != 96 ||
+        summary.output_audio_block_count != 188 ||
+        summary.output_duration_microseconds != 4000000 ||
+        summary.segments[0].start_microseconds != 0 ||
+        summary.segments[1].start_microseconds != 1000000 ||
+        summary.segments[2].start_microseconds != 3000000 ||
+        summary.segments[0].inserted_silence ||
+        summary.segments[2].inserted_silence) {
+        return fail("Unexpected normalized common-mismatch counts, timing, or inserted-silence state.");
+    }
+
+    const auto assert_frame_geometry = [&](const std::size_t index) -> bool {
+        return decoded.video_frames[index].width == 320 &&
+            decoded.video_frames[index].height == 180 &&
+            format_rational(decoded.video_frames[index].sample_aspect_ratio) == "1/1";
+    };
+
+    if (!assert_frame_geometry(0U) ||
+        !assert_frame_geometry(24U) ||
+        !assert_frame_geometry(72U) ||
+        decoded.video_frames[24].timestamp.start_microseconds != 1000000 ||
+        decoded.video_frames[72].timestamp.start_microseconds != 3000000) {
+        return fail("The normalized common-mismatch timeline did not stamp the main output geometry and boundaries.");
+    }
+
+    if (frames_are_identical(decoded, 0U, 24U) ||
+        frames_are_identical(decoded, 24U, 72U) ||
+        frames_are_identical(decoded, 0U, 72U)) {
+        return fail("The normalized common-mismatch timeline did not preserve distinct intro/main/outro visuals.");
+    }
+
+    if (decoded.audio_blocks.size() <= 141U ||
+        decoded.audio_blocks.front().sample_rate != 48000 ||
+        decoded.audio_blocks.front().channel_count != 1 ||
+        audio_block_is_silent(decoded.audio_blocks[0]) ||
+        audio_block_is_silent(decoded.audio_blocks[47]) ||
+        audio_block_is_silent(decoded.audio_blocks[141])) {
+        return fail("The normalized common-mismatch timeline did not normalize intro/outro audio onto the main output.");
+    }
+
+    std::cout << build_summary(context->output) << '\n';
+    return 0;
+}
+
+int assert_missing_main_audio_target_fails(
+    const std::filesystem::path &intro_path,
+    const std::filesystem::path &main_path
+) {
+    const TimelineAssemblyResult assembly_result = TimelineAssembler::assemble(TimelineAssemblyRequest{
+        .intro_source_path = intro_path,
+        .main_source_path = main_path,
+        .subtitles_present = false,
+        .subtitle_timing_mode = SubtitleTimingMode::main_segment_only
+    });
+    if (assembly_result.succeeded()) {
+        return fail("The timeline unexpectedly accepted intro audio without a main-defined output audio target.");
+    }
+
+    if (!assembly_result.error.has_value()) {
+        return fail("The fatal missing-main-audio-target case did not return assembly error details.");
+    }
+
+    if (!contains_text(
+            assembly_result.error->message,
+            "contains audio but the main segment does not define output audio"
+        )) {
+        return fail("The fatal missing-main-audio-target case did not report the expected assembly error.");
+    }
+
+    std::cout << "timeline.audio_target_required.message=" << assembly_result.error->message << '\n';
+    return 0;
+}
+
 int assert_trimmed_main(const std::filesystem::path &main_path) {
     const auto context = compose_timeline(TimelineAssemblyRequest{
         .main_source_path = main_path,
@@ -517,7 +631,10 @@ int main(int argc, char *argv[]) {
             "Usage: utsure_core_timeline_tests "
             "[--main-only <main>|--intro-main <intro> <main>|--main-outro <main> <outro>|"
             "--intro-main-outro <intro> <main> <outro>|--subtitle-scope <intro> <main> <outro>|"
-            "--normalized-fps <bad-intro> <main>|--trimmed-main <main>]"
+            "--normalized-fps <bad-intro> <main>|"
+            "--normalized-common <intro> <main> <outro>|"
+            "--missing-main-audio-target <intro> <main>|"
+            "--trimmed-main <main>]"
         );
     }
 
@@ -553,6 +670,21 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--normalized-fps" && argc == 4) {
         return assert_normalized_fps_intro(std::filesystem::path(argv[2]), std::filesystem::path(argv[3]));
+    }
+
+    if (mode == "--normalized-common" && argc == 5) {
+        return assert_normalized_common_mismatches(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4])
+        );
+    }
+
+    if (mode == "--missing-main-audio-target" && argc == 4) {
+        return assert_missing_main_audio_target_fails(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
+        );
     }
 
     if (mode == "--trimmed-main" && argc == 3) {

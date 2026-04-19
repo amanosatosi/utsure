@@ -122,6 +122,18 @@ bool frames_are_identical(
         decoded_output.video_frames[right_index].planes.front().bytes;
 }
 
+bool audio_block_is_silent(const utsure::core::media::DecodedAudioSamples &audio_block) {
+    for (const auto &channel : audio_block.channel_samples) {
+        for (const auto sample : channel) {
+            if (sample != 0.0F) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 std::int64_t decoded_video_end_microseconds(const DecodedMediaSource &decoded_output) {
     if (decoded_output.video_frames.empty()) {
         return 0;
@@ -317,6 +329,51 @@ int assert_timeline_summary(const EncodeJobSummary &summary) {
         output_audio.channel_count != 1 ||
         summary.encoded_media_summary.resolved_audio_output.resolved_mode != ResolvedAudioOutputMode::encode_aac) {
         return fail("Unexpected intro/main/outro encode-job output state.");
+    }
+
+    return 0;
+}
+
+int assert_normalized_common_timeline_summary(
+    const EncodeJobSummary &summary,
+    const Rational &expected_output_video_time_base
+) {
+    if (summary.timeline_summary.segments.size() != 3 ||
+        summary.timeline_summary.segments[0].kind != TimelineSegmentKind::intro ||
+        summary.timeline_summary.segments[1].kind != TimelineSegmentKind::main ||
+        summary.timeline_summary.segments[2].kind != TimelineSegmentKind::outro) {
+        return fail("Unexpected normalized common-mismatch segment order.");
+    }
+
+    if (summary.timeline_summary.output_video_frame_count != 96 ||
+        summary.timeline_summary.output_audio_block_count != 188 ||
+        summary.timeline_summary.output_duration_microseconds != 4000000 ||
+        summary.timeline_summary.segments[0].start_microseconds != 0 ||
+        summary.timeline_summary.segments[1].start_microseconds != 1000000 ||
+        summary.timeline_summary.segments[2].start_microseconds != 3000000 ||
+        summary.timeline_summary.segments[0].inserted_silence ||
+        summary.timeline_summary.segments[2].inserted_silence) {
+        return fail("Unexpected normalized common-mismatch output counts, timing, or silence insertion.");
+    }
+
+    if (format_rational(summary.timeline_summary.output_frame_rate) != "24000/1001" ||
+        format_rational(summary.timeline_summary.output_video_time_base) !=
+            format_rational(expected_output_video_time_base) ||
+        !summary.timeline_summary.output_audio_time_base.has_value() ||
+        format_rational(*summary.timeline_summary.output_audio_time_base) != "1/48000") {
+        return fail("The normalized common-mismatch encode job did not keep the main timeline authoritative.");
+    }
+
+    if (!summary.encoded_media_summary.output_info.primary_audio_stream.has_value()) {
+        return fail("The normalized common-mismatch encode-job output is missing audio.");
+    }
+
+    const auto &output_audio = *summary.encoded_media_summary.output_info.primary_audio_stream;
+    if (output_audio.codec_name != "aac" ||
+        output_audio.sample_rate != 48000 ||
+        output_audio.channel_count != 1 ||
+        summary.encoded_media_summary.resolved_audio_output.resolved_mode != ResolvedAudioOutputMode::encode_aac) {
+        return fail("Unexpected normalized common-mismatch encoded audio state.");
     }
 
     return 0;
@@ -1040,6 +1097,125 @@ int run_timeline_trimmed_main_assertion(
     return 0;
 }
 
+int run_timeline_normalized_common_assertion(
+    const std::filesystem::path &intro_path,
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &outro_path,
+    const std::filesystem::path &output_path
+) {
+    const MediaInspectionResult input_inspection_result = MediaInspector::inspect(main_path);
+    if (!input_inspection_result.succeeded() ||
+        !input_inspection_result.media_source_info->primary_video_stream.has_value()) {
+        return fail("The normalized common-mismatch main sample could not be inspected.");
+    }
+
+    const auto &input_video_stream = *input_inspection_result.media_source_info->primary_video_stream;
+    const auto expected_output_video_time_base = choose_expected_output_video_time_base(
+        input_video_stream.timestamps.time_base,
+        input_video_stream.average_frame_rate
+    );
+
+    CollectingObserver observer{};
+    const EncodeJob job{
+        .input = {
+            .intro_source_path = intro_path,
+            .main_source_path = main_path,
+            .outro_source_path = outro_path
+        },
+        .output = {
+            .output_path = output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!job_result.succeeded()) {
+        const std::string error_message =
+            "The normalized common-mismatch encode job failed unexpectedly: " +
+            job_result.error->message +
+            " Hint: " +
+            job_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const auto &summary = *job_result.encode_job_summary;
+    if (assert_normalized_common_timeline_summary(summary, expected_output_video_time_base) != 0) {
+        return 1;
+    }
+
+    const MediaDecodeResult output_decode_result = MediaDecoder::decode(output_path);
+    if (!output_decode_result.succeeded()) {
+        const std::string error_message =
+            "The normalized common-mismatch output decode failed unexpectedly: " +
+            output_decode_result.error->message +
+            " Hint: " +
+            output_decode_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const auto &decoded_output = *output_decode_result.decoded_media_source;
+    if (assert_output_decode(decoded_output, 96U, true) != 0) {
+        return 1;
+    }
+
+    const auto assert_frame_geometry = [&](const std::size_t index) -> bool {
+        return decoded_output.video_frames[index].width == 320 &&
+            decoded_output.video_frames[index].height == 180 &&
+            format_rational(decoded_output.video_frames[index].sample_aspect_ratio) == "1/1";
+    };
+
+    if (!assert_frame_geometry(0U) ||
+        !assert_frame_geometry(24U) ||
+        !assert_frame_geometry(72U) ||
+        decoded_output.video_frames[24].timestamp.start_microseconds != 1000000 ||
+        decoded_output.video_frames[72].timestamp.start_microseconds != 3000000) {
+        return fail("The normalized common-mismatch output did not follow the main output geometry and boundaries.");
+    }
+
+    if (frames_are_identical(decoded_output, 0U, 24U) ||
+        frames_are_identical(decoded_output, 24U, 72U) ||
+        frames_are_identical(decoded_output, 0U, 72U)) {
+        return fail("The normalized common-mismatch output did not preserve distinct segment visuals.");
+    }
+
+    if (decoded_output.audio_blocks.size() <= 141U ||
+        decoded_output.audio_blocks.front().sample_rate != 48000 ||
+        decoded_output.audio_blocks.front().channel_count != 1 ||
+        audio_block_is_silent(decoded_output.audio_blocks[0]) ||
+        audio_block_is_silent(decoded_output.audio_blocks[47]) ||
+        audio_block_is_silent(decoded_output.audio_blocks[141])) {
+        return fail("The normalized common-mismatch output did not normalize intro/outro audio onto the main output.");
+    }
+
+    if (!observer_logs_contain_text(observer, "Best-effort normalization (intro segment): cadence 30/1 -> 24000/1001") ||
+        !observer_logs_contain_text(observer, "audio 2ch 44100 Hz -> 1ch 48000 Hz") ||
+        !observer_logs_contain_text(observer, "Best-effort normalization (outro segment):")) {
+        return fail("The normalized common-mismatch encode job did not log the expected best-effort normalization details.");
+    }
+
+    if (assert_observer_flow(observer, 3, false) != 0) {
+        return 1;
+    }
+
+    if (assert_fine_encode_progress(observer, summary) != 0) {
+        return 1;
+    }
+
+    if (assert_runtime_visibility(observer, summary) != 0) {
+        return 1;
+    }
+
+    std::cout << build_validation_report(summary, decoded_output) << '\n';
+    return 0;
+}
+
 int run_streaming_memory_budget_assertion(
     const std::filesystem::path &main_path,
     const std::filesystem::path &output_path
@@ -1700,6 +1876,7 @@ int main(int argc, char *argv[]) {
             "[--threading-modes] | "
             "[--h264|--h265] <input> <output> | "
             "[--timeline-h264] <intro> <main> <outro> <output> | "
+            "[--timeline-normalized-common] <intro> <main> <outro> <output> | "
             "[--trim-main] <input> <output> | "
             "[--trim-main-sar-seek-repro] <input> <output> | "
             "[--timeline-trim-main] <intro> <main> <outro> <output> | "
@@ -1739,6 +1916,15 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--timeline-h264" && argc == 6) {
         return run_timeline_h264_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4]),
+            std::filesystem::path(argv[5])
+        );
+    }
+
+    if (mode == "--timeline-normalized-common" && argc == 6) {
+        return run_timeline_normalized_common_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3]),
             std::filesystem::path(argv[4]),

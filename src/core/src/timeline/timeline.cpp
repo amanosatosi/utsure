@@ -1,15 +1,22 @@
 #include "utsure/core/timeline/timeline.hpp"
 
+#include "../media/ffmpeg_media_support.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 
 extern "C" {
 #include <libavutil/avutil.h>
+#include <libavutil/channel_layout.h>
+#include <libavutil/imgutils.h>
+#include <libswresample/swresample.h>
+#include <libswscale/swscale.h>
 }
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <limits>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -36,6 +43,18 @@ struct VideoCadence final {
     Rational sample_aspect_ratio{1, 1};
 };
 
+struct SwrContextDeleter final {
+    void operator()(SwrContext *resample_context) const noexcept {
+        if (resample_context == nullptr) {
+            return;
+        }
+
+        swr_free(&resample_context);
+    }
+};
+
+using SwrContextHandle = std::unique_ptr<SwrContext, SwrContextDeleter>;
+
 struct CadenceFrameTiming final {
     std::int64_t start_pts{0};
     std::int64_t duration_pts{0};
@@ -52,6 +71,14 @@ struct SegmentFramePlan final {
     std::int64_t duration_pts{0};
 };
 
+// Deterministic timeline normalization policy:
+// - The main segment remains authoritative for output cadence, output time base, resolution, SAR, and audio layout.
+// - Intro/outro video is mapped onto the main cadence and scaled to the main output resolution when needed.
+// - Intro/outro audio is trimmed in source time, then resampled/remixed to the main audio sample rate/channel count
+//   using FFmpeg's default channel layouts for the reported channel counts.
+// - Missing intro/outro audio inserts silence.
+// - Truly invalid decoded layouts, unusable timing, or jobs without a main-defined audio target still fail.
+
 TimelineAssemblyResult make_assembly_error(std::string message, std::string actionable_hint);
 TimelineCompositionResult make_composition_error(std::string message, std::string actionable_hint);
 AVRational to_av_rational(const Rational &value);
@@ -64,6 +91,7 @@ std::int64_t rescale_to_microseconds(std::int64_t value, const Rational &time_ba
 bool rational_is_positive(const Rational &value);
 bool rationals_equal(const Rational &left, const Rational &right);
 bool rational_has_finer_precision(const Rational &left, const Rational &right);
+Rational normalize_sample_aspect_ratio(const Rational &value);
 std::optional<std::filesystem::path> normalize_optional_path(const std::optional<std::filesystem::path> &path);
 MediaInspectionResult inspect_segment(TimelineSegmentKind kind, const std::filesystem::path &source_path);
 Rational choose_output_video_time_base(const media::VideoStreamInfo &video_stream);
@@ -112,6 +140,22 @@ std::vector<std::vector<float>> copy_audio_block_range(
     const std::vector<std::vector<float>> &channel_samples,
     int start_sample_index,
     int samples_per_channel
+);
+void append_channel_samples(
+    std::vector<std::vector<float>> &destination_channels,
+    const std::vector<std::vector<float>> &source_channels
+);
+AVChannelLayout make_default_audio_channel_layout(int channel_count);
+std::vector<std::vector<float>> resample_audio_channels(
+    SwrContext &resample_context,
+    const std::vector<std::vector<float>> &input_channels,
+    int input_channel_count,
+    int output_channel_count,
+    bool flush
+);
+media::DecodedVideoFrame normalize_output_video_frame(
+    const media::DecodedVideoFrame &source_frame,
+    const VideoCadence &video_cadence
 );
 DecodedAudioSamples make_audio_block(
     const AudioStreamInfo &output_audio_stream,
@@ -415,7 +459,7 @@ TimelineCompositionResult TimelineComposer::compose(
                     );
                 }
 
-                auto output_frame = *source_interval.frame;
+                auto output_frame = normalize_output_video_frame(*source_interval.frame, video_cadence);
                 output_frame.stream_index = main_segment.source_info.primary_video_stream->stream_index;
                 output_frame.frame_index = static_cast<std::int64_t>(output_video_frames.size());
                 output_frame.timestamp.source_time_base = timeline_plan.output_video_time_base;
@@ -565,6 +609,10 @@ bool rational_has_finer_precision(const Rational &left, const Rational &right) {
     }
 
     return (left.numerator * right.denominator) < (right.numerator * left.denominator);
+}
+
+Rational normalize_sample_aspect_ratio(const Rational &value) {
+    return rational_is_positive(value) ? value : Rational{1, 1};
 }
 
 std::optional<std::filesystem::path> normalize_optional_path(const std::optional<std::filesystem::path> &path) {
@@ -717,45 +765,73 @@ void validate_video_stream_presence(
     );
 }
 
+std::size_t required_rgba_buffer_size(
+    const int width,
+    const int height,
+    const int stride_bytes,
+    const char *label
+) {
+    const std::int64_t minimum_stride = static_cast<std::int64_t>(width) * 4LL;
+    if (width <= 0 || height <= 0 ||
+        minimum_stride > static_cast<std::int64_t>(std::numeric_limits<int>::max()) ||
+        stride_bytes <= 0 ||
+        static_cast<std::int64_t>(stride_bytes) < minimum_stride) {
+        throw std::runtime_error(
+            std::string("Timeline composition received an invalid ") + label +
+            " RGBA surface: width=" + std::to_string(width) +
+            ", height=" + std::to_string(height) +
+            ", stride=" + std::to_string(stride_bytes) + '.'
+        );
+    }
+
+    const std::uint64_t row_extent = static_cast<std::uint64_t>(width) * 4ULL;
+    const std::uint64_t buffer_size =
+        static_cast<std::uint64_t>(stride_bytes) * static_cast<std::uint64_t>(height - 1) + row_extent;
+    if (buffer_size > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        throw std::runtime_error(
+            std::string("Timeline composition overflowed the ") + label +
+            " RGBA buffer size calculation."
+        );
+    }
+
+    return static_cast<std::size_t>(buffer_size);
+}
+
+void validate_rgba_frame_surface(const DecodedVideoFrame &frame, const char *context) {
+    if (frame.pixel_format != media::NormalizedVideoPixelFormat::rgba8 || frame.planes.size() != 1) {
+        throw std::runtime_error(
+            std::string(context) + " requires decoded rgba8 video frames with a single plane."
+        );
+    }
+
+    const auto &plane = frame.planes.front();
+    const auto required_plane_bytes = required_rgba_buffer_size(
+        frame.width,
+        frame.height,
+        plane.line_stride_bytes,
+        "frame"
+    );
+    if (plane.bytes.size() < required_plane_bytes) {
+        throw std::runtime_error(
+            std::string(context) + " received a truncated decoded RGBA frame buffer."
+        );
+    }
+}
+
 void validate_video_compatibility(
     const TimelineSegmentKind kind,
     const media::VideoStreamInfo &main_video,
     const media::VideoStreamInfo &candidate_video
 ) {
-    if (candidate_video.width != main_video.width || candidate_video.height != main_video.height) {
+    (void)main_video;
+
+    if (candidate_video.width <= 0 || candidate_video.height <= 0) {
         throw std::runtime_error(
-            "The " + std::string(to_string(kind)) + " segment resolution " +
+            "The " + std::string(to_string(kind)) + " segment does not expose a usable video resolution: " +
             std::to_string(candidate_video.width) + "x" + std::to_string(candidate_video.height) +
-            " does not match the main segment resolution " +
-            std::to_string(main_video.width) + "x" + std::to_string(main_video.height) + "."
+            '.'
         );
     }
-
-    if (rational_is_positive(main_video.sample_aspect_ratio) &&
-        rational_is_positive(candidate_video.sample_aspect_ratio) &&
-        !rationals_equal(candidate_video.sample_aspect_ratio, main_video.sample_aspect_ratio)) {
-        throw std::runtime_error(
-            "The " + std::string(to_string(kind)) + " segment sample aspect ratio " +
-            std::to_string(candidate_video.sample_aspect_ratio.numerator) + "/" +
-            std::to_string(candidate_video.sample_aspect_ratio.denominator) +
-            " does not match the main segment sample aspect ratio " +
-            std::to_string(main_video.sample_aspect_ratio.numerator) + "/" +
-            std::to_string(main_video.sample_aspect_ratio.denominator) + "."
-        );
-    }
-
-}
-
-bool channel_layouts_conflict(const AudioStreamInfo &left, const AudioStreamInfo &right) {
-    if (left.channel_layout_name.empty() || left.channel_layout_name == "unknown") {
-        return false;
-    }
-
-    if (right.channel_layout_name.empty() || right.channel_layout_name == "unknown") {
-        return false;
-    }
-
-    return left.channel_layout_name != right.channel_layout_name;
 }
 
 void validate_audio_compatibility(
@@ -778,30 +854,14 @@ void validate_audio_compatibility(
         return;
     }
 
-    if (candidate_audio->sample_rate != main_audio->sample_rate) {
+    if (candidate_audio->sample_rate <= 0 || candidate_audio->channel_count <= 0) {
         throw std::runtime_error(
-            "The " + std::string(to_string(kind)) + " segment audio sample rate " +
+            "The " + std::string(to_string(kind)) + " segment audio stream does not expose a usable sample rate and "
+            "channel count: sample_rate=" +
             std::to_string(candidate_audio->sample_rate) +
-            " does not match the main segment audio sample rate " +
-            std::to_string(main_audio->sample_rate) + "."
-        );
-    }
-
-    if (candidate_audio->channel_count != main_audio->channel_count) {
-        throw std::runtime_error(
-            "The " + std::string(to_string(kind)) + " segment audio channel count " +
+            ", channel_count=" +
             std::to_string(candidate_audio->channel_count) +
-            " does not match the main segment audio channel count " +
-            std::to_string(main_audio->channel_count) + "."
-        );
-    }
-
-    if (channel_layouts_conflict(*main_audio, *candidate_audio)) {
-        throw std::runtime_error(
-            "The " + std::string(to_string(kind)) + " segment audio channel layout '" +
-            candidate_audio->channel_layout_name +
-            "' does not match the main segment audio channel layout '" +
-            main_audio->channel_layout_name + "'."
+            '.'
         );
     }
 }
@@ -820,6 +880,7 @@ VideoCadence derive_video_cadence(
     if (first_frame.pixel_format != media::NormalizedVideoPixelFormat::rgba8 || first_frame.planes.size() != 1) {
         throw std::runtime_error("Timeline composition requires decoded rgba8 video frames with a single plane.");
     }
+    const auto normalized_main_sample_aspect_ratio = normalize_sample_aspect_ratio(first_frame.sample_aspect_ratio);
 
     for (std::size_t index = 0; index < main_segment.video_frames.size(); ++index) {
         const auto &frame = main_segment.video_frames[index];
@@ -831,7 +892,7 @@ VideoCadence derive_video_cadence(
             throw std::runtime_error("Timeline composition requires every segment to keep one constant resolution.");
         }
 
-        if (!rationals_equal(frame.sample_aspect_ratio, first_frame.sample_aspect_ratio)) {
+        if (!rationals_equal(normalize_sample_aspect_ratio(frame.sample_aspect_ratio), normalized_main_sample_aspect_ratio)) {
             throw std::runtime_error(
                 "Timeline composition requires every segment to keep one constant sample aspect ratio."
             );
@@ -841,7 +902,7 @@ VideoCadence derive_video_cadence(
     return VideoCadence{
         .width = first_frame.width,
         .height = first_frame.height,
-        .sample_aspect_ratio = first_frame.sample_aspect_ratio
+        .sample_aspect_ratio = normalized_main_sample_aspect_ratio
     };
 }
 
@@ -851,6 +912,7 @@ SegmentFramePlan analyze_segment_frames(
     const VideoCadence &video_cadence,
     const Rational &output_video_time_base
 ) {
+    (void)video_cadence;
     const auto kind = segment_plan.kind;
     if (decoded_segment.video_frames.empty()) {
         throw std::runtime_error(
@@ -881,17 +943,10 @@ SegmentFramePlan analyze_segment_frames(
             );
         }
 
-        if (frame.width != video_cadence.width || frame.height != video_cadence.height) {
+        if (frame.width <= 0 || frame.height <= 0) {
             throw std::runtime_error(
                 "The " + std::string(to_string(kind)) +
-                " segment decoded into a resolution that does not match the main segment."
-            );
-        }
-
-        if (!rationals_equal(frame.sample_aspect_ratio, video_cadence.sample_aspect_ratio)) {
-            throw std::runtime_error(
-                "The " + std::string(to_string(kind)) +
-                " segment decoded with a sample aspect ratio that does not match the main segment."
+                " segment decoded into an invalid video resolution."
             );
         }
 
@@ -1146,6 +1201,223 @@ std::vector<std::vector<float>> copy_audio_block_range(
     return slice;
 }
 
+void append_channel_samples(
+    std::vector<std::vector<float>> &destination_channels,
+    const std::vector<std::vector<float>> &source_channels
+) {
+    if (source_channels.empty()) {
+        return;
+    }
+
+    if (destination_channels.empty()) {
+        destination_channels.resize(source_channels.size());
+    }
+
+    if (destination_channels.size() != source_channels.size()) {
+        throw std::runtime_error("Timeline composition encountered a mismatched normalized audio channel count.");
+    }
+
+    for (std::size_t channel_index = 0; channel_index < source_channels.size(); ++channel_index) {
+        destination_channels[channel_index].insert(
+            destination_channels[channel_index].end(),
+            source_channels[channel_index].begin(),
+            source_channels[channel_index].end()
+        );
+    }
+}
+
+AVChannelLayout make_default_audio_channel_layout(const int channel_count) {
+    if (channel_count <= 0) {
+        throw std::runtime_error("Timeline composition requires a positive audio channel count.");
+    }
+
+    AVChannelLayout channel_layout{};
+    av_channel_layout_default(&channel_layout, channel_count);
+    if (channel_layout.nb_channels != channel_count) {
+        av_channel_layout_uninit(&channel_layout);
+        throw std::runtime_error(
+            "Timeline composition could not derive a default channel layout for " +
+            std::to_string(channel_count) + " channels."
+        );
+    }
+
+    return channel_layout;
+}
+
+std::vector<std::vector<float>> resample_audio_channels(
+    SwrContext &resample_context,
+    const std::vector<std::vector<float>> &input_channels,
+    const int input_channel_count,
+    const int output_channel_count,
+    const bool flush
+) {
+    const int input_samples = flush
+        ? 0
+        : input_channels.empty()
+            ? 0
+            : static_cast<int>(input_channels.front().size());
+    if (!flush && input_samples <= 0) {
+        return {};
+    }
+
+    if (!flush) {
+        if (input_channels.size() != static_cast<std::size_t>(input_channel_count)) {
+            throw std::runtime_error("Timeline composition encountered an invalid decoded audio channel buffer count.");
+        }
+
+        for (const auto &channel : input_channels) {
+            if (static_cast<int>(channel.size()) != input_samples) {
+                throw std::runtime_error("Timeline composition encountered a non-uniform decoded audio block.");
+            }
+        }
+    }
+
+    const int output_capacity = std::max(swr_get_out_samples(&resample_context, input_samples), 0);
+    if (output_capacity <= 0) {
+        return {};
+    }
+
+    std::vector<std::vector<float>> output_channels(
+        static_cast<std::size_t>(output_channel_count),
+        std::vector<float>(static_cast<std::size_t>(output_capacity), 0.0F)
+    );
+    std::vector<std::uint8_t *> output_data(static_cast<std::size_t>(output_channel_count), nullptr);
+    for (int channel_index = 0; channel_index < output_channel_count; ++channel_index) {
+        output_data[static_cast<std::size_t>(channel_index)] = reinterpret_cast<std::uint8_t *>(
+            output_channels[static_cast<std::size_t>(channel_index)].data()
+        );
+    }
+
+    std::vector<const std::uint8_t *> input_data(static_cast<std::size_t>(input_channel_count), nullptr);
+    if (!flush) {
+        for (int channel_index = 0; channel_index < input_channel_count; ++channel_index) {
+            input_data[static_cast<std::size_t>(channel_index)] = reinterpret_cast<const std::uint8_t *>(
+                input_channels[static_cast<std::size_t>(channel_index)].data()
+            );
+        }
+    }
+
+    const auto convert_result = swr_convert(
+        &resample_context,
+        output_data.data(),
+        output_capacity,
+        flush ? nullptr : input_data.data(),
+        input_samples
+    );
+    if (convert_result < 0) {
+        throw std::runtime_error(
+            "Timeline composition failed to resample intro/outro audio. FFmpeg reported: " +
+            ffmpeg_support::ffmpeg_error_to_string(convert_result)
+        );
+    }
+
+    if (convert_result == 0) {
+        return {};
+    }
+
+    for (auto &channel : output_channels) {
+        channel.resize(static_cast<std::size_t>(convert_result));
+    }
+    return output_channels;
+}
+
+media::DecodedVideoFrame normalize_output_video_frame(
+    const media::DecodedVideoFrame &source_frame,
+    const VideoCadence &video_cadence
+) {
+    validate_rgba_frame_surface(source_frame, "Timeline composition");
+
+    auto output_frame = source_frame;
+    output_frame.sample_aspect_ratio = video_cadence.sample_aspect_ratio;
+    if (source_frame.width == video_cadence.width && source_frame.height == video_cadence.height) {
+        output_frame.width = video_cadence.width;
+        output_frame.height = video_cadence.height;
+        output_frame.planes.front().visible_width = video_cadence.width;
+        output_frame.planes.front().visible_height = video_cadence.height;
+        return output_frame;
+    }
+
+    // Intro/outro frames are normalized directly onto the main raster instead of preserving
+    // their source canvas. The main segment remains authoritative for output geometry.
+    SwsContext *raw_scale_context = sws_getContext(
+        source_frame.width,
+        source_frame.height,
+        AV_PIX_FMT_RGBA,
+        video_cadence.width,
+        video_cadence.height,
+        AV_PIX_FMT_RGBA,
+        SWS_BILINEAR,
+        nullptr,
+        nullptr,
+        nullptr
+    );
+    if (raw_scale_context == nullptr) {
+        throw std::runtime_error("Timeline composition failed to create a video normalization scaling context.");
+    }
+
+    std::unique_ptr<SwsContext, decltype(&sws_freeContext)> scale_context(raw_scale_context, &sws_freeContext);
+    const int required_buffer_bytes =
+        av_image_get_buffer_size(AV_PIX_FMT_RGBA, video_cadence.width, video_cadence.height, 1);
+    if (required_buffer_bytes <= 0) {
+        throw std::runtime_error("Timeline composition could not compute the normalized RGBA output frame size.");
+    }
+
+    media::VideoPlane plane{
+        .line_stride_bytes = 0,
+        .visible_width = video_cadence.width,
+        .visible_height = video_cadence.height,
+        .bytes = std::vector<std::uint8_t>(static_cast<std::size_t>(required_buffer_bytes))
+    };
+    std::uint8_t *destination_data[4] = {nullptr, nullptr, nullptr, nullptr};
+    int destination_linesize[4] = {0, 0, 0, 0};
+    const auto fill_result = av_image_fill_arrays(
+        destination_data,
+        destination_linesize,
+        plane.bytes.data(),
+        AV_PIX_FMT_RGBA,
+        video_cadence.width,
+        video_cadence.height,
+        1
+    );
+    if (fill_result < 0) {
+        throw std::runtime_error(
+            "Timeline composition failed to describe the normalized RGBA output frame buffer. FFmpeg reported: " +
+            ffmpeg_support::ffmpeg_error_to_string(fill_result)
+        );
+    }
+    plane.line_stride_bytes = destination_linesize[0];
+
+    const std::uint8_t *source_data[4] = {
+        source_frame.planes.front().bytes.data(),
+        nullptr,
+        nullptr,
+        nullptr
+    };
+    const int source_linesize[4] = {
+        source_frame.planes.front().line_stride_bytes,
+        0,
+        0,
+        0
+    };
+    const auto scale_result = sws_scale(
+        scale_context.get(),
+        source_data,
+        source_linesize,
+        0,
+        source_frame.height,
+        destination_data,
+        destination_linesize
+    );
+    if (scale_result <= 0) {
+        throw std::runtime_error("Timeline composition could not scale a segment frame onto the main resolution.");
+    }
+
+    output_frame.width = video_cadence.width;
+    output_frame.height = video_cadence.height;
+    output_frame.planes = {std::move(plane)};
+    return output_frame;
+}
+
 DecodedAudioSamples make_audio_block(
     const AudioStreamInfo &output_audio_stream,
     const media::DecodeNormalizationPolicy &normalization_policy,
@@ -1203,12 +1475,17 @@ void append_audio_segment(
     TimelineSegmentSummary &segment_summary,
     std::int64_t &next_output_audio_pts
 ) {
+    if (decoded_segment.normalization_policy.audio_block_samples <= 0) {
+        throw std::runtime_error("Timeline composition requires a positive normalized audio block size.");
+    }
+
+    if (decoded_segment.normalization_policy.audio_sample_format != media::NormalizedAudioSampleFormat::f32_planar) {
+        throw std::runtime_error("Timeline composition only supports f32_planar normalized audio blocks.");
+    }
+
     if (!decoded_segment.source_info.primary_audio_stream.has_value()) {
         const auto starting_block_count = static_cast<std::int64_t>(output_audio_blocks.size());
         segment_summary.inserted_silence = expected_segment_samples > 0;
-        if (decoded_segment.normalization_policy.audio_block_samples <= 0) {
-            throw std::runtime_error("Timeline composition requires a positive normalized audio block size.");
-        }
 
         int samples_remaining = static_cast<int>(expected_segment_samples);
         while (samples_remaining > 0) {
@@ -1231,16 +1508,54 @@ void append_audio_segment(
     }
 
     const auto &segment_audio_stream = *decoded_segment.source_info.primary_audio_stream;
-    if (segment_audio_stream.sample_rate != output_audio_stream.sample_rate ||
-        segment_audio_stream.channel_count != output_audio_stream.channel_count) {
+    if (segment_audio_stream.sample_rate <= 0 || segment_audio_stream.channel_count <= 0) {
         throw std::runtime_error(
             "The decoded " + std::string(to_string(segment_plan.kind)) +
-            " segment audio layout no longer matches the main segment."
+            " segment does not expose a usable audio layout for normalization."
         );
     }
 
     const auto starting_block_count = static_cast<std::int64_t>(output_audio_blocks.size());
-    std::int64_t samples_remaining = expected_segment_samples;
+    std::int64_t emitted_output_samples = 0;
+    const bool requires_audio_normalization =
+        segment_audio_stream.sample_rate != output_audio_stream.sample_rate ||
+        segment_audio_stream.channel_count != output_audio_stream.channel_count;
+    SwrContextHandle resample_context{};
+    if (requires_audio_normalization) {
+        AVChannelLayout output_channel_layout = make_default_audio_channel_layout(output_audio_stream.channel_count);
+        AVChannelLayout input_channel_layout = make_default_audio_channel_layout(segment_audio_stream.channel_count);
+        SwrContext *raw_resample_context = nullptr;
+        const auto resample_setup_result = swr_alloc_set_opts2(
+            &raw_resample_context,
+            &output_channel_layout,
+            AV_SAMPLE_FMT_FLTP,
+            output_audio_stream.sample_rate,
+            &input_channel_layout,
+            AV_SAMPLE_FMT_FLTP,
+            segment_audio_stream.sample_rate,
+            0,
+            nullptr
+        );
+        av_channel_layout_uninit(&output_channel_layout);
+        av_channel_layout_uninit(&input_channel_layout);
+        if (resample_setup_result < 0 || raw_resample_context == nullptr) {
+            throw std::runtime_error(
+                "Timeline composition failed to configure intro/outro audio normalization. FFmpeg reported: " +
+                ffmpeg_support::ffmpeg_error_to_string(resample_setup_result)
+            );
+        }
+
+        resample_context.reset(raw_resample_context);
+        const auto resample_init_result = swr_init(resample_context.get());
+        if (resample_init_result < 0) {
+            throw std::runtime_error(
+                "Timeline composition failed to initialize intro/outro audio normalization. FFmpeg reported: " +
+                ffmpeg_support::ffmpeg_error_to_string(resample_init_result)
+            );
+        }
+    }
+
+    std::vector<std::vector<float>> normalized_channels{};
 
     for (const auto &audio_block : decoded_segment.audio_blocks) {
         if (audio_block.sample_format != decoded_segment.normalization_policy.audio_sample_format) {
@@ -1250,16 +1565,19 @@ void append_audio_segment(
             );
         }
 
-        if (audio_block.channel_count != output_audio_stream.channel_count ||
-            audio_block.sample_rate != output_audio_stream.sample_rate) {
+        if (audio_block.channel_count != segment_audio_stream.channel_count ||
+            audio_block.sample_rate != segment_audio_stream.sample_rate) {
             throw std::runtime_error(
                 "The decoded " + std::string(to_string(segment_plan.kind)) +
-                " segment audio block shape does not match the main segment."
+                " segment audio block shape changed unexpectedly during composition."
             );
         }
 
-        if (samples_remaining <= 0) {
-            break;
+        if (audio_block.channel_samples.size() != static_cast<std::size_t>(segment_audio_stream.channel_count)) {
+            throw std::runtime_error(
+                "The decoded " + std::string(to_string(segment_plan.kind)) +
+                " segment audio block channel buffers do not match the reported channel count."
+            );
         }
 
         int sample_offset = 0;
@@ -1304,44 +1622,88 @@ void append_audio_segment(
             }
         }
 
-        emitted_samples = static_cast<int>(std::min<std::int64_t>(emitted_samples, samples_remaining));
+        const auto block_channels =
+            (sample_offset == 0 && emitted_samples == audio_block.samples_per_channel)
+                ? audio_block.channel_samples
+                : copy_audio_block_range(audio_block.channel_samples, sample_offset, emitted_samples);
+        if (requires_audio_normalization) {
+            append_channel_samples(
+                normalized_channels,
+                resample_audio_channels(
+                    *resample_context,
+                    block_channels,
+                    segment_audio_stream.channel_count,
+                    output_audio_stream.channel_count,
+                    false
+                )
+            );
+            continue;
+        }
 
+        append_channel_samples(normalized_channels, block_channels);
+    }
+
+    if (requires_audio_normalization) {
+        append_channel_samples(
+            normalized_channels,
+            resample_audio_channels(
+                *resample_context,
+                {},
+                segment_audio_stream.channel_count,
+                output_audio_stream.channel_count,
+                true
+            )
+        );
+    }
+
+    const auto emit_output_block = [&](const int samples_per_channel, const bool silent) {
         output_audio_blocks.push_back(make_audio_block(
             output_audio_stream,
             decoded_segment.normalization_policy,
             static_cast<std::int64_t>(output_audio_blocks.size()),
             next_output_audio_pts,
-            emitted_samples,
-            false,
-            (sample_offset == 0 && emitted_samples == audio_block.samples_per_channel)
-                ? audio_block.channel_samples
-                : copy_audio_block_range(audio_block.channel_samples, sample_offset, emitted_samples)
+            samples_per_channel,
+            silent,
+            silent
+                ? std::vector<std::vector<float>>{}
+                : copy_audio_block_range(normalized_channels, 0, samples_per_channel)
         ));
-        next_output_audio_pts += emitted_samples;
-        samples_remaining -= emitted_samples;
-    }
+        if (!silent) {
+            for (auto &channel : normalized_channels) {
+                channel.erase(
+                    channel.begin(),
+                    channel.begin() + static_cast<std::ptrdiff_t>(samples_per_channel)
+                );
+            }
+        }
+        next_output_audio_pts += samples_per_channel;
+        emitted_output_samples += samples_per_channel;
+    };
 
-    if (samples_remaining > 0) {
-        if (decoded_segment.normalization_policy.audio_block_samples <= 0) {
-            throw std::runtime_error("Timeline composition requires a positive normalized audio block size.");
+    while (!normalized_channels.empty() &&
+           !normalized_channels.front().empty() &&
+           emitted_output_samples < expected_segment_samples) {
+        const int available_samples = static_cast<int>(normalized_channels.front().size());
+        const int block_size = static_cast<int>(std::min<std::int64_t>(
+            std::min(available_samples, decoded_segment.normalization_policy.audio_block_samples),
+            expected_segment_samples - emitted_output_samples
+        ));
+        if (block_size <= 0) {
+            break;
         }
 
+        emit_output_block(block_size, false);
+    }
+
+    if (emitted_output_samples < expected_segment_samples) {
         segment_summary.inserted_silence = true;
+        std::int64_t samples_remaining = expected_segment_samples - emitted_output_samples;
         while (samples_remaining > 0) {
             const int block_size = static_cast<int>(std::min<std::int64_t>(
                 samples_remaining,
                 decoded_segment.normalization_policy.audio_block_samples
             ));
-            output_audio_blocks.push_back(make_audio_block(
-                output_audio_stream,
-                decoded_segment.normalization_policy,
-                static_cast<std::int64_t>(output_audio_blocks.size()),
-                next_output_audio_pts,
-                block_size,
-                true,
-                {}
-            ));
-            next_output_audio_pts += block_size;
+            emit_output_block(block_size, true);
             samples_remaining -= block_size;
         }
     }

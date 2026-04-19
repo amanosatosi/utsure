@@ -7,6 +7,8 @@ set(UTSURE_MEMORY_HEAVY_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/memory-heavy-main.mp
 set(UTSURE_TIMELINE_INTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-intro.avi")
 set(UTSURE_TIMELINE_OUTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-outro.avi")
 set(UTSURE_TIMELINE_BAD_FPS_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-bad-fps.avi")
+set(UTSURE_TIMELINE_NORMALIZED_INTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-normalized-intro.mp4")
+set(UTSURE_TIMELINE_NORMALIZED_OUTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-normalized-outro.mp4")
 set(UTSURE_NTSC_COARSE_TIMEBASE_FILE "${UTSURE_TEST_MEDIA_DIR}/ntsc-coarse-timebase.mp4")
 set(UTSURE_IRREGULAR_TIMESTAMP_FILE "${UTSURE_TEST_MEDIA_DIR}/irregular-timestamp-main.mp4")
 set(UTSURE_TRIM_SAR_SEEK_REPRO_FILE "${UTSURE_TEST_MEDIA_DIR}/trim-sar-seek-repro.mp4")
@@ -124,6 +126,40 @@ add_custom_command(
         -pix_fmt yuv420p
         -c:a pcm_s16le
         "${UTSURE_TIMELINE_BAD_FPS_FILE}"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${UTSURE_TIMELINE_NORMALIZED_INTRO_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "color=c=magenta:size=640x360:rate=30,setsar=4/3"
+        -f lavfi -i "sine=frequency=700:sample_rate=44100:duration=1"
+        -t 1
+        -c:v libx264
+        -preset ultrafast
+        -pix_fmt yuv420p
+        -c:a aac
+        -b:a 128k
+        -ac 2
+        -shortest
+        "${UTSURE_TIMELINE_NORMALIZED_INTRO_FILE}"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${UTSURE_TIMELINE_NORMALIZED_OUTRO_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "color=c=cyan:size=160x90:rate=25,setsar=3/2"
+        -f lavfi -i "sine=frequency=350:sample_rate=32000:duration=1"
+        -t 1
+        -c:v libx264
+        -preset ultrafast
+        -pix_fmt yuv420p
+        -c:a aac
+        -b:a 96k
+        -ac 2
+        -shortest
+        "${UTSURE_TIMELINE_NORMALIZED_OUTRO_FILE}"
     VERBATIM
 )
 
@@ -294,6 +330,8 @@ add_custom_target(
         "${UTSURE_TIMELINE_INTRO_FILE}"
         "${UTSURE_TIMELINE_OUTRO_FILE}"
         "${UTSURE_TIMELINE_BAD_FPS_FILE}"
+        "${UTSURE_TIMELINE_NORMALIZED_INTRO_FILE}"
+        "${UTSURE_TIMELINE_NORMALIZED_OUTRO_FILE}"
         "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
         "${UTSURE_IRREGULAR_TIMESTAMP_FILE}"
         "${UTSURE_TRIM_SAR_SEEK_REPRO_FILE}"
@@ -473,6 +511,15 @@ add_test(
         "${UTSURE_SAMPLE_MEDIA_FILE}"
         "${UTSURE_TIMELINE_OUTRO_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/job-timeline-h264.mp4"
+)
+
+add_test(
+    NAME utsure.core.job.encode.timeline.normalized_common
+    COMMAND utsure_core_encode_job_tests --timeline-normalized-common
+        "${UTSURE_TIMELINE_NORMALIZED_INTRO_FILE}"
+        "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
+        "${UTSURE_TIMELINE_NORMALIZED_OUTRO_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-timeline-normalized-common.mp4"
 )
 
 add_test(
@@ -780,6 +827,21 @@ add_test(
     COMMAND utsure_core_timeline_tests --normalized-fps
         "${UTSURE_TIMELINE_BAD_FPS_FILE}"
         "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
+)
+
+add_test(
+    NAME utsure.core.timeline.normalized_common
+    COMMAND utsure_core_timeline_tests --normalized-common
+        "${UTSURE_TIMELINE_NORMALIZED_INTRO_FILE}"
+        "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
+        "${UTSURE_TIMELINE_NORMALIZED_OUTRO_FILE}"
+)
+
+add_test(
+    NAME utsure.core.timeline.audio_target_required
+    COMMAND utsure_core_timeline_tests --missing-main-audio-target
+        "${UTSURE_TIMELINE_INTRO_FILE}"
+        "${UTSURE_TIMELINE_OUTRO_FILE}"
 )
 
 add_test(

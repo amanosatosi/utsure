@@ -350,6 +350,14 @@ Rational normalize_sample_aspect_ratio(const Rational &value) {
     return rational_is_positive(value) ? value : Rational{1, 1};
 }
 
+std::string format_rational(const Rational &value) {
+    if (!rational_is_positive(value)) {
+        return "unknown";
+    }
+
+    return std::to_string(value.numerator) + "/" + std::to_string(value.denominator);
+}
+
 std::int64_t rescale_value(
     const std::int64_t value,
     const Rational &source_time_base,
@@ -404,6 +412,81 @@ void emit_runtime_log(
     if (callback) {
         callback(std::move(message));
     }
+}
+
+std::string format_audio_shape(const int sample_rate, const int channel_count) {
+    if (sample_rate <= 0 || channel_count <= 0) {
+        return "unknown";
+    }
+
+    return std::to_string(channel_count) + "ch " + std::to_string(sample_rate) + " Hz";
+}
+
+std::optional<std::string> format_segment_normalization_log(
+    const timeline::TimelinePlan &timeline_plan,
+    const timeline::TimelineSegmentPlan &segment_plan,
+    const VideoOutputPlan &video_output_plan,
+    const AudioOutputPlan *audio_output_plan
+) {
+    if (segment_plan.kind == timeline::TimelineSegmentKind::main ||
+        !segment_plan.inspected_source_info.primary_video_stream.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto &video_stream = *segment_plan.inspected_source_info.primary_video_stream;
+    const auto normalized_source_sar = normalize_sample_aspect_ratio(video_stream.sample_aspect_ratio);
+    std::ostringstream details;
+    bool has_detail = false;
+
+    const auto append_detail = [&](std::string detail) {
+        if (has_detail) {
+            details << "; ";
+        }
+
+        details << std::move(detail);
+        has_detail = true;
+    };
+
+    if (rational_is_positive(video_stream.average_frame_rate) &&
+        rational_is_positive(timeline_plan.output_frame_rate) &&
+        !rationals_equal(video_stream.average_frame_rate, timeline_plan.output_frame_rate)) {
+        append_detail(
+            "cadence " + format_rational(video_stream.average_frame_rate) +
+            " -> " + format_rational(timeline_plan.output_frame_rate)
+        );
+    }
+
+    if (video_stream.width != video_output_plan.width || video_stream.height != video_output_plan.height) {
+        append_detail(
+            "raster " + std::to_string(video_stream.width) + "x" + std::to_string(video_stream.height) +
+            " -> " + std::to_string(video_output_plan.width) + "x" + std::to_string(video_output_plan.height)
+        );
+    }
+
+    if (!rationals_equal(normalized_source_sar, video_output_plan.sample_aspect_ratio)) {
+        append_detail(
+            "SAR " + format_rational(normalized_source_sar) +
+            " -> " + format_rational(video_output_plan.sample_aspect_ratio)
+        );
+    }
+
+    if (audio_output_plan != nullptr && segment_plan.inspected_source_info.primary_audio_stream.has_value()) {
+        const auto &audio_stream = *segment_plan.inspected_source_info.primary_audio_stream;
+        if (audio_stream.sample_rate != audio_output_plan->sample_rate ||
+            audio_stream.channel_count != audio_output_plan->channel_count) {
+            append_detail(
+                "audio " + format_audio_shape(audio_stream.sample_rate, audio_stream.channel_count) +
+                " -> " + format_audio_shape(audio_output_plan->sample_rate, audio_output_plan->channel_count)
+            );
+        }
+    }
+
+    if (!has_detail) {
+        return std::nullopt;
+    }
+
+    return "Best-effort normalization (" + std::string(timeline::to_string(segment_plan.kind)) +
+        " segment): " + details.str() + '.';
 }
 
 bool checked_add_u64(const std::uint64_t left, const std::uint64_t right, std::uint64_t &result) {
@@ -1413,6 +1496,9 @@ StreamingVideoFrame build_streaming_video_frame_metadata(
 
 void populate_normalized_video_frame_pixels(
     const AVFrame &source_frame,
+    const int target_width,
+    const int target_height,
+    const Rational &target_sample_aspect_ratio,
     SwsContextHandle &scale_context,
     int &scale_width,
     int &scale_height,
@@ -1425,15 +1511,15 @@ void populate_normalized_video_frame_pixels(
     }
 
     if (!scale_context ||
-        scale_width != source_frame.width ||
-        scale_height != source_frame.height ||
+        scale_width != target_width ||
+        scale_height != target_height ||
         scale_source_pixel_format != source_pixel_format) {
         SwsContext *raw_scale_context = sws_getContext(
             source_frame.width,
             source_frame.height,
             source_pixel_format,
-            source_frame.width,
-            source_frame.height,
+            target_width,
+            target_height,
             AV_PIX_FMT_RGBA,
             SWS_BILINEAR,
             nullptr,
@@ -1446,21 +1532,21 @@ void populate_normalized_video_frame_pixels(
         }
 
         scale_context.reset(raw_scale_context);
-        scale_width = source_frame.width;
-        scale_height = source_frame.height;
+        scale_width = target_width;
+        scale_height = target_height;
         scale_source_pixel_format = source_pixel_format;
     }
 
     const int required_buffer_bytes =
-        av_image_get_buffer_size(AV_PIX_FMT_RGBA, source_frame.width, source_frame.height, 1);
+        av_image_get_buffer_size(AV_PIX_FMT_RGBA, target_width, target_height, 1);
     if (required_buffer_bytes <= 0) {
         throw std::runtime_error("Failed to compute the normalized streaming RGBA frame buffer size.");
     }
 
     VideoPlane plane{
         .line_stride_bytes = 0,
-        .visible_width = source_frame.width,
-        .visible_height = source_frame.height,
+        .visible_width = target_width,
+        .visible_height = target_height,
         .bytes = std::vector<std::uint8_t>(static_cast<std::size_t>(required_buffer_bytes))
     };
     std::uint8_t *destination_data[4] = {nullptr, nullptr, nullptr, nullptr};
@@ -1470,8 +1556,8 @@ void populate_normalized_video_frame_pixels(
         destination_linesize,
         plane.bytes.data(),
         AV_PIX_FMT_RGBA,
-        source_frame.width,
-        source_frame.height,
+        target_width,
+        target_height,
         1
     );
     if (fill_result < 0) {
@@ -1495,6 +1581,9 @@ void populate_normalized_video_frame_pixels(
         throw std::runtime_error("FFmpeg did not produce normalized video output for a decoded streaming frame.");
     }
 
+    normalized_frame.metadata.width = target_width;
+    normalized_frame.metadata.height = target_height;
+    normalized_frame.metadata.sample_aspect_ratio = target_sample_aspect_ratio;
     normalized_frame.metadata.pixel_format = NormalizedVideoPixelFormat::rgba8;
     normalized_frame.metadata.planes = {std::move(plane)};
     normalized_frame.native_frame.reset();
@@ -1532,6 +1621,9 @@ struct VideoProcessTask final {
     std::uint64_t order_index{0};
     QueuedVideoFrameOutput output{};
     std::optional<std::int64_t> subtitle_timestamp_microseconds{};
+    int normalized_width{0};
+    int normalized_height{0};
+    Rational normalized_sample_aspect_ratio{1, 1};
 };
 
 class ParallelVideoFrameProcessor final {
@@ -1731,6 +1823,9 @@ private:
                 }
                 populate_normalized_video_frame_pixels(
                     *task.output.frame.native_frame,
+                    task.normalized_width,
+                    task.normalized_height,
+                    task.normalized_sample_aspect_ratio,
                     scale_context,
                     scale_width,
                     scale_height,
@@ -3133,7 +3228,8 @@ ResolvedVideoFrameTiming resolve_video_frame_timing_for_segment(
     std::optional<std::int64_t> &previous_source_pts,
     Rational &previous_source_time_base
 ) {
-    if (frame.metadata.width != video_output_plan.width || frame.metadata.height != video_output_plan.height) {
+    if (kind == timeline::TimelineSegmentKind::main &&
+        (frame.metadata.width != video_output_plan.width || frame.metadata.height != video_output_plan.height)) {
         throw std::runtime_error(
             "The " + std::string(timeline::to_string(kind)) +
             " segment decoded into a resolution that does not match the main segment."
@@ -3141,7 +3237,8 @@ ResolvedVideoFrameTiming resolve_video_frame_timing_for_segment(
     }
 
     const auto normalized_frame_sample_aspect_ratio = normalize_sample_aspect_ratio(frame.metadata.sample_aspect_ratio);
-    if (!allow_trimmed_main_sample_aspect_ratio_mismatch &&
+    if (kind == timeline::TimelineSegmentKind::main &&
+        !allow_trimmed_main_sample_aspect_ratio_mismatch &&
         rational_is_positive(video_output_plan.sample_aspect_ratio) &&
         !rationals_equal(normalized_frame_sample_aspect_ratio, video_output_plan.sample_aspect_ratio)) {
         throw std::runtime_error(
@@ -3283,6 +3380,15 @@ SegmentProcessResult process_segment(
                    ", video worker(s) " + std::to_string(runtime_behavior.video_processing_worker_count) + '.')
                 : "subtitle-free native-frame fast path.")
     );
+
+    if (const auto normalization_log = format_segment_normalization_log(
+            timeline_plan,
+            segment_plan,
+            video_output_plan,
+            encode_audio ? resolved_audio_plan : nullptr
+        ); normalization_log.has_value()) {
+        emit_runtime_log(log_callback, *normalization_log);
+    }
 
     std::unique_ptr<ParallelVideoFrameProcessor> video_frame_processor{};
     if (segment_uses_subtitle_path) {
@@ -3764,7 +3870,10 @@ SegmentProcessResult process_segment(
                     .frame = std::move(video_frame),
                     .timing = std::move(timing)
                 },
-                .subtitle_timestamp_microseconds = subtitle_timestamp_microseconds
+                .subtitle_timestamp_microseconds = subtitle_timestamp_microseconds,
+                .normalized_width = video_output_plan.width,
+                .normalized_height = video_output_plan.height,
+                .normalized_sample_aspect_ratio = video_output_plan.sample_aspect_ratio
             });
             return;
         }
