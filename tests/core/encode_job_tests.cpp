@@ -1194,9 +1194,15 @@ int run_timeline_normalized_common_assertion(
         return fail("The normalized common-mismatch output did not normalize intro/outro audio onto the main output.");
     }
 
-    if (!observer_logs_contain_text(observer, "Best-effort normalization (intro segment): cadence 30/1 -> 24000/1001") ||
+    if (!observer_logs_contain_text(
+            observer,
+            "Recoverable input normalized; encode continues: intro segment normalized toward the main output: cadence 30/1 -> 24000/1001"
+        ) ||
         !observer_logs_contain_text(observer, "audio 2ch 44100 Hz -> 1ch 48000 Hz") ||
-        !observer_logs_contain_text(observer, "Best-effort normalization (outro segment):")) {
+        !observer_logs_contain_text(
+            observer,
+            "Recoverable input normalized; encode continues: outro segment normalized toward the main output:"
+        )) {
         return fail("The normalized common-mismatch encode job did not log the expected best-effort normalization details.");
     }
 
@@ -1518,7 +1524,10 @@ int run_copy_audio_fallback_assertion(
         return fail("The copy-audio fallback encode job did not preserve the expected report diagnostics.");
     }
 
-    if (!observer_logs_contain_text(observer, "Audio output warning: Requested source-audio copy is not safe") ||
+    if (!observer_logs_contain_text(
+            observer,
+            "Reduced-fidelity fallback applied; encode continues: Requested source-audio copy is not safe"
+        ) ||
         !observer_logs_contain_text(observer, "Falling back to AAC instead.")) {
         return fail("The copy-audio fallback encode job did not log the expected runtime warning.");
     }

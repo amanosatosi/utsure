@@ -239,6 +239,10 @@ int run_invalid_trim_assertion(
         return fail("The invalid-trim preflight job did not report the expected timeline error.");
     }
 
+    if (!issues_contain_text(result, "Unsupported setup detected; encode cannot continue")) {
+        return fail("The invalid-trim preflight job did not expose the standardized fatal policy text.");
+    }
+
     if (!issues_contain_text(result, "trim")) {
         return fail("The invalid-trim preflight job did not mention the trim range explicitly.");
     }
@@ -382,6 +386,10 @@ int run_copy_fallback_warning_assertion(
     if (!contains_text(result.preview_summary->output_audio_summary, "AAC 192k 1ch 48000 Hz") ||
         !contains_text(result.preview_summary->output_audio_summary, "Copy fallback")) {
         return fail("The copy-fallback preflight job did not report the expected output audio summary.");
+    }
+
+    if (!issues_contain_text(result, "Reduced-fidelity fallback applied; encode preflight continues")) {
+        return fail("The copy-fallback preflight job did not expose the standardized continue-with-warning policy text.");
     }
 
     if (!issues_contain_text(result, "Falling back to AAC instead.")) {

@@ -1,6 +1,7 @@
 #include "utsure/core/timeline/timeline.hpp"
 
 #include "../media/ffmpeg_media_support.hpp"
+#include "../runtime_anomaly_policy.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 
 extern "C" {
@@ -79,8 +80,18 @@ struct SegmentFramePlan final {
 // - Missing intro/outro audio inserts silence.
 // - Truly invalid decoded layouts, unusable timing, or jobs without a main-defined audio target still fail.
 
-TimelineAssemblyResult make_assembly_error(std::string message, std::string actionable_hint);
-TimelineCompositionResult make_composition_error(std::string message, std::string actionable_hint);
+TimelineAssemblyResult make_assembly_error(
+    std::string message,
+    std::string actionable_hint,
+    runtime_policy::RuntimeAnomalyClass classification =
+        runtime_policy::RuntimeAnomalyClass::unsupported_early
+);
+TimelineCompositionResult make_composition_error(
+    std::string message,
+    std::string actionable_hint,
+    runtime_policy::RuntimeAnomalyClass classification =
+        runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt
+);
 AVRational to_av_rational(const Rational &value);
 std::int64_t rescale_value(
     std::int64_t value,
@@ -341,8 +352,9 @@ TimelineAssemblyResult TimelineAssembler::assemble(const TimelineAssemblyRequest
         );
     } catch (const std::exception &exception) {
         return make_assembly_error(
-            "Timeline assembly aborted because an unexpected exception was raised.",
-            exception.what()
+            "Timeline assembly raised an unclassified failure.",
+            exception.what(),
+            runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt
         );
     }
 }
@@ -540,7 +552,7 @@ TimelineCompositionResult TimelineComposer::compose(
         );
     } catch (const std::exception &exception) {
         return make_composition_error(
-            "Timeline composition aborted because an unexpected exception was raised.",
+            "Timeline composition raised an unclassified failure.",
             exception.what()
         );
     }
@@ -548,21 +560,37 @@ TimelineCompositionResult TimelineComposer::compose(
 
 namespace {
 
-TimelineAssemblyResult make_assembly_error(std::string message, std::string actionable_hint) {
+TimelineAssemblyResult make_assembly_error(
+    std::string message,
+    std::string actionable_hint,
+    const runtime_policy::RuntimeAnomalyClass classification
+) {
     return TimelineAssemblyResult{
         .timeline_plan = std::nullopt,
         .error = TimelineAssemblyError{
-            .message = std::move(message),
+            .message = runtime_policy::format_operation_message(
+                classification,
+                "encode",
+                message
+            ),
             .actionable_hint = std::move(actionable_hint)
         }
     };
 }
 
-TimelineCompositionResult make_composition_error(std::string message, std::string actionable_hint) {
+TimelineCompositionResult make_composition_error(
+    std::string message,
+    std::string actionable_hint,
+    const runtime_policy::RuntimeAnomalyClass classification
+) {
     return TimelineCompositionResult{
         .output = std::nullopt,
         .error = TimelineCompositionError{
-            .message = std::move(message),
+            .message = runtime_policy::format_operation_message(
+                classification,
+                "timeline composition",
+                message
+            ),
             .actionable_hint = std::move(actionable_hint)
         }
     };
@@ -1307,7 +1335,7 @@ std::vector<std::vector<float>> resample_audio_channels(
     if (convert_result < 0) {
         throw std::runtime_error(
             "Timeline composition failed to resample intro/outro audio. FFmpeg reported: " +
-            ffmpeg_support::ffmpeg_error_to_string(convert_result)
+            media::ffmpeg_support::ffmpeg_error_to_string(convert_result)
         );
     }
 
@@ -1382,7 +1410,7 @@ media::DecodedVideoFrame normalize_output_video_frame(
     if (fill_result < 0) {
         throw std::runtime_error(
             "Timeline composition failed to describe the normalized RGBA output frame buffer. FFmpeg reported: " +
-            ffmpeg_support::ffmpeg_error_to_string(fill_result)
+            media::ffmpeg_support::ffmpeg_error_to_string(fill_result)
         );
     }
     plane.line_stride_bytes = destination_linesize[0];
@@ -1541,7 +1569,7 @@ void append_audio_segment(
         if (resample_setup_result < 0 || raw_resample_context == nullptr) {
             throw std::runtime_error(
                 "Timeline composition failed to configure intro/outro audio normalization. FFmpeg reported: " +
-                ffmpeg_support::ffmpeg_error_to_string(resample_setup_result)
+                media::ffmpeg_support::ffmpeg_error_to_string(resample_setup_result)
             );
         }
 
@@ -1550,7 +1578,7 @@ void append_audio_segment(
         if (resample_init_result < 0) {
             throw std::runtime_error(
                 "Timeline composition failed to initialize intro/outro audio normalization. FFmpeg reported: " +
-                ffmpeg_support::ffmpeg_error_to_string(resample_init_result)
+                media::ffmpeg_support::ffmpeg_error_to_string(resample_init_result)
             );
         }
     }

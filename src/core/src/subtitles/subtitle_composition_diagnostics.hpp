@@ -1,6 +1,7 @@
 #pragma once
 
 #include "subtitle_bitmap_compositor.hpp"
+#include "../runtime_anomaly_policy.hpp"
 
 #include <cstddef>
 #include <sstream>
@@ -140,7 +141,11 @@ inline std::string format_skipped_empty_subtitle_bitmap_diagnostics(
     const std::string_view bitmap_mode
 ) {
     std::ostringstream message;
-    message << "Subtitle bitmap[" << bitmap_index << "] skipped as empty output: mode=" << bitmap_mode
+    message << runtime_policy::format_operation_message(
+        runtime_policy::RuntimeAnomalyClass::harmless_noop,
+        "subtitle composition",
+        "Subtitle bitmap[" + std::to_string(bitmap_index) + "] skipped as empty output"
+    ) << " mode=" << bitmap_mode
             << ", origin=" << origin_x << ',' << origin_y
             << ", size=" << width << 'x' << height
             << ", stride=" << stride;

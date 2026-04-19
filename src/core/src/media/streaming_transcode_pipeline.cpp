@@ -2,6 +2,7 @@
 
 #include "ffmpeg_media_support.hpp"
 #include "transcode_threading.hpp"
+#include "../runtime_anomaly_policy.hpp"
 #include "../subtitles/subtitle_bitmap_compositor.hpp"
 #include "../subtitles/subtitle_runtime_options.hpp"
 #include "utsure/core/media/media_inspector.hpp"
@@ -312,11 +313,24 @@ ResolvedVideoEncoderBackend resolve_video_encoder_backend(const OutputVideoCodec
     };
 }
 
-StreamingTranscodeResult make_error(std::string message, std::string actionable_hint, const bool canceled = false) {
+StreamingTranscodeResult make_error(
+    std::string message,
+    std::string actionable_hint,
+    const bool canceled = false,
+    const runtime_policy::RuntimeAnomalyClass classification =
+        runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt
+) {
+    const auto formatted_message = canceled
+        ? std::move(message)
+        : runtime_policy::format_operation_message(
+            classification,
+            "encode",
+            message
+        );
     return StreamingTranscodeResult{
         .summary = std::nullopt,
         .error = StreamingTranscodeError{
-            .message = std::move(message),
+            .message = std::move(formatted_message),
             .actionable_hint = std::move(actionable_hint),
             .canceled = canceled
         }
@@ -485,8 +499,12 @@ std::optional<std::string> format_segment_normalization_log(
         return std::nullopt;
     }
 
-    return "Best-effort normalization (" + std::string(timeline::to_string(segment_plan.kind)) +
-        " segment): " + details.str() + '.';
+    return runtime_policy::format_operation_message(
+        runtime_policy::RuntimeAnomalyClass::recoverable_normalization,
+        "encode",
+        std::string(timeline::to_string(segment_plan.kind)) + " segment normalized toward the main output: " +
+            details.str() + '.'
+    );
 }
 
 bool checked_add_u64(const std::uint64_t left, const std::uint64_t right, std::uint64_t &result) {
@@ -4362,7 +4380,9 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
     if (request.timeline_plan == nullptr) {
         return make_error(
             "The streaming transcode request did not include a timeline plan.",
-            "Assemble the timeline before starting the streaming encoder."
+            "Assemble the timeline before starting the streaming encoder.",
+            false,
+            runtime_policy::RuntimeAnomalyClass::unsupported_early
         );
     }
 
@@ -4370,7 +4390,9 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
     if (timeline_plan.segments.empty() || timeline_plan.main_segment_index >= timeline_plan.segments.size()) {
         return make_error(
             "The streaming transcode request did not include a valid main timeline segment.",
-            "Rebuild the intro/main/outro timeline before starting the encode."
+            "Rebuild the intro/main/outro timeline before starting the encode.",
+            false,
+            runtime_policy::RuntimeAnomalyClass::unsupported_early
         );
     }
 
@@ -4379,7 +4401,9 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
         request.subtitle_renderer == nullptr) {
         return make_error(
             "The streaming transcode request enabled subtitles without a subtitle renderer.",
-            "Create the subtitle renderer before starting subtitle burn-in."
+            "Create the subtitle renderer before starting subtitle burn-in.",
+            false,
+            runtime_policy::RuntimeAnomalyClass::unsupported_early
         );
     }
 
@@ -4420,7 +4444,11 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
         if (resolved_audio_output.requested_mode_adjustment.has_value()) {
             emit_runtime_log(
                 request.log_callback,
-                "Audio output warning: " + *resolved_audio_output.requested_mode_adjustment
+                runtime_policy::format_operation_message(
+                    runtime_policy::RuntimeAnomalyClass::reduced_fidelity,
+                    "encode",
+                    *resolved_audio_output.requested_mode_adjustment
+                )
             );
         }
 
@@ -4433,7 +4461,9 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
             if (!audio_copy_template.has_value()) {
                 return make_error(
                     "The selected audio copy mode did not have a source stream to copy.",
-                    "Choose Auto, AAC, or a source with audio."
+                    "Choose Auto, AAC, or a source with audio.",
+                    false,
+                    runtime_policy::RuntimeAnomalyClass::unsupported_early
                 );
             }
         }
@@ -4469,7 +4499,9 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
             if (!prepared_subtitle_session->session_result.succeeded()) {
                 return make_error(
                     prepared_subtitle_session->session_result.error->message,
-                    prepared_subtitle_session->session_result.error->actionable_hint
+                    prepared_subtitle_session->session_result.error->actionable_hint,
+                    false,
+                    runtime_policy::RuntimeAnomalyClass::unsupported_early
                 );
             }
 
@@ -4582,8 +4614,10 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
         }
 
         return make_error(
-            "Streaming transcode aborted because an unexpected exception was raised.",
-            exception.what()
+            "Streaming transcode raised an unclassified runtime failure.",
+            exception.what(),
+            false,
+            runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt
         );
     }
 }

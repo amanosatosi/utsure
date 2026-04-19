@@ -1,5 +1,6 @@
 #include "utsure/core/media/media_encoder.hpp"
 
+#include "../runtime_anomaly_policy.hpp"
 #include "ffmpeg_media_support.hpp"
 #include "transcode_threading.hpp"
 #include "utsure/core/media/media_inspector.hpp"
@@ -615,7 +616,11 @@ MediaEncodeResult MediaEncoder::encode(
     } catch (const std::exception &exception) {
         return make_error(
             request.output_path.string(),
-            "Media encode aborted because an unexpected exception was raised.",
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "media encode",
+                "Media encode raised an unclassified runtime failure."
+            ),
             exception.what()
         );
     }

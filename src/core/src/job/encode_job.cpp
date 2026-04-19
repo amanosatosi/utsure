@@ -1,6 +1,7 @@
 #include "utsure/core/job/encode_job.hpp"
 
 #include "encode_job_working_set_guard.hpp"
+#include "../runtime_anomaly_policy.hpp"
 #include "../media/streaming_transcode_pipeline.hpp"
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 #include "utsure/core/timeline/timeline.hpp"
@@ -521,7 +522,11 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
 
         return make_error(
             job,
-            "Encode job aborted because an unexpected exception was raised.",
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "encode",
+                "Encode job raised an unclassified runtime failure."
+            ),
             exception.what(),
             &telemetry
         );

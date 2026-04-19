@@ -1,6 +1,7 @@
 #include "utsure/core/job/encode_job_preflight.hpp"
 
 #include "encode_job_working_set_guard.hpp"
+#include "../runtime_anomaly_policy.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 #include "utsure/core/subtitles/subtitle_font_recovery.hpp"
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
@@ -349,7 +350,7 @@ void validate_subtitle_session(
             issues,
             EncodeJobPreflightIssueSeverity::error,
             EncodeJobPreflightIssueCode::subtitle_validation_failed,
-            "Failed to validate the subtitle file before encode. " + session_result.error->message,
+            session_result.error->message,
             session_result.error->actionable_hint
         );
         return;
@@ -363,7 +364,7 @@ void validate_subtitle_session(
             issues,
             EncodeJobPreflightIssueSeverity::error,
             EncodeJobPreflightIssueCode::subtitle_validation_failed,
-            "Failed to render the subtitle file during preflight validation. " + render_result.error->message,
+            render_result.error->message,
             render_result.error->actionable_hint
         );
     }
@@ -541,7 +542,7 @@ EncodeJobPreflightResult EncodeJobPreflight::inspect(const EncodeJob &job) noexc
                 issues,
                 EncodeJobPreflightIssueSeverity::error,
                 EncodeJobPreflightIssueCode::timeline_validation_failed,
-                "The selected clips are not compatible for this encode job. " + timeline_result.error->message,
+                timeline_result.error->message,
                 timeline_result.error->actionable_hint
             );
 
@@ -569,7 +570,11 @@ EncodeJobPreflightResult EncodeJobPreflight::inspect(const EncodeJob &job) noexc
                 issues,
                 EncodeJobPreflightIssueSeverity::warning,
                 EncodeJobPreflightIssueCode::invalid_audio_settings,
-                "The requested source-audio copy mode will fall back to AAC for this output.",
+                runtime_policy::format_operation_message(
+                    runtime_policy::RuntimeAnomalyClass::reduced_fidelity,
+                    "encode preflight",
+                    "Requested source-audio copy will fall back to AAC for this output."
+                ),
                 *resolved_audio_output.requested_mode_adjustment
             );
         }
@@ -629,7 +634,11 @@ EncodeJobPreflightResult EncodeJobPreflight::inspect(const EncodeJob &job) noexc
                 EncodeJobPreflightIssue{
                     .severity = EncodeJobPreflightIssueSeverity::error,
                     .code = EncodeJobPreflightIssueCode::timeline_validation_failed,
-                    .message = "Encode preflight aborted because an unexpected exception was raised.",
+                    .message = runtime_policy::format_operation_message(
+                        runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                        "encode preflight",
+                        "Encode preflight raised an unclassified failure."
+                    ),
                     .actionable_hint = exception.what()
                 }
             }

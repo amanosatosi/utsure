@@ -75,6 +75,7 @@ int run_empty_bitmap_assertion(const std::string_view bitmap_mode) {
     }
 
     if (!messages_contain_text(diagnostics, "skipped as empty output") ||
+        !messages_contain_text(diagnostics, "Harmless no-op skipped; subtitle composition continues") ||
         !messages_contain_text(diagnostics, std::string("mode=") + std::string(bitmap_mode))) {
         return fail("The libassmod empty-bitmap path did not emit the expected diagnostics log.");
     }

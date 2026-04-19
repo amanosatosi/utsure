@@ -1,5 +1,6 @@
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 #include "libassmod_rgba_bitmap_validation.hpp"
+#include "../../runtime_anomaly_policy.hpp"
 #include "../../subtitles/subtitle_bitmap_compositor.hpp"
 #include "../../subtitles/subtitle_composition_diagnostics.hpp"
 #include "../../subtitles/subtitle_runtime_options.hpp"
@@ -78,8 +79,12 @@ std::vector<std::string> build_script_feature_quirk_messages(const ScriptFeature
     std::vector<std::string> messages{};
     if (scan.references_tag_images) {
         messages.push_back(
-            "libassmod best-effort note: script references \\img tags, but this build does not register host-side "
-            "RGBA tag images; unsupported effect details may be skipped."
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::reduced_fidelity,
+                "subtitle rendering",
+                "script references \\img tags, but this build does not register host-side RGBA tag images; "
+                "unsupported effect details may be skipped."
+            )
         );
     }
 
@@ -98,13 +103,19 @@ std::string path_to_utf8_string(const std::filesystem::path &path) {
 SubtitleRenderSessionResult make_session_error(
     const SubtitleRenderSessionCreateRequest &request,
     std::string message,
-    std::string actionable_hint
+    std::string actionable_hint,
+    const runtime_policy::RuntimeAnomalyClass classification =
+        runtime_policy::RuntimeAnomalyClass::unsupported_early
 ) {
     return SubtitleRenderSessionResult{
         .session = nullptr,
         .error = SubtitleRendererError{
             .subtitle_path = request.subtitle_path.lexically_normal().string(),
-            .message = std::move(message),
+            .message = runtime_policy::format_operation_message(
+                classification,
+                "subtitle session creation",
+                message
+            ),
             .actionable_hint = std::move(actionable_hint)
         }
     };
@@ -113,23 +124,38 @@ SubtitleRenderSessionResult make_session_error(
 SubtitleRenderResult make_render_error(
     const std::string &subtitle_path,
     std::string message,
-    std::string actionable_hint
+    std::string actionable_hint,
+    const runtime_policy::RuntimeAnomalyClass classification =
+        runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt
 ) {
     return SubtitleRenderResult{
         .rendered_frame = std::nullopt,
         .error = SubtitleRendererError{
             .subtitle_path = subtitle_path,
-            .message = std::move(message),
+            .message = runtime_policy::format_operation_message(
+                classification,
+                "subtitle rendering",
+                message
+            ),
             .actionable_hint = std::move(actionable_hint)
         }
     };
 }
 
-SubtitleFrameComposeResult make_compose_error(std::string message, std::string actionable_hint) {
+SubtitleFrameComposeResult make_compose_error(
+    std::string message,
+    std::string actionable_hint,
+    const runtime_policy::RuntimeAnomalyClass classification =
+        runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt
+) {
     return SubtitleFrameComposeResult{
         .subtitles_applied = false,
         .error = SubtitleFrameComposeError{
-            .message = std::move(message),
+            .message = runtime_policy::format_operation_message(
+                classification,
+                "subtitle composition",
+                message
+            ),
             .actionable_hint = std::move(actionable_hint)
         }
     };
@@ -340,10 +366,17 @@ public:
                 },
                 .error = std::nullopt
             };
+        } catch (const runtime_policy::RuntimeAnomalyError &exception) {
+            return make_render_error(
+                subtitle_path_string_,
+                exception.what(),
+                "classification=" + std::string(runtime_policy::to_string(exception.classification())),
+                exception.classification()
+            );
         } catch (const std::exception &exception) {
             return make_render_error(
                 subtitle_path_string_,
-                "libassmod subtitle rendering aborted because an unexpected exception was raised.",
+                "libassmod raised an unclassified subtitle-rendering failure.",
                 exception.what()
             );
         }
@@ -406,9 +439,22 @@ public:
                 .subtitles_applied = subtitles_applied,
                 .error = std::nullopt
             };
+        } catch (const runtime_policy::RuntimeAnomalyError &exception) {
+            return make_compose_error(
+                exception.what(),
+                std::string("classification=") +
+                    runtime_policy::to_string(exception.classification()) + " Context: " +
+                    detail::format_subtitle_frame_diagnostics(
+                        request,
+                        video_frame,
+                        0U,
+                        runtime::to_string(runtime_options_.bitmap_transfer_mode)
+                    ),
+                exception.classification()
+            );
         } catch (const std::exception &exception) {
             return make_compose_error(
-                "libassmod subtitle composition aborted because an unexpected exception was raised.",
+                "libassmod raised an unclassified subtitle-composition failure.",
                 std::string(exception.what()) + " Context: " +
                     detail::format_subtitle_frame_diagnostics(
                         request,
@@ -623,11 +669,19 @@ public:
                 ),
                 .error = std::nullopt
             };
+        } catch (const runtime_policy::RuntimeAnomalyError &exception) {
+            return make_session_error(
+                request,
+                exception.what(),
+                "classification=" + std::string(runtime_policy::to_string(exception.classification())),
+                exception.classification()
+            );
         } catch (const std::exception &exception) {
             return make_session_error(
                 request,
-                "libassmod subtitle session creation aborted because an unexpected exception was raised.",
-                exception.what()
+                "libassmod raised an unclassified subtitle-session setup failure.",
+                exception.what(),
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt
             );
         }
     }

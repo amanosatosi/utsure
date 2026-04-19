@@ -567,7 +567,8 @@ int run_unsupported_img_render_assertion(const std::filesystem::path &subtitle_p
         return fail(error_message);
     }
 
-    if (!string_messages_contain_text(diagnostics, "\\img") ||
+    if (!string_messages_contain_text(diagnostics, "Reduced-fidelity fallback applied; subtitle rendering continues") ||
+        !string_messages_contain_text(diagnostics, "\\img") ||
         !string_messages_contain_text(diagnostics, "unsupported effect details may be skipped")) {
         return fail("The best-effort libassmod img subtitle sample did not log the expected quirk diagnostics.");
     }
@@ -835,7 +836,8 @@ int run_best_effort_img_burn_in_assertion(
         return fail("The best-effort img subtitle burn-in job should report non-zero subtitle composition time.");
     }
 
-    if (!observer_logs_contain_text(observer, "\\img") ||
+    if (!observer_logs_contain_text(observer, "Reduced-fidelity fallback applied; subtitle rendering continues") ||
+        !observer_logs_contain_text(observer, "\\img") ||
         !observer_logs_contain_text(observer, "unsupported effect details may be skipped")) {
         return fail("The best-effort img subtitle burn-in job did not log the expected quirk diagnostics.");
     }

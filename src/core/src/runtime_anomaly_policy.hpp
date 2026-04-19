@@ -49,6 +49,14 @@ enum class RuntimeAnomalyClass : std::uint8_t {
     const std::string_view operation,
     const std::string_view detail = {}
 ) {
+    if (detail.starts_with("Harmless no-op skipped; ") ||
+        detail.starts_with("Recoverable input normalized; ") ||
+        detail.starts_with("Reduced-fidelity fallback applied; ") ||
+        detail.starts_with("Unsupported setup detected; ") ||
+        detail.starts_with("Unsafe or corrupt runtime state detected; ")) {
+        return std::string(detail);
+    }
+
     std::string message{};
     switch (classification) {
     case RuntimeAnomalyClass::harmless_noop:

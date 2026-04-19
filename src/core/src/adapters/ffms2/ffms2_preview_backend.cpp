@@ -1,5 +1,6 @@
 #include "ffms2_preview_backend.hpp"
 
+#include "../../runtime_anomaly_policy.hpp"
 #include "../../media/ffmpeg_media_support.hpp"
 
 extern "C" {
@@ -1049,7 +1050,11 @@ VideoFrameWindowDecodeResult VideoPreviewBackend::seek_and_decode_window_at_time
     } catch (const std::exception &exception) {
         return make_video_error_result(
             impl_ != nullptr ? impl_->input_path : std::filesystem::path{},
-            "Preview frame window decode aborted because FFMS2 raised an unexpected exception.",
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "preview frame window decode",
+                "FFMS2 preview frame window decode raised an unclassified runtime failure."
+            ),
             exception.what()
         );
     }
@@ -1147,7 +1152,11 @@ VideoFrameWindowDecodeResult VideoPreviewBackend::decode_next_window(const std::
     } catch (const std::exception &exception) {
         return make_video_error_result(
             impl_ != nullptr ? impl_->input_path : std::filesystem::path{},
-            "Preview frame window decode aborted because FFMS2 raised an unexpected exception.",
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "preview frame window decode",
+                "FFMS2 preview frame window decode raised an unclassified runtime failure."
+            ),
             exception.what()
         );
     }
@@ -1313,7 +1322,11 @@ AudioBlockWindowDecodeResult AudioPreviewBackend::seek_and_decode_window_at_time
     } catch (const std::exception &exception) {
         return make_audio_error_result(
             impl_ != nullptr ? impl_->input_path : std::filesystem::path{},
-            "Preview audio window decode aborted because FFMS2 raised an unexpected exception.",
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "preview audio window decode",
+                "FFMS2 preview audio window decode raised an unclassified runtime failure."
+            ),
             exception.what()
         );
     }
@@ -1554,7 +1567,11 @@ VideoPreviewBackendCreateResult create_video_preview_backend(
             .backend = nullptr,
             .error = make_error(
                 input_path,
-                "Preview session creation aborted because FFMS2 raised an unexpected exception.",
+                runtime_policy::format_operation_message(
+                    runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                    "preview session creation",
+                    "FFMS2 preview session creation raised an unclassified runtime failure."
+                ),
                 exception.what()
             )
         };
@@ -1769,7 +1786,11 @@ AudioPreviewBackendCreateResult create_audio_preview_backend(
             .backend = nullptr,
             .error = make_error(
                 input_path,
-                "Preview audio session creation aborted because FFMS2 raised an unexpected exception.",
+                runtime_policy::format_operation_message(
+                    runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                    "preview audio session creation",
+                    "FFMS2 preview audio session creation raised an unclassified runtime failure."
+                ),
                 exception.what()
             )
         };

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../runtime_anomaly_policy.hpp"
 #include "../../subtitles/subtitle_composition_diagnostics.hpp"
 
 extern "C" {
@@ -45,7 +46,10 @@ struct DrawableAssImageRgba final {
                 << " (session " << session_instance_id << ", bitmap " << bitmap_index << "): origin="
                 << image.dst_x << ',' << image.dst_y
                 << ", width=" << image.w << ", height=" << image.h << '.';
-        throw std::runtime_error(message.str());
+        throw runtime_policy::RuntimeAnomalyError(
+            runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+            message.str()
+        );
     }
 
     if (image.stride <= 0 || static_cast<std::int64_t>(image.stride) < minimum_stride) {
@@ -56,7 +60,10 @@ struct DrawableAssImageRgba final {
                 << image.dst_x << ',' << image.dst_y
                 << ", width=" << image.w << ", height=" << image.h
                 << ", stride=" << image.stride << '.';
-        throw std::runtime_error(message.str());
+        throw runtime_policy::RuntimeAnomalyError(
+            runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+            message.str()
+        );
     }
 
     if (image.rgba == nullptr) {
@@ -67,7 +74,10 @@ struct DrawableAssImageRgba final {
                 << image.dst_x << ',' << image.dst_y
                 << ", width=" << image.w << ", height=" << image.h
                 << ", stride=" << image.stride << '.';
-        throw std::runtime_error(message.str());
+        throw runtime_policy::RuntimeAnomalyError(
+            runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+            message.str()
+        );
     }
 
     return AssImageRgbaValidationResult::drawable;

@@ -107,6 +107,8 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M24 CI slice also permits one narrow user-requested cache follow-up, limited to temporarily disabling the FFmpeg GitHub Actions cache in the Windows workflow and leaving an explicit reminder to re-enable it on or after May 1, 2026, without changing unrelated build/test behavior.
 - The current M24 slice also permits one narrow user-requested desktop-shell scrollbar follow-up, limited to existing Qt stylesheet accent-color tuning so scrollbars stay visible against the dark shell without changing layout or encode behavior.
 - The current M24 slice also permits one narrow user-requested encoder-policy follow-up, limited to shifting recoverable audio-output-mode mismatches from fatal errors to warned best-effort fallback behavior without weakening existing memory-safety or container-validity guards.
+- The current M24 slice also permits one narrow user-requested runtime-anomaly follow-up, limited to standardizing continue-vs-log-vs-fail handling across inspected media/timeline/subtitle hotspots with one small internal classification scheme and clearer user-facing messages, without rewriting unrelated pipeline architecture.
+- Runtime anomaly policy note: harmless no-op cases are skipped, recoverable normalization and reduced-fidelity fallbacks continue with diagnostics, clearly unsupported setups fail in preflight when they can be detected early, and only unsafe/corrupt runtime states remain encode-stopping failures.
 
 ## Architecture direction
 

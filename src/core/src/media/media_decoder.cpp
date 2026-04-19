@@ -1,6 +1,7 @@
 #include "utsure/core/media/media_decoder.hpp"
 
 #include "../adapters/ffms2/ffms2_preview_backend.hpp"
+#include "../runtime_anomaly_policy.hpp"
 #include "ffmpeg_media_support.hpp"
 
 extern "C" {
@@ -1957,7 +1958,11 @@ MediaDecodeResult MediaDecoder::decode(
     } catch (const std::exception &exception) {
         return make_error(
             input_path.string(),
-            "Media decode aborted because an unexpected exception was raised.",
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "media decode",
+                "Media decode raised an unclassified runtime failure."
+            ),
             exception.what()
         );
     }
@@ -2045,7 +2050,11 @@ VideoFrameDecodeResult MediaDecoder::decode_video_frame_at_time(
     } catch (const std::exception &exception) {
         return make_video_frame_error(
             input_path.string(),
-            "Preview frame decode aborted because an unexpected exception was raised.",
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "preview frame decode",
+                "Preview frame decode raised an unclassified runtime failure."
+            ),
             exception.what()
         );
     }
@@ -2132,7 +2141,11 @@ VideoFrameWindowDecodeResult MediaDecoder::decode_video_frame_window_at_time(
     } catch (const std::exception &exception) {
         return make_video_frame_window_error(
             input_path.string(),
-            "Preview frame window decode aborted because an unexpected exception was raised.",
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "preview frame window decode",
+                "Preview frame window decode raised an unclassified runtime failure."
+            ),
             exception.what()
         );
     }
@@ -2172,7 +2185,11 @@ VideoPreviewSessionCreateResult MediaDecoder::create_video_preview_session(
     } catch (const std::exception &exception) {
         return make_video_preview_session_error(
             input_path.string(),
-            "Preview session creation aborted because an unexpected exception was raised.",
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "preview session creation",
+                "Preview session creation raised an unclassified runtime failure."
+            ),
             exception.what()
         );
     }
@@ -2212,7 +2229,11 @@ AudioPreviewSessionCreateResult MediaDecoder::create_audio_preview_session(
     } catch (const std::exception &exception) {
         return make_audio_preview_session_error(
             input_path.string(),
-            "Preview audio session creation aborted because an unexpected exception was raised.",
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "preview audio session creation",
+                "Preview audio session creation raised an unclassified runtime failure."
+            ),
             exception.what()
         );
     }
@@ -2251,7 +2272,11 @@ VideoFrameWindowDecodeResult VideoPreviewSession::seek_and_decode_window_at_time
     } catch (const std::exception &exception) {
         return make_video_frame_window_error(
             impl_ != nullptr ? impl_->input_path_string : std::string{},
-            "Preview frame window decode aborted because an unexpected exception was raised.",
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "preview frame window decode",
+                "Preview frame window decode raised an unclassified runtime failure."
+            ),
             exception.what()
         );
     }
@@ -2288,7 +2313,11 @@ VideoFrameWindowDecodeResult VideoPreviewSession::decode_next_window(const std::
     } catch (const std::exception &exception) {
         return make_video_frame_window_error(
             impl_ != nullptr ? impl_->input_path_string : std::string{},
-            "Preview frame window decode aborted because an unexpected exception was raised.",
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "preview frame window decode",
+                "Preview frame window decode raised an unclassified runtime failure."
+            ),
             exception.what()
         );
     }
@@ -2330,7 +2359,11 @@ AudioBlockWindowDecodeResult AudioPreviewSession::seek_and_decode_window_at_time
     } catch (const std::exception &exception) {
         return make_audio_block_window_error(
             impl_ != nullptr ? impl_->input_path_string : std::string{},
-            "Preview audio window decode aborted because an unexpected exception was raised.",
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "preview audio window decode",
+                "Preview audio window decode raised an unclassified runtime failure."
+            ),
             exception.what()
         );
     }
@@ -2360,7 +2393,11 @@ AudioBlockWindowDecodeResult AudioPreviewSession::decode_next_window(
     } catch (const std::exception &exception) {
         return make_audio_block_window_error(
             impl_ != nullptr ? impl_->input_path_string : std::string{},
-            "Preview audio window decode aborted because an unexpected exception was raised.",
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "preview audio window decode",
+                "Preview audio window decode raised an unclassified runtime failure."
+            ),
             exception.what()
         );
     }
