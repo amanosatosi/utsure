@@ -811,6 +811,7 @@ add_executable(utsure_core_libassmod_subtitle_adapter_tests
 target_link_libraries(utsure_core_libassmod_subtitle_adapter_tests
     PRIVATE
         utsure::encoder_core
+        utsure::subtitle_renderer_dependency
 )
 
 target_include_directories(utsure_core_libassmod_subtitle_adapter_tests
