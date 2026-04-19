@@ -515,8 +515,9 @@ int assert_normalized_common_mismatches(
         summary.segments[0].start_microseconds != 0 ||
         summary.segments[1].start_microseconds != 1000000 ||
         summary.segments[2].start_microseconds != 3000000 ||
-        summary.segments[0].inserted_silence ||
-        summary.segments[2].inserted_silence) {
+        summary.segments[0].audio_block_count != 47 ||
+        summary.segments[1].audio_block_count != 94 ||
+        summary.segments[2].audio_block_count != 47) {
         return fail("Unexpected normalized common-mismatch counts, timing, or inserted-silence state.");
     }
 

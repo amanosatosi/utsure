@@ -1951,7 +1951,7 @@ private:
 std::vector<std::vector<float>> resample_audio_frame(
     SwrContext &resample_context,
     const AVFrame *decoded_frame,
-    const int channel_count
+    const int output_channel_count
 ) {
     const int input_samples = decoded_frame != nullptr ? decoded_frame->nb_samples : 0;
     const int output_capacity = swr_get_out_samples(&resample_context, input_samples);
@@ -1960,11 +1960,11 @@ std::vector<std::vector<float>> resample_audio_frame(
     }
 
     std::vector<std::vector<float>> converted_channels(
-        static_cast<std::size_t>(channel_count),
+        static_cast<std::size_t>(output_channel_count),
         std::vector<float>(static_cast<std::size_t>(output_capacity))
     );
-    std::vector<std::uint8_t *> output_data(static_cast<std::size_t>(channel_count), nullptr);
-    for (int channel_index = 0; channel_index < channel_count; ++channel_index) {
+    std::vector<std::uint8_t *> output_data(static_cast<std::size_t>(output_channel_count), nullptr);
+    for (int channel_index = 0; channel_index < output_channel_count; ++channel_index) {
         output_data[static_cast<std::size_t>(channel_index)] =
             reinterpret_cast<std::uint8_t *>(converted_channels[static_cast<std::size_t>(channel_index)].data());
     }
@@ -1973,7 +1973,10 @@ std::vector<std::vector<float>> resample_audio_frame(
     const std::uint8_t *const *input_data_pointer = nullptr;
     if (decoded_frame != nullptr && input_samples > 0) {
         const auto sample_format = static_cast<AVSampleFormat>(decoded_frame->format);
-        const int input_planes = av_sample_fmt_is_planar(sample_format) ? channel_count : 1;
+        const int input_channel_count = decoded_frame->ch_layout.nb_channels > 0
+            ? decoded_frame->ch_layout.nb_channels
+            : output_channel_count;
+        const int input_planes = av_sample_fmt_is_planar(sample_format) ? input_channel_count : 1;
         input_data.resize(static_cast<std::size_t>(std::max(1, input_planes)), nullptr);
         for (int plane_index = 0; plane_index < input_planes; ++plane_index) {
             input_data[static_cast<std::size_t>(plane_index)] = decoded_frame->extended_data[plane_index];
@@ -4331,6 +4334,8 @@ SegmentProcessResult process_segment(
                 );
             }
 
+            // Keep the main-defined output duration exact even when compressed intro/outro audio
+            // decodes a little short after normalization or codec-delay trimming.
             if (emitted_segment_audio_samples < expected_segment_samples) {
                 emit_trailing_silence(expected_segment_samples - emitted_segment_audio_samples);
             }

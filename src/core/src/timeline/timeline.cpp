@@ -1723,6 +1723,8 @@ void append_audio_segment(
         emit_output_block(block_size, false);
     }
 
+    // Match the streaming path: keep the segment on the main-defined output timeline even if
+    // compressed intro/outro audio lands slightly short after normalization.
     if (emitted_output_samples < expected_segment_samples) {
         segment_summary.inserted_silence = true;
         std::int64_t samples_remaining = expected_segment_samples - emitted_output_samples;

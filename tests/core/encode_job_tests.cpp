@@ -351,8 +351,9 @@ int assert_normalized_common_timeline_summary(
         summary.timeline_summary.segments[0].start_microseconds != 0 ||
         summary.timeline_summary.segments[1].start_microseconds != 1000000 ||
         summary.timeline_summary.segments[2].start_microseconds != 3000000 ||
-        summary.timeline_summary.segments[0].inserted_silence ||
-        summary.timeline_summary.segments[2].inserted_silence) {
+        summary.timeline_summary.segments[0].audio_block_count != 47 ||
+        summary.timeline_summary.segments[1].audio_block_count != 94 ||
+        summary.timeline_summary.segments[2].audio_block_count != 47) {
         return fail("Unexpected normalized common-mismatch output counts, timing, or silence insertion.");
     }
 
