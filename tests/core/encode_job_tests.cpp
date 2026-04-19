@@ -70,6 +70,42 @@ std::string format_rational(const Rational &value) {
     return std::to_string(value.numerator) + "/" + std::to_string(value.denominator);
 }
 
+std::int64_t rescale_to_microseconds(const std::int64_t value, const Rational &time_base) {
+    if (!time_base.is_valid() || time_base.numerator <= 0 || time_base.denominator <= 0) {
+        return 0;
+    }
+
+    return (value * time_base.numerator * 1000000LL + (time_base.denominator / 2)) / time_base.denominator;
+}
+
+std::int64_t infer_stream_duration_microseconds(const utsure::core::media::VideoStreamInfo &video_stream) {
+    if (video_stream.timestamps.duration_pts.has_value() &&
+        video_stream.timestamps.time_base.is_valid() &&
+        video_stream.timestamps.time_base.numerator > 0 &&
+        video_stream.timestamps.time_base.denominator > 0) {
+        return rescale_to_microseconds(*video_stream.timestamps.duration_pts, video_stream.timestamps.time_base);
+    }
+
+    if (video_stream.frame_count > 0 &&
+        video_stream.average_frame_rate.is_valid() &&
+        video_stream.average_frame_rate.numerator > 0 &&
+        video_stream.average_frame_rate.denominator > 0) {
+        return (video_stream.frame_count * video_stream.average_frame_rate.denominator * 1000000LL +
+                (video_stream.average_frame_rate.numerator / 2)) /
+            video_stream.average_frame_rate.numerator;
+    }
+
+    return 0;
+}
+
+std::int64_t expected_audio_block_count(const std::int64_t sample_count, const int block_samples = 1024) {
+    if (sample_count <= 0 || block_samples <= 0) {
+        return 0;
+    }
+
+    return (sample_count + block_samples - 1) / block_samples;
+}
+
 bool rational_is_positive(const Rational &value) {
     return value.is_valid() && value.numerator > 0 && value.denominator > 0;
 }
@@ -336,7 +372,8 @@ int assert_timeline_summary(const EncodeJobSummary &summary) {
 
 int assert_normalized_common_timeline_summary(
     const EncodeJobSummary &summary,
-    const Rational &expected_output_video_time_base
+    const Rational &expected_output_video_time_base,
+    const std::int64_t expected_main_duration_us
 ) {
     if (summary.timeline_summary.segments.size() != 3 ||
         summary.timeline_summary.segments[0].kind != TimelineSegmentKind::intro ||
@@ -345,15 +382,22 @@ int assert_normalized_common_timeline_summary(
         return fail("Unexpected normalized common-mismatch segment order.");
     }
 
+    const auto expected_outro_start_us = 1000000 + expected_main_duration_us;
+    const auto expected_total_duration_us = expected_outro_start_us + 1000000;
+    const auto expected_main_audio_samples = (expected_main_duration_us * 48000LL + 500000LL) / 1000000LL;
+
     if (summary.timeline_summary.output_video_frame_count != 96 ||
-        summary.timeline_summary.output_audio_block_count != 188 ||
-        summary.timeline_summary.output_duration_microseconds != 4000000 ||
+        summary.timeline_summary.output_audio_block_count !=
+            expected_audio_block_count(48000) + expected_audio_block_count(expected_main_audio_samples) +
+                expected_audio_block_count(48000) ||
+        summary.timeline_summary.output_duration_microseconds != expected_total_duration_us ||
         summary.timeline_summary.segments[0].start_microseconds != 0 ||
         summary.timeline_summary.segments[1].start_microseconds != 1000000 ||
-        summary.timeline_summary.segments[2].start_microseconds != 3000000 ||
-        summary.timeline_summary.segments[0].audio_block_count != 47 ||
-        summary.timeline_summary.segments[1].audio_block_count != 94 ||
-        summary.timeline_summary.segments[2].audio_block_count != 47) {
+        summary.timeline_summary.segments[1].duration_microseconds != expected_main_duration_us ||
+        summary.timeline_summary.segments[2].start_microseconds != expected_outro_start_us ||
+        summary.timeline_summary.segments[0].audio_block_count != expected_audio_block_count(48000) ||
+        summary.timeline_summary.segments[1].audio_block_count != expected_audio_block_count(expected_main_audio_samples) ||
+        summary.timeline_summary.segments[2].audio_block_count != expected_audio_block_count(48000)) {
         return fail("Unexpected normalized common-mismatch output counts, timing, or silence insertion.");
     }
 
@@ -1115,6 +1159,10 @@ int run_timeline_normalized_common_assertion(
         input_video_stream.timestamps.time_base,
         input_video_stream.average_frame_rate
     );
+    const auto expected_main_duration_us = infer_stream_duration_microseconds(input_video_stream);
+    if (expected_main_duration_us <= 0) {
+        return fail("The normalized common-mismatch main sample did not expose a usable authoritative duration.");
+    }
 
     CollectingObserver observer{};
     const EncodeJob job{
@@ -1147,7 +1195,7 @@ int run_timeline_normalized_common_assertion(
     }
 
     const auto &summary = *job_result.encode_job_summary;
-    if (assert_normalized_common_timeline_summary(summary, expected_output_video_time_base) != 0) {
+    if (assert_normalized_common_timeline_summary(summary, expected_output_video_time_base, expected_main_duration_us) != 0) {
         return 1;
     }
 
@@ -1172,11 +1220,13 @@ int run_timeline_normalized_common_assertion(
             format_rational(decoded_output.video_frames[index].sample_aspect_ratio) == "1/1";
     };
 
+    const auto expected_outro_start_us = 1000000 + expected_main_duration_us;
+
     if (!assert_frame_geometry(0U) ||
         !assert_frame_geometry(24U) ||
         !assert_frame_geometry(72U) ||
         decoded_output.video_frames[24].timestamp.start_microseconds != 1000000 ||
-        decoded_output.video_frames[72].timestamp.start_microseconds != 3000000) {
+        decoded_output.video_frames[72].timestamp.start_microseconds != expected_outro_start_us) {
         return fail("The normalized common-mismatch output did not follow the main output geometry and boundaries.");
     }
 
