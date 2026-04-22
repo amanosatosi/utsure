@@ -3489,6 +3489,9 @@ SegmentProcessResult process_segment(
     std::int64_t emitted_segment_audio_samples = 0;
     std::int64_t decoded_video_frame_index = 0;
     const std::int64_t segment_output_start_pts = next_output_video_pts;
+    const std::optional<std::int64_t> authoritative_segment_end_pts = estimated_segment_duration_pts.has_value()
+        ? std::optional<std::int64_t>(segment_output_start_pts + *estimated_segment_duration_pts)
+        : std::nullopt;
     std::int64_t segment_output_end_pts = segment_output_start_pts;
     std::optional<std::int64_t> first_video_source_pts_in_output_time_base{};
     std::optional<std::int64_t> previous_video_source_pts{};
@@ -3921,7 +3924,10 @@ SegmentProcessResult process_segment(
         });
     };
 
-    const auto emit_pending_video_frames_until = [&](const std::int64_t source_interval_end_pts) {
+    const auto emit_pending_video_frames_until = [&](
+        const std::int64_t source_interval_end_pts,
+        const bool clamp_frame_end_to_interval_end
+    ) {
         if (!pending_video_frame.has_value()) {
             return;
         }
@@ -3932,6 +3938,10 @@ SegmentProcessResult process_segment(
                 timeline_plan.output_frame_rate,
                 timeline_plan.output_video_time_base
             );
+            if (authoritative_segment_end_pts.has_value() && output_frame_pts >= *authoritative_segment_end_pts) {
+                return;
+            }
+
             if (output_frame_pts >= source_interval_end_pts) {
                 return;
             }
@@ -3941,7 +3951,13 @@ SegmentProcessResult process_segment(
                 timeline_plan.output_frame_rate,
                 timeline_plan.output_video_time_base
             );
-            const auto output_duration_pts = std::min(source_interval_end_pts, next_output_frame_pts) - output_frame_pts;
+            const auto output_frame_end_pts = clamp_frame_end_to_interval_end
+                ? std::min(source_interval_end_pts, next_output_frame_pts)
+                : next_output_frame_pts;
+            const auto clamped_output_frame_end_pts = authoritative_segment_end_pts.has_value()
+                ? std::min(output_frame_end_pts, *authoritative_segment_end_pts)
+                : output_frame_end_pts;
+            const auto output_duration_pts = clamped_output_frame_end_pts - output_frame_pts;
             if (output_duration_pts <= 0) {
                 throw std::runtime_error(
                     "The " + std::string(timeline::to_string(segment_plan.kind)) +
@@ -3984,7 +4000,10 @@ SegmentProcessResult process_segment(
         );
 
         if (pending_video_frame.has_value()) {
-            emit_pending_video_frames_until(resolved_timing.output_pts);
+            emit_pending_video_frames_until(
+                resolved_timing.output_pts,
+                segment_plan.kind == timeline::TimelineSegmentKind::main
+            );
         }
 
         pending_video_frame = PendingVideoFrameInput{
@@ -4287,7 +4306,7 @@ SegmentProcessResult process_segment(
             );
         }
 
-        emit_pending_video_frames_until(final_source_interval_end_pts);
+        emit_pending_video_frames_until(final_source_interval_end_pts, true);
         pending_video_frame.reset();
     }
 
