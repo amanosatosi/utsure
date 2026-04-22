@@ -3464,6 +3464,11 @@ SegmentProcessResult process_segment(
             : 0;
     const auto fallback_video_duration_pts =
         infer_video_frame_duration_pts(*segment_plan.inspected_source_info.primary_video_stream).value_or(1);
+    const std::optional<std::int64_t> estimated_segment_duration_pts = estimate_segment_duration_pts(
+        segment_plan,
+        timeline_plan.output_video_time_base,
+        timeline_plan.output_frame_rate
+    );
     const std::int64_t segment_video_start_pts =
         segment_has_source_trim(segment_plan)
             ? requested_video_trim_start_pts
@@ -4255,16 +4260,26 @@ SegmentProcessResult process_segment(
     receive_video_frames();
 
     if (pending_video_frame.has_value()) {
-        const auto final_source_duration_pts =
+        auto final_source_interval_end_pts =
+            pending_video_frame->timing.output_pts +
             pending_video_frame->timing.output_duration_pts.value_or(video_output_plan.frame_duration_pts);
-        if (final_source_duration_pts <= 0) {
+        if (estimated_segment_duration_pts.has_value()) {
+            // Keep the terminal streaming frame inside the inspected segment duration when
+            // the source exposes one, instead of letting a fallback frame duration overrun it.
+            const auto estimated_segment_end_pts = segment_output_start_pts + *estimated_segment_duration_pts;
+            if (estimated_segment_end_pts > pending_video_frame->timing.output_pts) {
+                final_source_interval_end_pts = std::min(final_source_interval_end_pts, estimated_segment_end_pts);
+            }
+        }
+
+        if (final_source_interval_end_pts <= pending_video_frame->timing.output_pts) {
             throw std::runtime_error(
                 "The " + std::string(timeline::to_string(segment_plan.kind)) +
                 " segment final video frame does not expose a usable duration."
             );
         }
 
-        emit_pending_video_frames_until(pending_video_frame->timing.output_pts + final_source_duration_pts);
+        emit_pending_video_frames_until(final_source_interval_end_pts);
         pending_video_frame.reset();
     }
 
