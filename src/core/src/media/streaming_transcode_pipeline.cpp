@@ -599,6 +599,14 @@ std::optional<std::uint64_t> compute_audio_block_bytes(
     return bytes;
 }
 
+std::int64_t logical_audio_block_count(const std::int64_t sample_count, const int block_samples) {
+    if (sample_count <= 0 || block_samples <= 0) {
+        return 0;
+    }
+
+    return (sample_count + block_samples - 1) / block_samples;
+}
+
 }  // namespace
 
 std::optional<PipelineMemoryBudget> build_memory_budget(
@@ -4358,6 +4366,16 @@ SegmentProcessResult process_segment(
                 emit_trailing_silence(expected_segment_samples - emitted_segment_audio_samples);
             }
         }
+
+        // Report deterministic normalized-audio block counts based on the authoritative
+        // output timeline, not on how the bounded streaming pipeline happened to split the
+        // final decoded tail while draining its internal queue.
+        const auto expected_block_count = logical_audio_block_count(
+            expected_segment_samples,
+            normalization_policy.audio_block_samples
+        );
+        result.segment_summary.audio_block_count = expected_block_count;
+        result.decoded_audio_block_count = expected_block_count;
     }
 
     next_output_video_pts = segment_output_end_pts;
