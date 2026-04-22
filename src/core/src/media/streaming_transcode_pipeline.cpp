@@ -1481,6 +1481,10 @@ StreamingVideoFrame build_streaming_video_frame_metadata(
     const auto timestamp_seed = choose_timestamp_seed(source_frame, next_fallback_source_pts);
     next_fallback_source_pts = timestamp_seed.source_pts + fallback_duration_pts;
     const auto stream_time_base = ffmpeg_support::to_rational(stream.time_base);
+    const auto fallback_duration_microseconds = rescale_to_microseconds(
+        fallback_duration_pts,
+        stream_time_base
+    );
 
     return StreamingVideoFrame{
         .native_frame = {},
@@ -1490,16 +1494,17 @@ StreamingVideoFrame build_streaming_video_frame_metadata(
             .timestamp = MediaTimestamp{
                 .source_time_base = stream_time_base,
                 .source_pts = timestamp_seed.source_pts,
-                // Keep streaming frame timing aligned with the offline decoder path: derive
-                // normalized frame durations from adjacent PTS boundaries plus one fallback
-                // frame duration instead of trusting per-frame AVFrame durations directly.
-                .source_duration = std::nullopt,
+                // Keep streaming frame timing aligned with the offline decoder path: later
+                // frames derive their interval from adjacent PTS values, but the terminal frame
+                // still needs one source-side fallback duration instead of the normalized output
+                // cadence or AVFrame::duration.
+                .source_duration = fallback_duration_pts,
                 .origin = timestamp_seed.origin,
                 .start_microseconds = rescale_to_microseconds(
                     timestamp_seed.source_pts,
                     stream_time_base
                 ),
-                .duration_microseconds = std::nullopt
+                .duration_microseconds = fallback_duration_microseconds
             },
             .width = source_frame.width,
             .height = source_frame.height,
