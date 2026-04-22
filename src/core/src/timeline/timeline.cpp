@@ -1202,6 +1202,14 @@ std::int64_t count_audio_samples(const std::vector<DecodedAudioSamples> &audio_b
     return total_samples;
 }
 
+std::int64_t logical_audio_block_count(const std::int64_t sample_count, const int block_samples) {
+    if (sample_count <= 0 || block_samples <= 0) {
+        return 0;
+    }
+
+    return (sample_count + block_samples - 1) / block_samples;
+}
+
 std::vector<std::vector<float>> copy_audio_block_range(
     const std::vector<std::vector<float>> &channel_samples,
     const int start_sample_index,
@@ -1543,7 +1551,6 @@ void append_audio_segment(
         );
     }
 
-    const auto starting_block_count = static_cast<std::int64_t>(output_audio_blocks.size());
     std::int64_t emitted_output_samples = 0;
     const bool requires_audio_normalization =
         segment_audio_stream.sample_rate != output_audio_stream.sample_rate ||
@@ -1738,7 +1745,14 @@ void append_audio_segment(
         }
     }
 
-    segment_summary.audio_block_count = static_cast<std::int64_t>(output_audio_blocks.size()) - starting_block_count;
+    // Report deterministic normalized-audio block counts from the authoritative output
+    // timeline. A short decoded tail plus a tiny padded silence suffix should not look like
+    // an extra logical block in the summary just because the offline composer emitted it in
+    // two physical chunks.
+    segment_summary.audio_block_count = logical_audio_block_count(
+        expected_segment_samples,
+        decoded_segment.normalization_policy.audio_block_samples
+    );
 }
 
 DecodedMediaSource build_composed_media_source(

@@ -1,12 +1,18 @@
 #include "utsure/core/media/media_decoder.hpp"
 #include "utsure/core/timeline/timeline.hpp"
 
+extern "C" {
+#include <libavutil/avutil.h>
+#include <libavutil/mathematics.h>
+}
+
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -51,12 +57,32 @@ std::string format_rational(const Rational &value) {
     return std::to_string(value.numerator) + "/" + std::to_string(value.denominator);
 }
 
-std::int64_t rescale_to_microseconds(const std::int64_t value, const Rational &time_base) {
-    if (!time_base.is_valid() || time_base.numerator <= 0 || time_base.denominator <= 0) {
+AVRational to_av_rational(const Rational &value) {
+    return AVRational{
+        .num = static_cast<int>(value.numerator),
+        .den = static_cast<int>(value.denominator)
+    };
+}
+
+std::int64_t rescale_value(
+    const std::int64_t value,
+    const Rational &source_time_base,
+    const Rational &target_time_base
+) {
+    if (!source_time_base.is_valid() ||
+        source_time_base.numerator <= 0 ||
+        source_time_base.denominator <= 0 ||
+        !target_time_base.is_valid() ||
+        target_time_base.numerator <= 0 ||
+        target_time_base.denominator <= 0) {
         return 0;
     }
 
-    return (value * time_base.numerator * 1000000LL + (time_base.denominator / 2)) / time_base.denominator;
+    return av_rescale_q(value, to_av_rational(source_time_base), to_av_rational(target_time_base));
+}
+
+std::int64_t rescale_to_microseconds(const std::int64_t value, const Rational &time_base) {
+    return rescale_value(value, time_base, Rational{1, AV_TIME_BASE});
 }
 
 std::int64_t infer_stream_duration_microseconds(const utsure::core::media::VideoStreamInfo &video_stream) {
@@ -72,9 +98,11 @@ std::int64_t infer_stream_duration_microseconds(const utsure::core::media::Video
         video_stream.average_frame_rate.is_valid() &&
         video_stream.average_frame_rate.numerator > 0 &&
         video_stream.average_frame_rate.denominator > 0) {
-        return (*video_stream.frame_count * video_stream.average_frame_rate.denominator * 1000000LL +
-                (video_stream.average_frame_rate.numerator / 2)) /
-            video_stream.average_frame_rate.numerator;
+        return av_rescale_q(
+            *video_stream.frame_count,
+            av_inv_q(to_av_rational(video_stream.average_frame_rate)),
+            AV_TIME_BASE_Q
+        );
     }
 
     return 0;
@@ -532,14 +560,83 @@ int assert_normalized_common_mismatches(
     const auto &summary = context->output.timeline_summary;
     const auto &decoded = context->output.decoded_media_source;
     const auto &main_video_stream = *context->plan.segments[context->plan.main_segment_index].inspected_source_info.primary_video_stream;
-    const auto expected_main_duration_us = infer_stream_duration_microseconds(main_video_stream);
-    if (expected_main_duration_us <= 0) {
+    const auto authoritative_main_duration_us = infer_stream_duration_microseconds(main_video_stream);
+    if (authoritative_main_duration_us <= 0) {
         return fail("The normalized common-mismatch test could not derive the authoritative main duration.");
     }
 
-    const auto expected_outro_start_us = 1000000 + expected_main_duration_us;
-    const auto expected_total_duration_us = expected_outro_start_us + 1000000;
-    const auto expected_main_audio_samples = (expected_main_duration_us * 48000LL + 500000LL) / 1000000LL;
+    const Rational microsecond_time_base{1, AV_TIME_BASE};
+    const Rational expected_output_audio_time_base{1, 48000};
+    const auto expected_intro_duration_pts = rescale_value(
+        1000000LL,
+        microsecond_time_base,
+        summary.output_video_time_base
+    );
+    const auto expected_main_duration_pts = rescale_value(
+        authoritative_main_duration_us,
+        microsecond_time_base,
+        summary.output_video_time_base
+    );
+    const auto expected_outro_start_pts = expected_intro_duration_pts + expected_main_duration_pts;
+    const auto expected_total_duration_pts = expected_outro_start_pts + expected_intro_duration_pts;
+    const auto expected_intro_duration_us =
+        rescale_to_microseconds(expected_intro_duration_pts, summary.output_video_time_base);
+    const auto expected_main_duration_us =
+        rescale_to_microseconds(expected_main_duration_pts, summary.output_video_time_base);
+    const auto expected_outro_start_us =
+        rescale_to_microseconds(expected_outro_start_pts, summary.output_video_time_base);
+    const auto expected_total_duration_us =
+        rescale_to_microseconds(expected_total_duration_pts, summary.output_video_time_base);
+    const auto expected_intro_audio_samples = rescale_value(
+        expected_intro_duration_pts,
+        summary.output_video_time_base,
+        expected_output_audio_time_base
+    );
+    const auto expected_main_audio_samples = rescale_value(
+        expected_main_duration_pts,
+        summary.output_video_time_base,
+        expected_output_audio_time_base
+    );
+    const auto expected_outro_audio_samples = rescale_value(
+        expected_intro_duration_pts,
+        summary.output_video_time_base,
+        expected_output_audio_time_base
+    );
+    const auto build_mismatch_diagnostics = [&]() {
+        std::ostringstream diagnostics;
+        diagnostics
+            << "Unexpected normalized common-mismatch counts, timing, or inserted-silence state."
+            << "\nexpected.output.duration_us=" << expected_total_duration_us
+            << "\nactual.output.duration_us=" << summary.output_duration_microseconds
+            << "\nexpected.output.audio_blocks="
+            << expected_audio_block_count(expected_intro_audio_samples) +
+                expected_audio_block_count(expected_main_audio_samples) +
+                expected_audio_block_count(expected_outro_audio_samples)
+            << "\nactual.output.audio_blocks=" << summary.output_audio_block_count
+            << "\nexpected.segment[0].duration_us=" << expected_intro_duration_us
+            << "\nexpected.segment[0].audio_blocks=" << expected_audio_block_count(expected_intro_audio_samples)
+            << "\nactual.segment[0].start_us=" << summary.segments[0].start_microseconds
+            << "\nactual.segment[0].duration_us=" << summary.segments[0].duration_microseconds
+            << "\nactual.segment[0].audio_blocks=" << summary.segments[0].audio_block_count
+            << "\nactual.segment[0].inserted_silence=" << (summary.segments[0].inserted_silence ? "yes" : "no")
+            << "\nexpected.segment[1].start_us=" << expected_intro_duration_us
+            << "\nexpected.segment[1].duration_us=" << expected_main_duration_us
+            << "\nexpected.segment[1].audio_blocks=" << expected_audio_block_count(expected_main_audio_samples)
+            << "\nactual.segment[1].start_us=" << summary.segments[1].start_microseconds
+            << "\nactual.segment[1].duration_us=" << summary.segments[1].duration_microseconds
+            << "\nactual.segment[1].audio_blocks=" << summary.segments[1].audio_block_count
+            << "\nactual.segment[1].inserted_silence=" << (summary.segments[1].inserted_silence ? "yes" : "no")
+            << "\nexpected.segment[2].start_us=" << expected_outro_start_us
+            << "\nexpected.segment[2].duration_us=" << expected_intro_duration_us
+            << "\nexpected.segment[2].audio_blocks=" << expected_audio_block_count(expected_outro_audio_samples)
+            << "\nactual.segment[2].start_us=" << summary.segments[2].start_microseconds
+            << "\nactual.segment[2].duration_us=" << summary.segments[2].duration_microseconds
+            << "\nactual.segment[2].audio_blocks=" << summary.segments[2].audio_block_count
+            << "\nactual.segment[2].inserted_silence=" << (summary.segments[2].inserted_silence ? "yes" : "no")
+            << '\n'
+            << build_summary(context->output);
+        return diagnostics.str();
+    };
 
     if (summary.segments.size() != 3 ||
         summary.segments[0].kind != TimelineSegmentKind::intro ||
@@ -557,17 +654,18 @@ int assert_normalized_common_mismatches(
 
     if (summary.output_video_frame_count != 96 ||
         summary.output_audio_block_count !=
-            expected_audio_block_count(48000) + expected_audio_block_count(expected_main_audio_samples) +
-                expected_audio_block_count(48000) ||
+            expected_audio_block_count(expected_intro_audio_samples) +
+                expected_audio_block_count(expected_main_audio_samples) +
+                expected_audio_block_count(expected_outro_audio_samples) ||
         summary.output_duration_microseconds != expected_total_duration_us ||
         summary.segments[0].start_microseconds != 0 ||
-        summary.segments[1].start_microseconds != 1000000 ||
+        summary.segments[1].start_microseconds != expected_intro_duration_us ||
         summary.segments[1].duration_microseconds != expected_main_duration_us ||
         summary.segments[2].start_microseconds != expected_outro_start_us ||
-        summary.segments[0].audio_block_count != expected_audio_block_count(48000) ||
+        summary.segments[0].audio_block_count != expected_audio_block_count(expected_intro_audio_samples) ||
         summary.segments[1].audio_block_count != expected_audio_block_count(expected_main_audio_samples) ||
-        summary.segments[2].audio_block_count != expected_audio_block_count(48000)) {
-        return fail("Unexpected normalized common-mismatch counts, timing, or inserted-silence state.");
+        summary.segments[2].audio_block_count != expected_audio_block_count(expected_outro_audio_samples)) {
+        return fail(build_mismatch_diagnostics());
     }
 
     const auto assert_frame_geometry = [&](const std::size_t index) -> bool {
@@ -579,7 +677,7 @@ int assert_normalized_common_mismatches(
     if (!assert_frame_geometry(0U) ||
         !assert_frame_geometry(24U) ||
         !assert_frame_geometry(72U) ||
-        decoded.video_frames[24].timestamp.start_microseconds != 1000000 ||
+        decoded.video_frames[24].timestamp.start_microseconds != expected_intro_duration_us ||
         decoded.video_frames[72].timestamp.start_microseconds != expected_outro_start_us) {
         return fail("The normalized common-mismatch timeline did not stamp the main output geometry and boundaries.");
     }
