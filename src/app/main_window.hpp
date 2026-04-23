@@ -77,8 +77,8 @@ public:
         QString thumbnail_image_path{};
         QString thumbnail_title{};
         utsure::core::media::OutputVideoCodec video_codec{utsure::core::media::OutputVideoCodec::h265};
-        QString video_preset{"medium"};
-        int video_crf{28};
+        QString video_preset{"fast"};
+        int video_crf{22};
         utsure::core::media::AudioOutputMode audio_mode{utsure::core::media::AudioOutputMode::encode_aac};
         int audio_bitrate_kbps{192};
         QString audio_track_display{"Primary track"};

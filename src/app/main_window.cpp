@@ -749,16 +749,16 @@ QIcon make_busy_icon(const int phase, const double progress_fraction) {
     painter.translate(9, 9);
     painter.rotate(static_cast<qreal>(phase) * 30.0);
 
-    QColor ring_color("#b241ff");
-    QColor track_color = ring_color;
+    QColor track_color("#b241ff");
     track_color.setAlpha(72);
+    QColor ring_color("#ffce2e");
     const QRectF arc_rect(-6.0, -6.0, 12.0, 12.0);
 
-    painter.setPen(QPen(track_color, 2.6, Qt::SolidLine, Qt::RoundCap));
+    painter.setPen(QPen(track_color, 3.4, Qt::SolidLine, Qt::RoundCap));
     painter.setBrush(Qt::NoBrush);
     painter.drawEllipse(arc_rect);
 
-    painter.setPen(QPen(ring_color, 2.6, Qt::SolidLine, Qt::RoundCap));
+    painter.setPen(QPen(ring_color, 3.4, Qt::SolidLine, Qt::RoundCap));
     if (clamped_progress >= 1.0) {
         painter.drawEllipse(arc_rect);
     } else if (clamped_progress > 0.0) {
@@ -3662,8 +3662,8 @@ void MainWindow::load_selected_job_into_editor() {
         endcard_music_check_->setChecked(false);
         endcard_music_path_edit_->clear();
         video_codec_combo_->setCurrentIndex(0);
-        preset_combo_->setCurrentText("medium");
-        crf_spin_box_->setValue(28);
+        preset_combo_->setCurrentText("fast");
+        crf_spin_box_->setValue(22);
         audio_format_combo_->setCurrentIndex(0);
         audio_quality_combo_->setCurrentIndex(audio_quality_combo_->findData(192));
         audio_track_combo_->clear();

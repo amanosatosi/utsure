@@ -30,8 +30,8 @@ struct TranscodeThreadingSettings final {
 
 struct VideoEncodeSettings final {
     OutputVideoCodec codec{OutputVideoCodec::h264};
-    std::string preset{"medium"};
-    int crf{23};
+    std::string preset{"fast"};
+    int crf{22};
 };
 
 struct MediaEncodeRequest final {

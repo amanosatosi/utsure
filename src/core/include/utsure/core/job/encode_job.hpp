@@ -78,8 +78,8 @@ struct EncodeJobSubtitleSettings final {
 
 struct EncodeJobVideoOutputSettings final {
     media::OutputVideoCodec codec{media::OutputVideoCodec::h264};
-    std::string preset{"medium"};
-    int crf{23};
+    std::string preset{"fast"};
+    int crf{22};
 };
 
 struct EncodeJobOutputSettings final {
