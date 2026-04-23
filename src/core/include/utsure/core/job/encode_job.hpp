@@ -119,7 +119,9 @@ struct EncodeJobStreamingRuntimeSummary final {
     std::uint64_t video_decode_microseconds{0};
     std::uint64_t video_process_microseconds{0};
     std::uint64_t subtitle_compose_microseconds{0};
+    std::uint64_t pixel_conversion_microseconds{0};
     std::uint64_t video_encode_microseconds{0};
+    std::uint64_t mux_write_microseconds{0};
     std::int64_t total_elapsed_microseconds{0};
     double average_output_fps{0.0};
 };

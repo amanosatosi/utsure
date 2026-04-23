@@ -403,6 +403,15 @@ void add_stage_timing(
     ++timing.sample_count;
 }
 
+void add_stage_microseconds(
+    StreamingStageTiming &timing,
+    const std::uint64_t microseconds,
+    const std::uint64_t sample_count = 1U
+) noexcept {
+    timing.total_microseconds += microseconds;
+    timing.sample_count += sample_count;
+}
+
 double total_stage_milliseconds(const StreamingStageTiming &timing) noexcept {
     return static_cast<double>(timing.total_microseconds) / 1000.0;
 }
@@ -774,9 +783,10 @@ std::string format_codec_threading_log(
 std::string format_performance_metrics_log(const StreamingPerformanceMetrics &metrics) {
     const std::uint64_t measured_stage_microseconds =
         metrics.video_decode.total_microseconds +
-        metrics.video_process.total_microseconds +
         metrics.subtitle_compose.total_microseconds +
-        metrics.video_encode.total_microseconds;
+        metrics.pixel_conversion.total_microseconds +
+        metrics.video_encode.total_microseconds +
+        metrics.mux_write.total_microseconds;
     const std::int64_t other_microseconds =
         metrics.total_elapsed_microseconds > static_cast<std::int64_t>(measured_stage_microseconds)
             ? (metrics.total_elapsed_microseconds - static_cast<std::int64_t>(measured_stage_microseconds))
@@ -786,18 +796,23 @@ std::string format_performance_metrics_log(const StreamingPerformanceMetrics &me
     summary << std::fixed << std::setprecision(2)
             << "Streaming performance: total_elapsed=" << (static_cast<double>(metrics.total_elapsed_microseconds) / 1000.0)
             << " ms, average_output_fps=" << metrics.average_output_fps
-            << ", video_decode=" << total_stage_milliseconds(metrics.video_decode)
+            << ", decode=" << total_stage_milliseconds(metrics.video_decode)
             << " ms (" << stage_share_percent(metrics.video_decode.total_microseconds, metrics.total_elapsed_microseconds)
             << "%, avg " << average_stage_milliseconds(metrics.video_decode) << " ms/sample)"
+            << ", pixel_conversion=" << total_stage_milliseconds(metrics.pixel_conversion)
+            << " ms (" << stage_share_percent(metrics.pixel_conversion.total_microseconds, metrics.total_elapsed_microseconds)
+            << "%, avg " << average_stage_milliseconds(metrics.pixel_conversion) << " ms/sample)"
             << ", video_process=" << total_stage_milliseconds(metrics.video_process)
-            << " ms (" << stage_share_percent(metrics.video_process.total_microseconds, metrics.total_elapsed_microseconds)
-            << "%, avg " << average_stage_milliseconds(metrics.video_process) << " ms/sample)"
+            << " ms"
             << ", subtitle_compose=" << total_stage_milliseconds(metrics.subtitle_compose)
             << " ms (" << stage_share_percent(metrics.subtitle_compose.total_microseconds, metrics.total_elapsed_microseconds)
             << "%, avg " << average_stage_milliseconds(metrics.subtitle_compose) << " ms/sample)"
-            << ", video_encode=" << total_stage_milliseconds(metrics.video_encode)
+            << ", encoder_only=" << total_stage_milliseconds(metrics.video_encode)
             << " ms (" << stage_share_percent(metrics.video_encode.total_microseconds, metrics.total_elapsed_microseconds)
             << "%, avg " << average_stage_milliseconds(metrics.video_encode) << " ms/sample)"
+            << ", mux_write=" << total_stage_milliseconds(metrics.mux_write)
+            << " ms (" << stage_share_percent(metrics.mux_write.total_microseconds, metrics.total_elapsed_microseconds)
+            << "%, avg " << average_stage_milliseconds(metrics.mux_write) << " ms/sample)"
             << ", other=" << (static_cast<double>(other_microseconds) / 1000.0)
             << " ms (" << stage_share_percent(static_cast<std::uint64_t>(std::max<std::int64_t>(other_microseconds, 0)), metrics.total_elapsed_microseconds)
             << "%)";
@@ -808,8 +823,9 @@ bool video_encode_stage_dominates(const StreamingPerformanceMetrics &metrics) no
     const std::uint64_t encode_time = metrics.video_encode.total_microseconds;
     const std::uint64_t other_measured_time =
         metrics.video_decode.total_microseconds +
-        metrics.video_process.total_microseconds +
-        metrics.subtitle_compose.total_microseconds;
+        metrics.pixel_conversion.total_microseconds +
+        metrics.subtitle_compose.total_microseconds +
+        metrics.mux_write.total_microseconds;
     return encode_time > 0U &&
         encode_time > other_measured_time &&
         stage_share_percent(encode_time, metrics.total_elapsed_microseconds) >= 50.0;
@@ -2465,6 +2481,12 @@ CodecContextHandle create_audio_encoder_context(
     return codec_context;
 }
 
+struct OutputSessionTimingSummary final {
+    StreamingStageTiming pixel_conversion{};
+    StreamingStageTiming video_encode{};
+    StreamingStageTiming mux_write{};
+};
+
 class StreamingOutputSession final {
 public:
     StreamingOutputSession(
@@ -2526,8 +2548,20 @@ public:
             }
         }
 
+        const auto open_output_start = std::chrono::steady_clock::now();
         open_output_file(*output_context_, output_path);
+        add_stage_microseconds(
+            timing_summary_.mux_write,
+            static_cast<std::uint64_t>(std::max<long long>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - open_output_start
+                ).count(),
+                0
+            )),
+            0U
+        );
 
+        const auto header_start = std::chrono::steady_clock::now();
         const auto header_result = avformat_write_header(output_context_.get(), nullptr);
         if (header_result < 0) {
             throw std::runtime_error(
@@ -2535,6 +2569,16 @@ public:
                 ffmpeg_support::ffmpeg_error_to_string(header_result)
             );
         }
+        add_stage_microseconds(
+            timing_summary_.mux_write,
+            static_cast<std::uint64_t>(std::max<long long>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - header_start
+                ).count(),
+                0
+            )),
+            0U
+        );
 
         reusable_video_receive_packet_ = allocate_packet();
         if (audio_codec_context_) {
@@ -2554,8 +2598,16 @@ public:
         return video_encoder_thread_type_;
     }
 
+    [[nodiscard]] const OutputSessionTimingSummary &timing_summary() const noexcept {
+        return timing_summary_;
+    }
+
     void push_frame(StreamingVideoFrame video_frame) {
-        AVFrame *encoder_frame = prepare_video_encoder_input_frame(video_frame);
+        std::uint64_t pixel_conversion_microseconds = 0U;
+        const auto mux_before_microseconds = timing_summary_.mux_write.total_microseconds;
+        const auto push_start = std::chrono::steady_clock::now();
+        AVFrame *encoder_frame = prepare_video_encoder_input_frame(video_frame, pixel_conversion_microseconds);
+        add_stage_microseconds(timing_summary_.pixel_conversion, pixel_conversion_microseconds);
         const auto send_result = avcodec_send_frame(video_codec_context_.get(), encoder_frame);
         if (send_result < 0) {
             throw std::runtime_error(
@@ -2566,6 +2618,17 @@ public:
 
         ++encoded_video_frame_count_;
         drain_video_encoder();
+        const auto push_microseconds = static_cast<std::uint64_t>(std::max<long long>(
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - push_start).count(),
+            0
+        ));
+        const auto mux_delta_microseconds = timing_summary_.mux_write.total_microseconds - mux_before_microseconds;
+        add_stage_microseconds(
+            timing_summary_.video_encode,
+            push_microseconds > (pixel_conversion_microseconds + mux_delta_microseconds)
+                ? push_microseconds - pixel_conversion_microseconds - mux_delta_microseconds
+                : 0U
+        );
     }
 
     void push_audio_block(const DecodedAudioSamples &audio_block) {
@@ -2608,6 +2671,7 @@ public:
         packet->stream_index = audio_stream_->index;
         packet->pos = -1;
 
+        const auto mux_start = std::chrono::steady_clock::now();
         const auto write_result = av_interleaved_write_frame(output_context_.get(), packet.get());
         av_packet_unref(packet.get());
         if (write_result < 0) {
@@ -2616,10 +2680,13 @@ public:
                 ffmpeg_support::ffmpeg_error_to_string(write_result)
             );
         }
+        add_stage_timing(timing_summary_.mux_write, std::chrono::steady_clock::now() - mux_start);
     }
 
     EncodedMediaSummary finish() {
         if (!finalized_) {
+            const auto video_flush_mux_before_microseconds = timing_summary_.mux_write.total_microseconds;
+            const auto video_flush_start = std::chrono::steady_clock::now();
             const auto flush_video_result = avcodec_send_frame(video_codec_context_.get(), nullptr);
             if (flush_video_result < 0) {
                 throw std::runtime_error(
@@ -2629,6 +2696,22 @@ public:
             }
 
             drain_video_encoder();
+            const auto video_flush_microseconds = static_cast<std::uint64_t>(std::max<long long>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - video_flush_start
+                ).count(),
+                0
+            ));
+            const auto video_flush_mux_delta =
+                timing_summary_.mux_write.total_microseconds - video_flush_mux_before_microseconds;
+            add_stage_microseconds(
+                timing_summary_.video_encode,
+                video_flush_microseconds > video_flush_mux_delta
+                    ? video_flush_microseconds - video_flush_mux_delta
+                    : 0U,
+                0U
+            );
+
             if (audio_codec_context_) {
                 drain_ready_audio_blocks_into_encoder(true);
                 const auto flush_audio_result = avcodec_send_frame(audio_codec_context_.get(), nullptr);
@@ -2642,6 +2725,7 @@ public:
                 drain_audio_encoder();
             }
 
+            const auto trailer_start = std::chrono::steady_clock::now();
             const auto trailer_result = av_write_trailer(output_context_.get());
             if (trailer_result < 0) {
                 throw std::runtime_error(
@@ -2649,9 +2733,30 @@ public:
                     ffmpeg_support::ffmpeg_error_to_string(trailer_result)
                 );
             }
+            add_stage_microseconds(
+                timing_summary_.mux_write,
+                static_cast<std::uint64_t>(std::max<long long>(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - trailer_start
+                    ).count(),
+                    0
+                )),
+                0U
+            );
 
             if (output_context_->pb != nullptr && (output_context_->oformat->flags & AVFMT_NOFILE) == 0) {
+                const auto close_start = std::chrono::steady_clock::now();
                 avio_closep(&output_context_->pb);
+                add_stage_microseconds(
+                    timing_summary_.mux_write,
+                    static_cast<std::uint64_t>(std::max<long long>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now() - close_start
+                        ).count(),
+                        0
+                    )),
+                    0U
+                );
             }
 
             finalized_ = true;
@@ -2746,7 +2851,11 @@ private:
         }
     }
 
-    AVFrame *prepare_video_encoder_input_frame(StreamingVideoFrame &video_frame) {
+    AVFrame *prepare_video_encoder_input_frame(
+        StreamingVideoFrame &video_frame,
+        std::uint64_t &pixel_conversion_microseconds
+    ) {
+        pixel_conversion_microseconds = 0U;
         if (video_frame.native_frame && can_encode_native_frame_directly(*video_frame.native_frame)) {
             apply_output_video_timing(*video_frame.native_frame, video_frame);
             return video_frame.native_frame.get();
@@ -2766,6 +2875,7 @@ private:
                 source_pixel_format
             );
 
+            const auto conversion_start = std::chrono::steady_clock::now();
             const auto scale_result = sws_scale(
                 scale_context_.get(),
                 video_frame.native_frame->data,
@@ -2775,6 +2885,12 @@ private:
                 encoded_frame.data,
                 encoded_frame.linesize
             );
+            pixel_conversion_microseconds = static_cast<std::uint64_t>(std::max<long long>(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - conversion_start
+                ).count(),
+                0
+            ));
             if (scale_result <= 0) {
                 throw std::runtime_error(
                     "FFmpeg failed to convert a native streaming frame into the encoder pixel format."
@@ -2809,6 +2925,7 @@ private:
             0
         };
 
+        const auto conversion_start = std::chrono::steady_clock::now();
         const auto scale_result = sws_scale(
             scale_context_.get(),
             source_data,
@@ -2818,6 +2935,12 @@ private:
             encoded_frame.data,
             encoded_frame.linesize
         );
+        pixel_conversion_microseconds = static_cast<std::uint64_t>(std::max<long long>(
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - conversion_start
+            ).count(),
+            0
+        ));
         if (scale_result <= 0) {
             throw std::runtime_error("FFmpeg failed to convert a streaming frame into the encoder pixel format.");
         }
@@ -3074,6 +3197,7 @@ private:
         );
         packet.stream_index = stream.index;
 
+        const auto mux_start = std::chrono::steady_clock::now();
         const auto write_result = av_interleaved_write_frame(output_context_.get(), &packet);
         av_packet_unref(&packet);
         if (write_result < 0) {
@@ -3082,6 +3206,7 @@ private:
                 ffmpeg_support::ffmpeg_error_to_string(write_result)
             );
         }
+        add_stage_timing(timing_summary_.mux_write, std::chrono::steady_clock::now() - mux_start);
     }
 
     void drain_video_encoder() {
@@ -3146,6 +3271,7 @@ private:
     std::int64_t encoded_audio_block_count_{0};
     int video_encoder_thread_count_{0};
     int video_encoder_thread_type_{0};
+    OutputSessionTimingSummary timing_summary_{};
     bool finalized_{false};
 };
 
@@ -3865,9 +3991,7 @@ SegmentProcessResult process_segment(
             rescale_to_microseconds(output_duration_pts, timeline_plan.output_video_time_base);
         video_frame.metadata.sample_aspect_ratio = video_output_plan.sample_aspect_ratio;
 
-        const auto encode_start = std::chrono::steady_clock::now();
         output_session.push_frame(std::move(video_frame));
-        add_stage_timing(performance_metrics.video_encode, std::chrono::steady_clock::now() - encode_start);
         const auto frame_end_pts = timing.output_pts + output_duration_pts;
         last_written_video_end_pts = frame_end_pts;
         segment_output_end_pts = std::max(segment_output_end_pts, frame_end_pts);
@@ -3890,10 +4014,9 @@ SegmentProcessResult process_segment(
         }
 
         auto processed_frame = video_frame_processor->wait_for_next();
-        performance_metrics.video_process.total_microseconds += processed_frame.process_microseconds;
-        ++performance_metrics.video_process.sample_count;
-        performance_metrics.subtitle_compose.total_microseconds += processed_frame.subtitle_compose_microseconds;
-        ++performance_metrics.subtitle_compose.sample_count;
+        add_stage_microseconds(performance_metrics.video_process, processed_frame.process_microseconds);
+        add_stage_microseconds(performance_metrics.pixel_conversion, processed_frame.process_microseconds);
+        add_stage_microseconds(performance_metrics.subtitle_compose, processed_frame.subtitle_compose_microseconds);
         send_video_frame_to_encoder(std::move(processed_frame.output));
     };
 
@@ -3908,10 +4031,9 @@ SegmentProcessResult process_segment(
                 return;
             }
 
-            performance_metrics.video_process.total_microseconds += processed_frame->process_microseconds;
-            ++performance_metrics.video_process.sample_count;
-            performance_metrics.subtitle_compose.total_microseconds += processed_frame->subtitle_compose_microseconds;
-            ++performance_metrics.subtitle_compose.sample_count;
+            add_stage_microseconds(performance_metrics.video_process, processed_frame->process_microseconds);
+            add_stage_microseconds(performance_metrics.pixel_conversion, processed_frame->process_microseconds);
+            add_stage_microseconds(performance_metrics.subtitle_compose, processed_frame->subtitle_compose_microseconds);
             send_video_frame_to_encoder(std::move(processed_frame->output));
         }
     };
@@ -4145,6 +4267,7 @@ SegmentProcessResult process_segment(
         }
 
         while (true) {
+            const auto decode_start = std::chrono::steady_clock::now();
             const auto receive_result = avcodec_receive_frame(resources.audio_decoder.get(), decoded_audio_frame.get());
             if (receive_result == AVERROR(EAGAIN) || receive_result == AVERROR_EOF) {
                 return;
@@ -4156,6 +4279,8 @@ SegmentProcessResult process_segment(
                     ffmpeg_support::ffmpeg_error_to_string(receive_result)
                 );
             }
+
+            add_stage_timing(performance_metrics.video_decode, std::chrono::steady_clock::now() - decode_start);
 
             const auto timestamp_seed = choose_timestamp_seed(*decoded_audio_frame, next_audio_fallback_source_pts);
             const int decoded_audio_sample_rate = decoded_audio_frame->sample_rate > 0
@@ -4664,6 +4789,12 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
         timeline_summary.output_duration_microseconds =
             rescale_to_microseconds(next_output_video_pts, timeline_plan.output_video_time_base);
         auto encoded_media_summary = output_session.finish();
+        performance_metrics.pixel_conversion.total_microseconds +=
+            output_session.timing_summary().pixel_conversion.total_microseconds;
+        performance_metrics.pixel_conversion.sample_count +=
+            output_session.timing_summary().pixel_conversion.sample_count;
+        performance_metrics.video_encode = output_session.timing_summary().video_encode;
+        performance_metrics.mux_write = output_session.timing_summary().mux_write;
         progress_emitter.finish(
             static_cast<std::uint64_t>(encoded_media_summary.encoded_video_frame_count),
             timeline_summary.output_duration_microseconds

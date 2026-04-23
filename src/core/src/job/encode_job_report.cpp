@@ -165,10 +165,20 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
     report << "streaming.performance.total_elapsed_ms="
            << format_decimal(microseconds_to_milliseconds(runtime.total_elapsed_microseconds)) << '\n';
     report << "streaming.performance.average_output_fps=" << format_decimal(runtime.average_output_fps) << '\n';
+    report << "streaming.performance.decode_ms="
+           << format_decimal(microseconds_to_milliseconds(runtime.video_decode_microseconds)) << '\n';
+    report << "streaming.performance.decode_pct="
+           << format_decimal(percentage_of_total(runtime.video_decode_microseconds, runtime.total_elapsed_microseconds))
+           << '\n';
     report << "streaming.performance.video_decode_ms="
            << format_decimal(microseconds_to_milliseconds(runtime.video_decode_microseconds)) << '\n';
     report << "streaming.performance.video_decode_pct="
            << format_decimal(percentage_of_total(runtime.video_decode_microseconds, runtime.total_elapsed_microseconds))
+           << '\n';
+    report << "streaming.performance.pixel_conversion_ms="
+           << format_decimal(microseconds_to_milliseconds(runtime.pixel_conversion_microseconds)) << '\n';
+    report << "streaming.performance.pixel_conversion_pct="
+           << format_decimal(percentage_of_total(runtime.pixel_conversion_microseconds, runtime.total_elapsed_microseconds))
            << '\n';
     report << "streaming.performance.video_process_ms="
            << format_decimal(microseconds_to_milliseconds(runtime.video_process_microseconds)) << '\n';
@@ -184,6 +194,11 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
            << format_decimal(microseconds_to_milliseconds(runtime.video_encode_microseconds)) << '\n';
     report << "streaming.performance.video_encode_pct="
            << format_decimal(percentage_of_total(runtime.video_encode_microseconds, runtime.total_elapsed_microseconds))
+           << '\n';
+    report << "streaming.performance.mux_write_ms="
+           << format_decimal(microseconds_to_milliseconds(runtime.mux_write_microseconds)) << '\n';
+    report << "streaming.performance.mux_write_pct="
+           << format_decimal(percentage_of_total(runtime.mux_write_microseconds, runtime.total_elapsed_microseconds))
            << '\n';
     report << "input.container=" << encode_job_summary.inspected_input_info.container_format_name << '\n';
     report << "input.video.present="

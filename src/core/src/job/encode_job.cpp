@@ -498,8 +498,12 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                         streaming_result.summary->performance_metrics.video_process.total_microseconds,
                     .subtitle_compose_microseconds =
                         streaming_result.summary->performance_metrics.subtitle_compose.total_microseconds,
+                    .pixel_conversion_microseconds =
+                        streaming_result.summary->performance_metrics.pixel_conversion.total_microseconds,
                     .video_encode_microseconds =
                         streaming_result.summary->performance_metrics.video_encode.total_microseconds,
+                    .mux_write_microseconds =
+                        streaming_result.summary->performance_metrics.mux_write.total_microseconds,
                     .total_elapsed_microseconds =
                         streaming_result.summary->performance_metrics.total_elapsed_microseconds,
                     .average_output_fps =

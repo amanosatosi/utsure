@@ -47,7 +47,9 @@ struct StreamingPerformanceMetrics final {
     StreamingStageTiming video_decode{};
     StreamingStageTiming video_process{};
     StreamingStageTiming subtitle_compose{};
+    StreamingStageTiming pixel_conversion{};
     StreamingStageTiming video_encode{};
+    StreamingStageTiming mux_write{};
     std::int64_t total_elapsed_microseconds{0};
     double average_output_fps{0.0};
 };

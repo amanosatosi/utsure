@@ -110,6 +110,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M24 slice also permits one narrow user-requested desktop-shell/defaults follow-up, limited to thickening that existing busy-ring stroke, swapping only its foreground progress arc to the app's established gold accent while keeping the current track color, and aligning the default video CRF/preset values to `22` / `fast` without changing broader layout or encode policy.
 - The current M24 slice also permits one narrow user-requested encoder-policy follow-up, limited to shifting recoverable audio-output-mode mismatches from fatal errors to warned best-effort fallback behavior without weakening existing memory-safety or container-validity guards.
 - The current M24 slice also permits one narrow user-requested runtime-anomaly follow-up, limited to standardizing continue-vs-log-vs-fail handling across inspected media/timeline/subtitle hotspots with one small internal classification scheme and clearer user-facing messages, without rewriting unrelated pipeline architecture.
+- The current M24 slice also permits one narrow user-requested benchmark automation follow-up, limited to exporting machine-readable per-stage timing from the real streaming encode path, adding one noninteractive benchmark runner, and wiring one Windows `workflow_dispatch` artifact workflow without changing normal desktop behavior or codec defaults.
 - Runtime anomaly policy note: harmless no-op cases are skipped, recoverable normalization and reduced-fidelity fallbacks continue with diagnostics, clearly unsupported setups fail in preflight when they can be detected early, and only unsafe/corrupt runtime states remain encode-stopping failures.
 
 ## Architecture direction
@@ -911,6 +912,7 @@ Scope:
   * Reduce subtitle composition cost by avoiding per-bitmap subtitle copies where the renderer can blend directly into the RGBA frame.
   * Reduce pipeline serialization by moving subtitle render/composition work off the ordered encode lane and into the bounded video-worker stage while keeping output ordering unchanged.
   * Preserve subtitle appearance, frame timing, intro/main/outro sequencing, audio mux behavior, and existing end-of-encode timing breakdown logs.
+  * Add one Windows benchmark automation slice that reuses the real encode path, writes machine-readable timing artifacts, and uploads comparison logs for `x264`/`x265` investigation in GitHub Actions.
 
 Current slice status:
   * Completed: traced the remaining subtitle-enabled bottleneck to two app-side costs that stayed on the ordered encode thread: libassmod RGBA tile copying into `SubtitleBitmap.bytes` and serial subtitle render/blend immediately before encoder handoff.
@@ -954,10 +956,11 @@ Current slice status:
   * Completed: aligned the normalized-common regression expectations with FFmpeg `av_rescale_q` instead of hand-rolled rounding, added assertion diagnostics that print expected-vs-actual timeline/audio summary details on failure, and made offline timeline audio-block summaries use the same logical block-count rule as the streaming path when tiny silence tails are inserted after normalization.
   * Completed: fixed the streaming normalized intro/outro cadence follow-up so non-main segments no longer clip each emitted output frame to decoded source-frame interval ends; they now use source timing only to decide when visuals advance, while the final frame still clamps to the authoritative segment end, restoring the expected intro/outro durations, starts, and audio counts in the normalized-common encode path.
   * Completed: fixed the follow-up fine-grained streaming progress estimate for normalized intro/outro jobs by deriving per-segment total-frame estimates from planned output duration and authoritative output cadence for normalized non-main segments, while still using the untrimmed main source frame count when available so irregular-VFR main progress remains stable.
+  * In progress: adding a benchmark-only export/report path around the existing streaming transcode metrics so CI can capture deterministic per-stage timing, raw logs, and output artifacts for `x264` versus `x265` runs without forking the encode pipeline.
   * Pending: capture real before/after timing data for the requested subtitle-enabled comparison encode, because this repository does not allow local compile/run validation and the current workspace does not contain a prebuilt binary to execute.
   * Pending: confirm in CI which isolation combination still reproduces or removes the historical long-session crash window, then decide whether the direct or worker-local modes can safely become default again.
   * Validation note: local validation for this slice was limited to code-path inspection, focused test updates, and `git diff --check`; actual benchmark numbers, sanitizer findings, and end-to-end sustained encode verification still need CI or another approved prebuilt runtime environment.
 
 ## Immediate next milestone
 
-Finish M24 by running the real subtitle-enabled before/after encode benchmark and confirming output/timing correctness in CI or another approved runtime environment.
+Finish M24 by landing the benchmark automation, then running the real subtitle-enabled before/after encode comparison and confirming output/timing correctness in CI or another approved runtime environment.

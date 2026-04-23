@@ -594,6 +594,21 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/job-multi-audio-selected.mp4"
 )
 
+add_executable(utsure_core_encode_benchmark
+    encode_benchmark.cpp
+)
+
+target_link_libraries(utsure_core_encode_benchmark
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_core_encode_benchmark PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_encode_benchmark)
+
+add_dependencies(utsure_core_encode_benchmark utsure_generate_sample_media)
+
 add_executable(utsure_core_encode_job_preflight_tests
     encode_job_preflight_tests.cpp
 )
