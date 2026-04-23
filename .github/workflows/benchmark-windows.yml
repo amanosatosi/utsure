@@ -1,6 +1,10 @@
 name: benchmark-windows
 
 on:
+  push:
+    branches:
+      - main
+  pull_request:
   workflow_dispatch:
     inputs:
       codec:
@@ -46,6 +50,11 @@ jobs:
       UTSURE_CTEST_REGEX: "utsure\\.core\\.job\\.encode\\.threading_modes"
       UTSURE_MSYS2_PREFIX: "/ucrt64"
       UTSURE_TOOLCHAIN_ID_PREFIX: "ucrt64-gcc"
+      UTSURE_BENCHMARK_CODEC_SELECTION: ${{ github.event_name == 'workflow_dispatch' && inputs.codec || 'both' }}
+      UTSURE_BENCHMARK_PRESET: ${{ github.event_name == 'workflow_dispatch' && inputs.preset || 'medium' }}
+      UTSURE_BENCHMARK_CRF_X264: ${{ github.event_name == 'workflow_dispatch' && inputs.crf_x264 || '23' }}
+      UTSURE_BENCHMARK_CRF_X265: ${{ github.event_name == 'workflow_dispatch' && inputs.crf_x265 || '28' }}
+      UTSURE_BENCHMARK_SAMPLE_URL: ${{ github.event_name == 'workflow_dispatch' && inputs.sample_url || '' }}
       UTSURE_FFMPEG_SERIES: "7.1"
       UTSURE_FFMPEG_VERSION: "7.1.2"
       UTSURE_FFMS2_REF: "25cef14386fcaaa58ee547065deee8f6e82c56a2"
@@ -116,11 +125,11 @@ jobs:
           input_path="$(pwd)/${UTSURE_BUILD_DIR}/tests/core/media/subtitle-stress-main.mp4"
           subtitle_path="$(pwd)/${UTSURE_BUILD_DIR}/tests/core/media/subtitle-burn-stress-sample.ass"
 
-          if [[ -n "${{ inputs.sample_url }}" ]]; then
+          if [[ -n "${UTSURE_BENCHMARK_SAMPLE_URL}" ]]; then
             mkdir -p "${artifact_root}/input"
             input_path="${artifact_root}/input/custom-sample.mp4"
             subtitle_path=""
-            curl -L --fail --output "${input_path}" "${{ inputs.sample_url }}"
+            curl -L --fail --output "${input_path}" "${UTSURE_BENCHMARK_SAMPLE_URL}"
           fi
 
           echo "input_path=${input_path}" >> "${GITHUB_OUTPUT}"
@@ -151,26 +160,26 @@ jobs:
               --input "${{ steps.sample.outputs.input_path }}" \
               "${subtitle_args[@]}" \
               --codec "${codec}" \
-              --preset "${{ inputs.preset }}" \
+              --preset "${UTSURE_BENCHMARK_PRESET}" \
               --crf "${crf}" \
               --output "${artifact_root}/outputs/benchmark-${codec}.mp4" \
               --benchmark-output-dir "${artifact_root}"
           }
 
           run_status=0
-          case "${{ inputs.codec }}" in
+          case "${UTSURE_BENCHMARK_CODEC_SELECTION}" in
             x264)
-              run_codec x264 "${{ inputs.crf_x264 }}" || run_status=$?
+              run_codec x264 "${UTSURE_BENCHMARK_CRF_X264}" || run_status=$?
               ;;
             x265)
-              run_codec x265 "${{ inputs.crf_x265 }}" || run_status=$?
+              run_codec x265 "${UTSURE_BENCHMARK_CRF_X265}" || run_status=$?
               ;;
             both)
-              run_codec x264 "${{ inputs.crf_x264 }}" || run_status=$?
-              run_codec x265 "${{ inputs.crf_x265 }}" || run_status=$?
+              run_codec x264 "${UTSURE_BENCHMARK_CRF_X264}" || run_status=$?
+              run_codec x265 "${UTSURE_BENCHMARK_CRF_X265}" || run_status=$?
               ;;
             *)
-              echo "Unsupported codec selection: ${{ inputs.codec }}"
+              echo "Unsupported codec selection: ${UTSURE_BENCHMARK_CODEC_SELECTION}"
               exit 1
               ;;
           esac
