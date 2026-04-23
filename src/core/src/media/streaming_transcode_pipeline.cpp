@@ -1084,7 +1084,7 @@ std::optional<std::uint64_t> estimate_segment_output_frame_count(
     const auto estimated_frame_count = av_rescale_q_rnd(
         *estimated_segment_duration_pts,
         to_av_rational(output_video_time_base),
-        to_av_rational(output_frame_rate),
+        av_inv_q(to_av_rational(output_frame_rate)),
         AV_ROUND_UP
     );
     if (estimated_frame_count <= 0) {
