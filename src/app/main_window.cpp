@@ -716,7 +716,31 @@ QWidget *wrap_in_scroll_area(QWidget *content, QWidget *parent) {
     return scroll_area;
 }
 
-QIcon make_busy_icon(const int phase) {
+double clamp_progress_fraction(const double value) {
+    return std::clamp(value, 0.0, 1.0);
+}
+
+QString format_progress_percentage(const double fraction) {
+    return QString("%1%").arg(QString::number(clamp_progress_fraction(fraction) * 100.0, 'f', 1));
+}
+
+std::optional<double> encode_progress_fraction_for(
+    const utsure::core::job::EncodeJobProgress &progress
+) {
+    if (progress.stage_fraction.has_value()) {
+        return clamp_progress_fraction(*progress.stage_fraction);
+    }
+
+    if (progress.stage == utsure::core::job::EncodeJobStage::completed &&
+        progress.overall_fraction.has_value()) {
+        return clamp_progress_fraction(*progress.overall_fraction);
+    }
+
+    return std::nullopt;
+}
+
+QIcon make_busy_icon(const int phase, const double progress_fraction) {
+    const double clamped_progress = clamp_progress_fraction(progress_fraction);
     QPixmap pixmap(18, 18);
     pixmap.fill(Qt::transparent);
 
@@ -725,10 +749,25 @@ QIcon make_busy_icon(const int phase) {
     painter.translate(9, 9);
     painter.rotate(static_cast<qreal>(phase) * 30.0);
 
-    QPen pen(QColor("#b241ff"), 2.0, Qt::SolidLine, Qt::RoundCap);
-    painter.setPen(pen);
+    QColor ring_color("#b241ff");
+    QColor track_color = ring_color;
+    track_color.setAlpha(72);
+    const QRectF arc_rect(-6.0, -6.0, 12.0, 12.0);
+
+    painter.setPen(QPen(track_color, 2.6, Qt::SolidLine, Qt::RoundCap));
     painter.setBrush(Qt::NoBrush);
-    painter.drawArc(QRectF(-6.0, -6.0, 12.0, 12.0), 35 * 16, 240 * 16);
+    painter.drawEllipse(arc_rect);
+
+    painter.setPen(QPen(ring_color, 2.6, Qt::SolidLine, Qt::RoundCap));
+    if (clamped_progress >= 1.0) {
+        painter.drawEllipse(arc_rect);
+    } else if (clamped_progress > 0.0) {
+        painter.drawArc(
+            arc_rect,
+            35 * 16,
+            static_cast<int>(std::lround(clamped_progress * 360.0 * 16.0))
+        );
+    }
 
     return QIcon(pixmap);
 }
@@ -2165,7 +2204,7 @@ QString MainWindow::selected_job_name() const {
 QString MainWindow::format_job_state_text(const UiEncodeJob &job) const {
     switch (job.state) {
     case UiJobState::encoding:
-        return "Encoding";
+        return format_progress_percentage(job.encode_progress_fraction.value_or(0.0));
     case UiJobState::finished:
         return "Finished";
     case UiJobState::failed:
@@ -2221,6 +2260,37 @@ int MainWindow::find_free_runner_slot_index() const {
     }
 
     return -1;
+}
+
+double MainWindow::current_busy_spinner_progress_fraction() const {
+    double total_fraction = 0.0;
+    int active_count = 0;
+
+    // The toolbar busy button represents the whole active queue, so parallel runs
+    // use the mean of the currently running job fractions.
+    for (const auto &slot : runner_slots_) {
+        if (slot.controller == nullptr || !slot.controller->is_running()) {
+            continue;
+        }
+
+        if (!is_valid_job_index(slot.active_job_index)) {
+            continue;
+        }
+
+        const auto &job = jobs_[static_cast<std::size_t>(slot.active_job_index)];
+        if (job.state != UiJobState::encoding) {
+            continue;
+        }
+
+        total_fraction += clamp_progress_fraction(job.encode_progress_fraction.value_or(0.0));
+        ++active_count;
+    }
+
+    if (active_count <= 0) {
+        return 0.0;
+    }
+
+    return clamp_progress_fraction(total_fraction / static_cast<double>(active_count));
 }
 
 QString MainWindow::format_parallel_tooltip() const {
@@ -3754,6 +3824,7 @@ void MainWindow::reset_job_for_rerun(UiEncodeJob &job) {
     job.checked = true;
     job.efps_display.clear();
     job.speed_display.clear();
+    job.encode_progress_fraction.reset();
     job.elapsed_ms = 0;
     job.remaining_ms = -1;
     job.output_size_bytes = -1;
@@ -4189,7 +4260,7 @@ void MainWindow::update_start_button_visuals() {
         start_button_->setToolTip(stop_requested_ ? "Stopping..." : "Encoding...");
         start_button_->setText(QString{});
         start_button_->setProperty("iconFallback", false);
-        start_button_->setIcon(make_busy_icon(busy_spinner_phase_));
+        start_button_->setIcon(make_busy_icon(busy_spinner_phase_, current_busy_spinner_progress_fraction()));
         start_button_->setMinimumWidth(30);
         start_button_->setMaximumWidth(30);
         start_button_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
@@ -4210,7 +4281,7 @@ void MainWindow::advance_busy_spinner() {
     }
 
     busy_spinner_phase_ = (busy_spinner_phase_ + 1) % 12;
-    start_button_->setIcon(make_busy_icon(busy_spinner_phase_));
+    start_button_->setIcon(make_busy_icon(busy_spinner_phase_, current_busy_spinner_progress_fraction()));
 }
 
 void MainWindow::set_source_drop_overlay_visible(const bool visible) {
@@ -4368,6 +4439,7 @@ void MainWindow::start_available_queued_jobs() {
 
         auto &job = jobs_[static_cast<std::size_t>(planned_job.job_index)];
         job.state = UiJobState::encoding;
+        job.encode_progress_fraction = 0.0;
         job.last_status_message = "Encoding...";
         job.elapsed_ms = 0;
         job.remaining_ms = -1;
@@ -4487,15 +4559,17 @@ void MainWindow::update_job_progress(
         }
     }
 
-    const double fraction = std::clamp(
-        progress.stage_fraction.value_or(progress.overall_fraction.value_or(0.0)),
-        0.0,
-        1.0
-    );
+    if (const auto progress_fraction = encode_progress_fraction_for(progress); progress_fraction.has_value()) {
+        job.encode_progress_fraction = *progress_fraction;
+    }
+
+    const double fraction = clamp_progress_fraction(job.encode_progress_fraction.value_or(0.0));
     if (fraction > 0.0 && fraction < 1.0 && job.elapsed_ms > 0) {
         job.remaining_ms = static_cast<qint64>(
             std::llround((static_cast<double>(job.elapsed_ms) * (1.0 - fraction)) / fraction)
         );
+    } else if (fraction >= 1.0) {
+        job.remaining_ms = 0;
     }
 
     job.last_status_message = progress.message.empty() ? "Encoding..." : to_qstring(progress.message);
@@ -4562,6 +4636,7 @@ void MainWindow::handle_runner_finished(
     update_job_file_sizes(job);
 
     if (succeeded) {
+        job.encode_progress_fraction = 1.0;
         job.state = UiJobState::finished;
         job.checked = false;
         job.remaining_ms = 0;

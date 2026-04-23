@@ -94,6 +94,7 @@ public:
         QStringList task_log{};
         QString efps_display{};
         QString speed_display{};
+        std::optional<double> encode_progress_fraction{};
         qint64 elapsed_ms{0};
         qint64 remaining_ms{-1};
         qint64 input_size_bytes{-1};
@@ -141,6 +142,7 @@ private:
     [[nodiscard]] QString normalized_output_path_key(const QString &path_text) const;
     [[nodiscard]] QStringList resolve_source_drop_paths(const QMimeData *mime_data) const;
     [[nodiscard]] qint64 selected_job_frame_step_us() const;
+    [[nodiscard]] double current_busy_spinner_progress_fraction() const;
 
     void add_source_jobs();
     void add_source_jobs_from_paths(const QStringList &paths);
