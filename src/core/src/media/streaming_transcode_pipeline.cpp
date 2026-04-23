@@ -1057,6 +1057,43 @@ std::optional<std::int64_t> estimate_segment_duration_pts(
     return std::nullopt;
 }
 
+std::optional<std::uint64_t> estimate_segment_output_frame_count(
+    const timeline::TimelineSegmentPlan &segment_plan,
+    const Rational &output_video_time_base,
+    const Rational &output_frame_rate
+) {
+    if (!segment_has_source_trim(segment_plan) &&
+        segment_plan.kind == timeline::TimelineSegmentKind::main &&
+        segment_plan.inspected_source_info.primary_video_stream.has_value()) {
+        const auto &video_stream = *segment_plan.inspected_source_info.primary_video_stream;
+        if (video_stream.frame_count.has_value() && *video_stream.frame_count > 0) {
+            return static_cast<std::uint64_t>(*video_stream.frame_count);
+        }
+    }
+
+    if (!rational_is_positive(output_video_time_base) || !rational_is_positive(output_frame_rate)) {
+        return std::nullopt;
+    }
+
+    const auto estimated_segment_duration_pts =
+        estimate_segment_duration_pts(segment_plan, output_video_time_base, output_frame_rate);
+    if (!estimated_segment_duration_pts.has_value() || *estimated_segment_duration_pts <= 0) {
+        return std::nullopt;
+    }
+
+    const auto estimated_frame_count = av_rescale_q_rnd(
+        *estimated_segment_duration_pts,
+        to_av_rational(output_video_time_base),
+        to_av_rational(output_frame_rate),
+        AV_ROUND_UP
+    );
+    if (estimated_frame_count <= 0) {
+        return std::nullopt;
+    }
+
+    return static_cast<std::uint64_t>(estimated_frame_count);
+}
+
 EstimatedVideoProgressTotals estimate_video_progress_totals(const timeline::TimelinePlan &timeline_plan) {
     EstimatedVideoProgressTotals totals{};
     bool all_segment_frame_counts_known = true;
@@ -1069,11 +1106,12 @@ EstimatedVideoProgressTotals estimate_video_progress_totals(const timeline::Time
             continue;
         }
 
-        const auto &video_stream = *segment_plan.inspected_source_info.primary_video_stream;
-        if (!segment_has_source_trim(segment_plan) &&
-            video_stream.frame_count.has_value() &&
-            *video_stream.frame_count > 0) {
-            totals.total_video_frames += static_cast<std::uint64_t>(*video_stream.frame_count);
+        if (const auto estimated_segment_frame_count = estimate_segment_output_frame_count(
+                segment_plan,
+                timeline_plan.output_video_time_base,
+                timeline_plan.output_frame_rate
+            ); estimated_segment_frame_count.has_value()) {
+            totals.total_video_frames += *estimated_segment_frame_count;
         } else {
             all_segment_frame_counts_known = false;
         }
