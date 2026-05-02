@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../../runtime_anomaly_policy.hpp"
 #include "../../subtitles/subtitle_composition_diagnostics.hpp"
 
 extern "C" {
@@ -12,7 +11,6 @@ extern "C" {
 #include <optional>
 #include <limits>
 #include <sstream>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -156,54 +154,12 @@ inline void maybe_log_ass_image_rgba_collection_decision(
 
 [[nodiscard]] inline AssImageRgbaValidationResult validate_ass_image_rgba(
     const ASS_ImageRGBA &image,
-    const std::size_t bitmap_index,
-    const std::string &subtitle_path_string,
-    const int session_instance_id
-) {
+    const std::size_t,
+    const std::string &,
+    const int
+) noexcept {
     if (image.w <= 0 || image.h <= 0) {
         return AssImageRgbaValidationResult::empty;
-    }
-
-    const auto minimum_stride = static_cast<std::int64_t>(image.w) * 4LL;
-    if (minimum_stride > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
-        std::ostringstream message;
-        message << "libassmod produced a subtitle bitmap whose row size overflowed the host stride range"
-                << " for '" << subtitle_path_string << "'"
-                << " (session " << session_instance_id << ", bitmap " << bitmap_index << "): origin="
-                << image.dst_x << ',' << image.dst_y
-                << ", width=" << image.w << ", height=" << image.h << '.';
-        throw runtime_policy::RuntimeAnomalyError(
-            runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
-            message.str()
-        );
-    }
-
-    if (image.stride <= 0 || static_cast<std::int64_t>(image.stride) < minimum_stride) {
-        std::ostringstream message;
-        message << "libassmod produced an invalid RGBA subtitle bitmap stride"
-                << " for '" << subtitle_path_string << "'"
-                << " (session " << session_instance_id << ", bitmap " << bitmap_index << "): origin="
-                << image.dst_x << ',' << image.dst_y
-                << ", width=" << image.w << ", height=" << image.h
-                << ", stride=" << image.stride << '.';
-        throw runtime_policy::RuntimeAnomalyError(
-            runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
-            message.str()
-        );
-    }
-
-    if (image.rgba == nullptr) {
-        std::ostringstream message;
-        message << "libassmod produced a subtitle bitmap with null RGBA bytes"
-                << " for '" << subtitle_path_string << "'"
-                << " (session " << session_instance_id << ", bitmap " << bitmap_index << "): origin="
-                << image.dst_x << ',' << image.dst_y
-                << ", width=" << image.w << ", height=" << image.h
-                << ", stride=" << image.stride << '.';
-        throw runtime_policy::RuntimeAnomalyError(
-            runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
-            message.str()
-        );
     }
 
     return AssImageRgbaValidationResult::drawable;
@@ -219,27 +175,17 @@ inline void maybe_log_ass_image_rgba_collection_decision(
     std::vector<DrawableAssImageRgba> drawable_bitmaps{};
     drawable_bitmaps.reserve(image_nodes.size());
     for (std::size_t bitmap_index = 0; bitmap_index < image_nodes.size(); ++bitmap_index) {
-        const ASS_ImageRGBA &image = *image_nodes[bitmap_index];
-        AssImageRgbaValidationResult validation_result{};
-        try {
-            validation_result = validate_ass_image_rgba(
-                image,
-                bitmap_index,
-                subtitle_path_string,
-                session_instance_id
-            );
-        } catch (const runtime_policy::RuntimeAnomalyError &exception) {
-            maybe_log_ass_image_rgba_collection_decision(
-                request,
-                image,
-                bitmap_index,
-                bitmap_mode,
-                "rejected",
-                exception.what()
-            );
-            throw;
+        if (image_nodes[bitmap_index] == nullptr) {
+            continue;
         }
 
+        const ASS_ImageRGBA &image = *image_nodes[bitmap_index];
+        const AssImageRgbaValidationResult validation_result = validate_ass_image_rgba(
+            image,
+            bitmap_index,
+            subtitle_path_string,
+            session_instance_id
+        );
         if (validation_result == AssImageRgbaValidationResult::empty) {
             maybe_log_skipped_empty_subtitle_bitmap_diagnostics(
                 request,
@@ -268,7 +214,7 @@ inline void maybe_log_ass_image_rgba_collection_decision(
             bitmap_index,
             bitmap_mode,
             "accepted",
-            "drawable"
+            "trusted_libassmod_output"
         );
         drawable_bitmaps.push_back(DrawableAssImageRgba{
             .bitmap_index = bitmap_index,

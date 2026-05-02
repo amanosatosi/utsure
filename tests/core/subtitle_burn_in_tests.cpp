@@ -98,11 +98,13 @@ std::string lowercase_ascii(std::string value) {
 std::string current_subtitle_bitmap_mode() {
     const char *value = std::getenv("UTSURE_SUBTITLE_BITMAP_MODE");
     if (value == nullptr || value[0] == '\0') {
-        return "copied";
+        return "direct";
     }
 
     const auto normalized = lowercase_ascii(std::string(value));
-    return (normalized == "direct" || normalized == "raw") ? "direct" : "copied";
+    return (normalized == "copied" || normalized == "copy" || normalized == "isolated")
+        ? "copied"
+        : "direct";
 }
 
 std::string current_subtitle_composition_mode() {

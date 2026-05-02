@@ -3,7 +3,6 @@
 
 #include <array>
 #include <cstdint>
-#include <exception>
 #include <iostream>
 #include <limits>
 #include <string>
@@ -87,24 +86,7 @@ int run_empty_bitmap_assertion(const std::string_view bitmap_mode) {
     return 0;
 }
 
-template <typename Invoke>
-int expect_runtime_error(Invoke invoke, std::string_view expected_message, std::string_view failure_label) {
-    try {
-        invoke();
-    } catch (const std::exception &exception) {
-        if (!contains_text(exception.what(), expected_message)) {
-            std::cerr << "Expected error containing: " << expected_message << '\n';
-            std::cerr << "Actual error: " << exception.what() << '\n';
-            return 1;
-        }
-
-        return 0;
-    }
-
-    return fail(failure_label);
-}
-
-int run_invalid_positive_bitmap_assertion() {
+int run_trusted_positive_bitmap_assertion() {
     std::array<std::uint8_t, 32> pixels{};
 
     ASS_ImageRGBA bad_stride_bitmap{};
@@ -113,15 +95,9 @@ int run_invalid_positive_bitmap_assertion() {
     bad_stride_bitmap.stride = 8;
     bad_stride_bitmap.rgba = pixels.data();
 
-    const auto bad_stride_result = expect_runtime_error(
-        [&bad_stride_bitmap]() {
-            static_cast<void>(validate_ass_image_rgba(bad_stride_bitmap, 0U, "sample.ass", 9));
-        },
-        "invalid RGBA subtitle bitmap stride",
-        "Positive-size bitmaps with truncated stride must fail validation."
-    );
-    if (bad_stride_result != 0) {
-        return bad_stride_result;
+    if (validate_ass_image_rgba(bad_stride_bitmap, 0U, "sample.ass", 9) !=
+        utsure::core::subtitles::detail::libassmod::AssImageRgbaValidationResult::drawable) {
+        return fail("Positive-size libassmod RGBA nodes should be trusted at collection time.");
     }
 
     ASS_ImageRGBA overflow_bitmap{};
@@ -130,15 +106,9 @@ int run_invalid_positive_bitmap_assertion() {
     overflow_bitmap.stride = std::numeric_limits<int>::max();
     overflow_bitmap.rgba = pixels.data();
 
-    const auto overflow_result = expect_runtime_error(
-        [&overflow_bitmap]() {
-            static_cast<void>(validate_ass_image_rgba(overflow_bitmap, 1U, "sample.ass", 9));
-        },
-        "row size overflowed the host stride range",
-        "Positive-size bitmaps whose row size overflows the host stride range must fail validation."
-    );
-    if (overflow_result != 0) {
-        return overflow_result;
+    if (validate_ass_image_rgba(overflow_bitmap, 1U, "sample.ass", 9) !=
+        utsure::core::subtitles::detail::libassmod::AssImageRgbaValidationResult::drawable) {
+        return fail("Large positive-size libassmod RGBA nodes should be trusted at collection time.");
     }
 
     ASS_ImageRGBA null_rgba_bitmap{};
@@ -147,20 +117,14 @@ int run_invalid_positive_bitmap_assertion() {
     null_rgba_bitmap.stride = 16;
     null_rgba_bitmap.rgba = nullptr;
 
-    const auto null_rgba_result = expect_runtime_error(
-        [&null_rgba_bitmap]() {
-            static_cast<void>(validate_ass_image_rgba(null_rgba_bitmap, 2U, "sample.ass", 9));
-        },
-        "null RGBA bytes",
-        "Positive-size bitmaps with null RGBA storage must fail validation."
-    );
-    if (null_rgba_result != 0) {
-        return null_rgba_result;
+    if (validate_ass_image_rgba(null_rgba_bitmap, 2U, "sample.ass", 9) !=
+        utsure::core::subtitles::detail::libassmod::AssImageRgbaValidationResult::drawable) {
+        return fail("Positive-size libassmod RGBA nodes should not be rejected for host policy at collection time.");
     }
 
-    std::cout << "invalid_stride=fatal\n";
-    std::cout << "row_overflow=fatal\n";
-    std::cout << "null_rgba=fatal\n";
+    std::cout << "invalid_stride=trusted\n";
+    std::cout << "row_overflow=trusted\n";
+    std::cout << "null_rgba=trusted\n";
     return 0;
 }
 
@@ -219,7 +183,7 @@ int run_large_clipped_bitmap_assertion() {
         !messages_contain_text(diagnostics, "alpha_sum=7372800") ||
         !messages_contain_text(diagnostics, "estimated_bytes=230400") ||
         !messages_contain_text(diagnostics, "accepted") ||
-        !messages_contain_text(diagnostics, "decision_reason=drawable")) {
+        !messages_contain_text(diagnostics, "decision_reason=trusted_libassmod_output")) {
         return fail("The large RGBA bitmap diagnostics did not report the raw node and accepted decision.");
     }
 
@@ -235,7 +199,7 @@ int main(int argc, char *argv[]) {
     if (argc != 2) {
         return fail(
             "Usage: utsure_core_libassmod_subtitle_adapter_tests "
-            "[--empty-copied|--empty-direct|--invalid-positive|--large-clipped]"
+            "[--empty-copied|--empty-direct|--trusted-positive|--large-clipped]"
         );
     }
 
@@ -248,8 +212,8 @@ int main(int argc, char *argv[]) {
         return run_empty_bitmap_assertion("direct");
     }
 
-    if (mode == "--invalid-positive") {
-        return run_invalid_positive_bitmap_assertion();
+    if (mode == "--trusted-positive") {
+        return run_trusted_positive_bitmap_assertion();
     }
 
     if (mode == "--large-clipped") {

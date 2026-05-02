@@ -921,8 +921,8 @@ add_test(
 )
 
 add_test(
-    NAME utsure.core.subtitles.libassmod.adapter.invalid_positive
-    COMMAND utsure_core_libassmod_subtitle_adapter_tests --invalid-positive
+    NAME utsure.core.subtitles.libassmod.adapter.trusted_positive
+    COMMAND utsure_core_libassmod_subtitle_adapter_tests --trusted-positive
 )
 
 add_test(

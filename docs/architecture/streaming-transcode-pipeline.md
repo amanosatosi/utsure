@@ -104,10 +104,9 @@ For stream-copy audio:
 Subtitle tiles are owned only for one frame render/composite pass:
 
 1. `ass_render_frame_rgba(...)` returns libassmod-owned RGBA images.
-2. The adapter copies each image into an owned `SubtitleBitmap`.
-3. `ass_free_images_rgba(...)` releases the libassmod allocation immediately after the copy.
-4. `subtitle_bitmap_compositor.cpp` blends the copied premultiplied RGBA bitmaps into the current frame.
-5. The subtitle bitmap vectors are destroyed after that frame is encoded.
+2. The adapter normally trusts those libassmod images and blends them directly into the current frame.
+3. `ass_free_images_rgba(...)` releases the libassmod allocation after the frame composite pass.
+4. A copied-bitmap isolation mode remains available through `UTSURE_SUBTITLE_BITMAP_MODE=copied`.
 
 ## Audio Rules
 

@@ -27,7 +27,7 @@ enum class SubtitleDiagnosticsMode : std::uint8_t {
 };
 
 struct SubtitleRuntimeOptions final {
-    SubtitleBitmapTransferMode bitmap_transfer_mode{SubtitleBitmapTransferMode::copied};
+    SubtitleBitmapTransferMode bitmap_transfer_mode{SubtitleBitmapTransferMode::direct};
     SubtitleCompositionMode composition_mode{SubtitleCompositionMode::serialized};
     SubtitleDiagnosticsMode diagnostics_mode{SubtitleDiagnosticsMode::off};
 };
@@ -56,14 +56,18 @@ inline std::optional<std::string> read_environment_variable(const char *name) {
 inline SubtitleBitmapTransferMode resolve_bitmap_transfer_mode() noexcept {
     const auto value = read_environment_variable("UTSURE_SUBTITLE_BITMAP_MODE");
     if (!value.has_value()) {
-        return SubtitleBitmapTransferMode::copied;
+        return SubtitleBitmapTransferMode::direct;
     }
 
     if (*value == "direct" || *value == "raw") {
         return SubtitleBitmapTransferMode::direct;
     }
 
-    return SubtitleBitmapTransferMode::copied;
+    if (*value == "copied" || *value == "copy" || *value == "isolated") {
+        return SubtitleBitmapTransferMode::copied;
+    }
+
+    return SubtitleBitmapTransferMode::direct;
 }
 
 inline SubtitleCompositionMode resolve_composition_mode() noexcept {

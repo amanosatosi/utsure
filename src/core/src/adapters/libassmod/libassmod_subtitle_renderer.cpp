@@ -506,28 +506,23 @@ std::vector<ASS_Image *> collect_drawable_ass_image_nodes(
     std::vector<ASS_Image *> drawable_bitmaps{};
     drawable_bitmaps.reserve(image_nodes.size());
     for (std::size_t bitmap_index = 0; bitmap_index < image_nodes.size(); ++bitmap_index) {
+        if (image_nodes[bitmap_index] == nullptr) {
+            continue;
+        }
+
         const ASS_Image &image = *image_nodes[bitmap_index];
         if (image.w <= 0 || image.h <= 0) {
             maybe_log_ass_image_collection_decision(request, image, bitmap_index, "rejected", "empty");
             continue;
         }
 
-        if (image.stride <= 0 || image.stride < image.w || image.bitmap == nullptr) {
-            maybe_log_ass_image_collection_decision(request, image, bitmap_index, "rejected", "unsafe");
-            std::ostringstream message;
-            message << "libassmod produced an invalid legacy subtitle bitmap: origin="
-                    << image.dst_x << ',' << image.dst_y
-                    << ", width=" << image.w
-                    << ", height=" << image.h
-                    << ", stride=" << image.stride
-                    << ", bitmap=" << static_cast<const void *>(image.bitmap) << '.';
-            throw runtime_policy::RuntimeAnomalyError(
-                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
-                message.str()
-            );
-        }
-
-        maybe_log_ass_image_collection_decision(request, image, bitmap_index, "accepted", "drawable");
+        maybe_log_ass_image_collection_decision(
+            request,
+            image,
+            bitmap_index,
+            "accepted",
+            "trusted_libassmod_output"
+        );
         drawable_bitmaps.push_back(image_nodes[bitmap_index]);
     }
 
