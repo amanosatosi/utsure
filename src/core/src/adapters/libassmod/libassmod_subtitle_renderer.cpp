@@ -18,6 +18,7 @@ extern "C" {
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -65,15 +66,19 @@ struct TrackDeleter final {
 
 using TrackHandle = std::unique_ptr<ASS_Track, TrackDeleter>;
 
-struct ImageRgbaListDeleter final {
-    void operator()(ASS_ImageRGBA *images) const noexcept {
-        if (images != nullptr) {
-            ass_free_images_rgba(images);
+struct AutoRenderResultDeleter final {
+    void operator()(ASS_RenderResult *result) const noexcept {
+        if (result != nullptr) {
+            if (result->imgs_rgba != nullptr) {
+                ass_free_images_rgba(result->imgs_rgba);
+                result->imgs_rgba = nullptr;
+            }
+            delete result;
         }
     }
 };
 
-using ImageRgbaListHandle = std::unique_ptr<ASS_ImageRGBA, ImageRgbaListDeleter>;
+using AutoRenderResultHandle = std::unique_ptr<ASS_RenderResult, AutoRenderResultDeleter>;
 
 struct ScriptFeatureScan final {
     bool references_tag_images{false};
@@ -285,6 +290,22 @@ TrackHandle load_track(
     return track;
 }
 
+std::uint8_t ass_color_red(const std::uint32_t color) noexcept {
+    return static_cast<std::uint8_t>(color >> 24U);
+}
+
+std::uint8_t ass_color_green(const std::uint32_t color) noexcept {
+    return static_cast<std::uint8_t>((color >> 16U) & 0xFFU);
+}
+
+std::uint8_t ass_color_blue(const std::uint32_t color) noexcept {
+    return static_cast<std::uint8_t>((color >> 8U) & 0xFFU);
+}
+
+std::uint8_t ass_color_opacity(const std::uint32_t color) noexcept {
+    return static_cast<std::uint8_t>(255U - (color & 0xFFU));
+}
+
 SubtitleBitmap copy_ass_image_rgba(const ASS_ImageRGBA &image) {
     const int line_stride_bytes = image.w * 4;
     std::vector<std::uint8_t> bytes(detail::required_rgba_buffer_size(
@@ -299,6 +320,73 @@ SubtitleBitmap copy_ass_image_rgba(const ASS_ImageRGBA &image) {
         auto *destination_row = bytes.data() +
             static_cast<std::size_t>(row) * static_cast<std::size_t>(line_stride_bytes);
         std::copy_n(source_row, line_stride_bytes, destination_row);
+    }
+
+    return SubtitleBitmap{
+        .origin_x = image.dst_x,
+        .origin_y = image.dst_y,
+        .width = image.w,
+        .height = image.h,
+        .pixel_format = SubtitleBitmapPixelFormat::rgba8_premultiplied,
+        .line_stride_bytes = line_stride_bytes,
+        .bytes = std::move(bytes)
+    };
+}
+
+SubtitleBitmap copy_ass_image(const ASS_Image &image) {
+    const auto minimum_stride = static_cast<std::int64_t>(image.w);
+    if (image.w <= 0 || image.h <= 0 || image.stride <= 0 ||
+        static_cast<std::int64_t>(image.stride) < minimum_stride ||
+        image.bitmap == nullptr ||
+        static_cast<std::int64_t>(image.w) * 4LL > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
+        std::ostringstream message;
+        message << "libassmod produced an invalid legacy subtitle bitmap: origin="
+                << image.dst_x << ',' << image.dst_y
+                << ", width=" << image.w
+                << ", height=" << image.h
+                << ", stride=" << image.stride
+                << ", bitmap=" << static_cast<const void *>(image.bitmap) << '.';
+        throw runtime_policy::RuntimeAnomalyError(
+            runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+            message.str()
+        );
+    }
+
+    const int line_stride_bytes = image.w * 4;
+    std::vector<std::uint8_t> bytes(detail::required_rgba_buffer_size(
+        image.w,
+        image.h,
+        line_stride_bytes,
+        "bitmap"
+    ), 0U);
+
+    const std::uint8_t opacity = ass_color_opacity(image.color);
+    const std::uint8_t red = ass_color_red(image.color);
+    const std::uint8_t green = ass_color_green(image.color);
+    const std::uint8_t blue = ass_color_blue(image.color);
+
+    for (int row = 0; row < image.h; ++row) {
+        const auto *source_row = image.bitmap +
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(image.stride);
+        auto *destination_row = bytes.data() +
+            static_cast<std::size_t>(row) * static_cast<std::size_t>(line_stride_bytes);
+        for (int column = 0; column < image.w; ++column) {
+            const auto offset = static_cast<std::size_t>(column) * 4U;
+            const std::uint8_t coverage = source_row[column];
+            const std::uint8_t alpha = static_cast<std::uint8_t>(
+                (static_cast<unsigned int>(coverage) * static_cast<unsigned int>(opacity) + 127U) / 255U
+            );
+            destination_row[offset + 0U] = static_cast<std::uint8_t>(
+                (static_cast<unsigned int>(red) * static_cast<unsigned int>(alpha) + 127U) / 255U
+            );
+            destination_row[offset + 1U] = static_cast<std::uint8_t>(
+                (static_cast<unsigned int>(green) * static_cast<unsigned int>(alpha) + 127U) / 255U
+            );
+            destination_row[offset + 2U] = static_cast<std::uint8_t>(
+                (static_cast<unsigned int>(blue) * static_cast<unsigned int>(alpha) + 127U) / 255U
+            );
+            destination_row[offset + 3U] = alpha;
+        }
     }
 
     return SubtitleBitmap{
@@ -330,6 +418,124 @@ std::vector<ASS_ImageRGBA *> collect_ass_image_rgba_nodes(ASS_ImageRGBA *images)
     }
 
     return bitmaps;
+}
+
+std::vector<ASS_Image *> collect_ass_image_nodes(ASS_Image *images) {
+    std::vector<ASS_Image *> bitmaps{};
+    for (ASS_Image *image = images; image != nullptr; image = image->next) {
+        bitmaps.push_back(image);
+    }
+
+    return bitmaps;
+}
+
+std::string format_ass_image_node_diagnostics(
+    const ASS_Image &image,
+    const std::size_t bitmap_index,
+    const std::string_view phase
+) {
+    std::ostringstream message;
+    message << "libassmod legacy node[" << bitmap_index << "] " << phase
+            << ": type=" << image.type
+            << ", origin=" << image.dst_x << ',' << image.dst_y
+            << ", size=" << image.w << 'x' << image.h
+            << ", stride=" << image.stride
+            << ", bitmap=" << static_cast<const void *>(image.bitmap)
+            << ", color=0x" << std::hex << image.color << std::dec;
+    return message.str();
+}
+
+void maybe_log_auto_render_result(
+    const SubtitleRenderRequest &request,
+    const ASS_RenderResult &render_result
+) {
+    if (!detail::should_log_subtitle_frame_diagnostics(request)) {
+        return;
+    }
+
+    std::ostringstream message;
+    message << "libassmod auto render result: use_rgba=" << render_result.use_rgba
+            << ", imgs=" << static_cast<const void *>(render_result.imgs)
+            << ", imgs_rgba=" << static_cast<const void *>(render_result.imgs_rgba);
+    request.debug_context->log_callback(message.str());
+}
+
+void maybe_log_ass_image_nodes_after_render(
+    const std::vector<ASS_Image *> &image_nodes,
+    const SubtitleRenderRequest &request
+) {
+    if (!detail::should_log_subtitle_bitmap_diagnostics(request)) {
+        return;
+    }
+
+    for (std::size_t bitmap_index = 0; bitmap_index < image_nodes.size(); ++bitmap_index) {
+        if (image_nodes[bitmap_index] == nullptr) {
+            request.debug_context->log_callback(
+                "libassmod legacy node[" + std::to_string(bitmap_index) + "] after_render: node=null"
+            );
+            continue;
+        }
+
+        request.debug_context->log_callback(
+            format_ass_image_node_diagnostics(*image_nodes[bitmap_index], bitmap_index, "after_render")
+        );
+    }
+}
+
+void maybe_log_ass_image_collection_decision(
+    const SubtitleRenderRequest &request,
+    const ASS_Image &image,
+    const std::size_t bitmap_index,
+    const std::string_view decision,
+    const std::string_view reason
+) {
+    if (!detail::should_log_subtitle_bitmap_diagnostics(request)) {
+        return;
+    }
+
+    request.debug_context->log_callback(
+        format_ass_image_node_diagnostics(image, bitmap_index, decision) +
+        ", decision_reason=" + std::string(reason)
+    );
+}
+
+std::vector<ASS_Image *> collect_drawable_ass_image_nodes(
+    const std::vector<ASS_Image *> &image_nodes,
+    const SubtitleRenderRequest &request
+) {
+    std::vector<ASS_Image *> drawable_bitmaps{};
+    drawable_bitmaps.reserve(image_nodes.size());
+    for (std::size_t bitmap_index = 0; bitmap_index < image_nodes.size(); ++bitmap_index) {
+        const ASS_Image &image = *image_nodes[bitmap_index];
+        if (image.w <= 0 || image.h <= 0) {
+            maybe_log_ass_image_collection_decision(request, image, bitmap_index, "rejected", "empty");
+            continue;
+        }
+
+        if (image.stride <= 0 || image.stride < image.w || image.bitmap == nullptr) {
+            maybe_log_ass_image_collection_decision(request, image, bitmap_index, "rejected", "unsafe");
+            std::ostringstream message;
+            message << "libassmod produced an invalid legacy subtitle bitmap: origin="
+                    << image.dst_x << ',' << image.dst_y
+                    << ", width=" << image.w
+                    << ", height=" << image.h
+                    << ", stride=" << image.stride
+                    << ", bitmap=" << static_cast<const void *>(image.bitmap) << '.';
+            throw runtime_policy::RuntimeAnomalyError(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                message.str()
+            );
+        }
+
+        maybe_log_ass_image_collection_decision(request, image, bitmap_index, "accepted", "drawable");
+        drawable_bitmaps.push_back(image_nodes[bitmap_index]);
+    }
+
+    return drawable_bitmaps;
+}
+
+bool should_use_rgba_images(const ASS_RenderResult &render_result) noexcept {
+    return render_result.use_rgba != 0 && render_result.imgs_rgba != nullptr;
 }
 
 class LibassmodSubtitleRenderSession final : public SubtitleRenderSession {
@@ -364,29 +570,43 @@ public:
             [[maybe_unused]] const auto access_guard = begin_session_access("render");
             maybe_log_renderer_setup_diagnostics(request);
             maybe_log_quirk_diagnostics(request);
-            auto images_rgba = render_images_rgba(request);
-            const auto image_nodes = collect_ass_image_rgba_nodes(images_rgba.get());
-            detail::libassmod::maybe_log_ass_image_rgba_nodes_after_render(
-                image_nodes,
-                request,
-                "copied"
-            );
-            const auto drawable_image_nodes = detail::libassmod::collect_drawable_ass_image_rgba_nodes(
-                image_nodes,
-                request,
-                "copied",
-                subtitle_path_string_,
-                session_instance_id_
-            );
+            auto render_result = render_images_auto(request);
+            maybe_log_auto_render_result(request, *render_result);
             std::vector<SubtitleBitmap> bitmaps{};
-            bitmaps.reserve(drawable_image_nodes.size());
-            for (const auto &drawable_image : drawable_image_nodes) {
-                if (drawable_image.image == nullptr) {
-                    continue;
-                }
+            if (should_use_rgba_images(*render_result)) {
+                const auto image_nodes = collect_ass_image_rgba_nodes(render_result->imgs_rgba);
+                detail::libassmod::maybe_log_ass_image_rgba_nodes_after_render(
+                    image_nodes,
+                    request,
+                    "copied"
+                );
+                const auto drawable_image_nodes = detail::libassmod::collect_drawable_ass_image_rgba_nodes(
+                    image_nodes,
+                    request,
+                    "copied",
+                    subtitle_path_string_,
+                    session_instance_id_
+                );
+                bitmaps.reserve(drawable_image_nodes.size());
+                for (const auto &drawable_image : drawable_image_nodes) {
+                    if (drawable_image.image == nullptr) {
+                        continue;
+                    }
 
-                const ASS_ImageRGBA &bitmap = *drawable_image.image;
-                bitmaps.push_back(copy_ass_image_rgba(bitmap));
+                    bitmaps.push_back(copy_ass_image_rgba(*drawable_image.image));
+                }
+            } else {
+                const auto image_nodes = collect_ass_image_nodes(render_result->imgs);
+                maybe_log_ass_image_nodes_after_render(image_nodes, request);
+                const auto drawable_image_nodes = collect_drawable_ass_image_nodes(image_nodes, request);
+                bitmaps.reserve(drawable_image_nodes.size());
+                for (const auto *image : drawable_image_nodes) {
+                    if (image == nullptr) {
+                        continue;
+                    }
+
+                    bitmaps.push_back(copy_ass_image(*image));
+                }
             }
 
             return SubtitleRenderResult{
@@ -424,53 +644,85 @@ public:
             maybe_log_renderer_setup_diagnostics(request);
             maybe_log_quirk_diagnostics(request);
 
-            auto images_rgba = render_images_rgba(request);
-            const auto image_nodes = collect_ass_image_rgba_nodes(images_rgba.get());
-            detail::libassmod::maybe_log_ass_image_rgba_nodes_after_render(
-                image_nodes,
-                request,
-                runtime::to_string(runtime_options_.bitmap_transfer_mode)
-            );
-            const auto drawable_image_nodes = detail::libassmod::collect_drawable_ass_image_rgba_nodes(
-                image_nodes,
-                request,
-                runtime::to_string(runtime_options_.bitmap_transfer_mode),
-                subtitle_path_string_,
-                session_instance_id_
-            );
-            detail::maybe_log_subtitle_frame_diagnostics(
-                request,
-                video_frame,
-                drawable_image_nodes.size(),
-                runtime::to_string(runtime_options_.bitmap_transfer_mode)
-            );
+            auto render_result = render_images_auto(request);
+            maybe_log_auto_render_result(request, *render_result);
             bool subtitles_applied = false;
-            for (const auto &drawable_image : drawable_image_nodes) {
-                if (drawable_image.image == nullptr) {
-                    continue;
-                }
-
-                const ASS_ImageRGBA &image = *drawable_image.image;
-                detail::maybe_log_subtitle_bitmap_diagnostics(
+            if (should_use_rgba_images(*render_result)) {
+                const auto image_nodes = collect_ass_image_rgba_nodes(render_result->imgs_rgba);
+                detail::libassmod::maybe_log_ass_image_rgba_nodes_after_render(
+                    image_nodes,
                     request,
-                    drawable_image.bitmap_index,
-                    image.dst_x,
-                    image.dst_y,
-                    image.w,
-                    image.h,
-                    image.stride,
                     runtime::to_string(runtime_options_.bitmap_transfer_mode)
                 );
+                const auto drawable_image_nodes = detail::libassmod::collect_drawable_ass_image_rgba_nodes(
+                    image_nodes,
+                    request,
+                    runtime::to_string(runtime_options_.bitmap_transfer_mode),
+                    subtitle_path_string_,
+                    session_instance_id_
+                );
+                detail::maybe_log_subtitle_frame_diagnostics(
+                    request,
+                    video_frame,
+                    drawable_image_nodes.size(),
+                    runtime::to_string(runtime_options_.bitmap_transfer_mode)
+                );
+                for (const auto &drawable_image : drawable_image_nodes) {
+                    if (drawable_image.image == nullptr) {
+                        continue;
+                    }
 
-                if (runtime_options_.bitmap_transfer_mode == runtime::SubtitleBitmapTransferMode::direct) {
-                    detail::composite_premultiplied_rgba_bitmap_into_frame(
-                        video_frame,
-                        make_ass_image_rgba_view(image)
+                    const ASS_ImageRGBA &image = *drawable_image.image;
+                    detail::maybe_log_subtitle_bitmap_diagnostics(
+                        request,
+                        drawable_image.bitmap_index,
+                        image.dst_x,
+                        image.dst_y,
+                        image.w,
+                        image.h,
+                        image.stride,
+                        runtime::to_string(runtime_options_.bitmap_transfer_mode)
                     );
-                } else {
-                    detail::composite_bitmap_into_frame(video_frame, copy_ass_image_rgba(image));
+
+                    if (runtime_options_.bitmap_transfer_mode == runtime::SubtitleBitmapTransferMode::direct) {
+                        detail::composite_premultiplied_rgba_bitmap_into_frame(
+                            video_frame,
+                            make_ass_image_rgba_view(image)
+                        );
+                    } else {
+                        detail::composite_bitmap_into_frame(video_frame, copy_ass_image_rgba(image));
+                    }
+                    subtitles_applied = true;
                 }
-                subtitles_applied = true;
+            } else {
+                const auto image_nodes = collect_ass_image_nodes(render_result->imgs);
+                maybe_log_ass_image_nodes_after_render(image_nodes, request);
+                const auto drawable_image_nodes = collect_drawable_ass_image_nodes(image_nodes, request);
+                detail::maybe_log_subtitle_frame_diagnostics(
+                    request,
+                    video_frame,
+                    drawable_image_nodes.size(),
+                    "legacy"
+                );
+                for (std::size_t bitmap_index = 0; bitmap_index < drawable_image_nodes.size(); ++bitmap_index) {
+                    const ASS_Image *image = drawable_image_nodes[bitmap_index];
+                    if (image == nullptr) {
+                        continue;
+                    }
+
+                    detail::maybe_log_subtitle_bitmap_diagnostics(
+                        request,
+                        bitmap_index,
+                        image->dst_x,
+                        image->dst_y,
+                        image->w,
+                        image->h,
+                        image->stride,
+                        "legacy"
+                    );
+                    detail::composite_bitmap_into_frame(video_frame, copy_ass_image(*image));
+                    subtitles_applied = true;
+                }
             }
 
             return SubtitleFrameComposeResult{
@@ -603,11 +855,11 @@ private:
         return SessionAccessGuard(in_use_);
     }
 
-    [[nodiscard]] ImageRgbaListHandle render_images_rgba(const SubtitleRenderRequest &request) const {
+    [[nodiscard]] AutoRenderResultHandle render_images_auto(const SubtitleRenderRequest &request) const {
         int detect_change = 0;
         const long long timestamp_milliseconds = static_cast<long long>(request.timestamp_microseconds / 1000);
-        return ImageRgbaListHandle(
-            ass_render_frame_rgba(renderer_.get(), track_.get(), timestamp_milliseconds, &detect_change)
+        return AutoRenderResultHandle(
+            new ASS_RenderResult(ass_render_frame_auto(renderer_.get(), track_.get(), timestamp_milliseconds, &detect_change))
         );
     }
 

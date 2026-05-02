@@ -31,15 +31,6 @@ if ! git -C "${libassmod_source_dir}" checkout --force "${libassmod_ref}"; then
   exit 1
 fi
 
-for patch_file in "${project_root}"/patches/libassmod/*.patch; do
-  if [ ! -e "${patch_file}" ]; then
-    continue
-  fi
-
-  echo "Applying libassmod patch: ${patch_file}"
-  git -C "${libassmod_source_dir}" apply "${patch_file}"
-done
-
 meson setup "${libassmod_build_dir}" "${libassmod_source_dir}" \
   --buildtype release \
   --default-library shared \
