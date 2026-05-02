@@ -27,6 +27,10 @@ extern "C" {
 #include <utility>
 #include <vector>
 
+#ifndef UTSURE_LIBASSMOD_REF
+#define UTSURE_LIBASSMOD_REF "unknown"
+#endif
+
 namespace utsure::core::subtitles {
 
 namespace {
@@ -172,6 +176,28 @@ double choose_pixel_aspect_ratio(const media::Rational &sample_aspect_ratio) {
 
     return static_cast<double>(sample_aspect_ratio.numerator) /
         static_cast<double>(sample_aspect_ratio.denominator);
+}
+
+std::string format_renderer_setup_diagnostics(
+    const SubtitleRenderSessionCreateRequest &request
+) {
+    std::ostringstream message;
+    message << "libassmod renderer setup: frame_size="
+            << request.canvas_width << 'x' << request.canvas_height
+            << ", storage_size=" << request.canvas_width << 'x' << request.canvas_height
+            << ", pixel_aspect=" << choose_pixel_aspect_ratio(request.sample_aspect_ratio)
+            << ", margins=0,0,0,0"
+            << ", use_margins=0"
+            << ", font.default_family=Arial"
+            << ", font.provider=autodetect"
+            << ", libassmod_ref=" << UTSURE_LIBASSMOD_REF;
+    if (request.font_search_directory.has_value()) {
+        message << ", font.directory=" << request.font_search_directory->lexically_normal().string();
+    } else {
+        message << ", font.directory=none";
+    }
+
+    return message.str();
 }
 
 ScriptFeatureScan scan_script_features(const std::filesystem::path &subtitle_path) {
@@ -336,9 +362,15 @@ public:
     [[nodiscard]] SubtitleRenderResult render(const SubtitleRenderRequest &request) noexcept override {
         try {
             [[maybe_unused]] const auto access_guard = begin_session_access("render");
+            maybe_log_renderer_setup_diagnostics(request);
             maybe_log_quirk_diagnostics(request);
             auto images_rgba = render_images_rgba(request);
             const auto image_nodes = collect_ass_image_rgba_nodes(images_rgba.get());
+            detail::libassmod::maybe_log_ass_image_rgba_nodes_after_render(
+                image_nodes,
+                request,
+                "copied"
+            );
             const auto drawable_image_nodes = detail::libassmod::collect_drawable_ass_image_rgba_nodes(
                 image_nodes,
                 request,
@@ -389,10 +421,16 @@ public:
         try {
             [[maybe_unused]] const auto access_guard = begin_session_access("compose");
             detail::validate_rgba_frame_surface(video_frame, "Subtitle composition");
+            maybe_log_renderer_setup_diagnostics(request);
             maybe_log_quirk_diagnostics(request);
 
             auto images_rgba = render_images_rgba(request);
             const auto image_nodes = collect_ass_image_rgba_nodes(images_rgba.get());
+            detail::libassmod::maybe_log_ass_image_rgba_nodes_after_render(
+                image_nodes,
+                request,
+                runtime::to_string(runtime_options_.bitmap_transfer_mode)
+            );
             const auto drawable_image_nodes = detail::libassmod::collect_drawable_ass_image_rgba_nodes(
                 image_nodes,
                 request,
@@ -467,6 +505,15 @@ public:
     }
 
 private:
+    void maybe_log_renderer_setup_diagnostics(const SubtitleRenderRequest &request) {
+        if (renderer_setup_diagnostics_logged_ || !detail::should_log_subtitle_frame_diagnostics(request)) {
+            return;
+        }
+
+        request.debug_context->log_callback(format_renderer_setup_diagnostics(create_request_));
+        renderer_setup_diagnostics_logged_ = true;
+    }
+
     void maybe_log_quirk_diagnostics(const SubtitleRenderRequest &request) {
         if (quirk_messages_.empty() || quirk_diagnostics_logged_) {
             return;
@@ -574,6 +621,7 @@ private:
     int session_instance_id_{0};
     std::atomic<bool> in_use_{false};
     std::atomic<bool> destroyed_{false};
+    bool renderer_setup_diagnostics_logged_{false};
     bool quirk_diagnostics_logged_{false};
 };
 

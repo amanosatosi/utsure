@@ -50,6 +50,7 @@ target_link_libraries(utsure_encoder_core
 target_compile_definitions(utsure_encoder_core
     PRIVATE
         UTSURE_PROJECT_VERSION="${PROJECT_VERSION}"
+        UTSURE_LIBASSMOD_REF="${UTSURE_LIBASSMOD_REF}"
 )
 
 utsure_enable_warnings(utsure_encoder_core)

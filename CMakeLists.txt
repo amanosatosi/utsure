@@ -4,6 +4,7 @@ project(utsure VERSION 0.1.0 LANGUAGES CXX)
 
 option(UTSURE_BUILD_APP "Build the Qt 6 Widgets desktop application." ON)
 option(UTSURE_ENABLE_ADDRESS_SANITIZER "Enable AddressSanitizer for supported compiler toolchains." OFF)
+set(UTSURE_LIBASSMOD_REF "unknown" CACHE STRING "libassmod source ref used for diagnostics and reproducer output.")
 
 include(CTest)
 

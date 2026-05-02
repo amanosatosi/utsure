@@ -256,6 +256,33 @@ bool has_opaque_color_variation(const utsure::core::subtitles::RenderedSubtitleF
     return false;
 }
 
+bool has_near_frame_bitmap(const utsure::core::subtitles::RenderedSubtitleFrame &rendered_frame) {
+    for (const auto &bitmap : rendered_frame.bitmaps) {
+        const int clipped_left = std::max(0, bitmap.origin_x);
+        const int clipped_top = std::max(0, bitmap.origin_y);
+        const int clipped_right = std::min(
+            rendered_frame.canvas_width,
+            bitmap.origin_x + bitmap.width
+        );
+        const int clipped_bottom = std::min(
+            rendered_frame.canvas_height,
+            bitmap.origin_y + bitmap.height
+        );
+        if (clipped_left >= clipped_right || clipped_top >= clipped_bottom) {
+            continue;
+        }
+
+        const int visible_width = clipped_right - clipped_left;
+        const int visible_height = clipped_bottom - clipped_top;
+        if ((visible_width * 10) >= (rendered_frame.canvas_width * 9) &&
+            (visible_height * 10) >= (rendered_frame.canvas_height * 9)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 int assert_decoded_output(
     const DecodedMediaSource &decoded_output,
     const std::size_t expected_frame_count,
@@ -373,7 +400,8 @@ std::string build_validation_report(
 
 int run_render_assertion(
     const std::filesystem::path &subtitle_path,
-    const bool expect_opaque_color_variation = false
+    const bool expect_opaque_color_variation = false,
+    const bool expect_near_frame_bitmap = false
 ) {
     auto subtitle_renderer = create_default_subtitle_renderer();
     if (!subtitle_renderer) {
@@ -435,6 +463,11 @@ int run_render_assertion(
         return fail("Expected the RGBA gradient sample to contain multiple opaque colors in one rendered frame.");
     }
 
+    if (expect_near_frame_bitmap &&
+        !has_near_frame_bitmap(*visible_result.rendered_frame)) {
+        return fail("Expected the BorderStyle=4 sample to preserve a large clipped background bitmap.");
+    }
+
     std::cout << "session.subtitle_path=" << format_path_leaf(subtitle_path) << '\n';
     std::cout << "session.format_hint=ass\n";
     std::cout << "session.canvas=320x180\n";
@@ -443,6 +476,9 @@ int run_render_assertion(
     std::cout << "visible.has_content=yes\n";
     if (expect_opaque_color_variation) {
         std::cout << "visible.opaque_color_variation=yes\n";
+    }
+    if (expect_near_frame_bitmap) {
+        std::cout << "visible.near_frame_bitmap=yes\n";
     }
     std::cout << "hidden.timestamp_us=500000\n";
     std::cout << "hidden.has_content=no\n";
@@ -1348,7 +1384,7 @@ int main(int argc, char *argv[]) {
         return fail(
             "Usage: utsure_core_subtitle_burn_in_tests "
             "[--render <subtitle>|--render-gradient <subtitle>|--render-empty-effect <subtitle>|"
-            "--render-unsupported-img <subtitle>|"
+            "--render-unsupported-img <subtitle>|--render-bs4 <subtitle>|--render-bs4-gradient <subtitle>|"
             "--h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--empty-bitmap-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--best-effort-img-h264 <input> <subtitle> <plain-output> <burned-output>|"
@@ -1368,6 +1404,14 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--render-gradient" && argc == 3) {
         return run_render_assertion(std::filesystem::path(argv[2]), true);
+    }
+
+    if (mode == "--render-bs4" && argc == 3) {
+        return run_render_assertion(std::filesystem::path(argv[2]), false, true);
+    }
+
+    if (mode == "--render-bs4-gradient" && argc == 3) {
+        return run_render_assertion(std::filesystem::path(argv[2]), true, true);
     }
 
     if (mode == "--render-empty-effect" && argc == 3) {

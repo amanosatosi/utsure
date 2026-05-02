@@ -18,6 +18,8 @@ set(UTSURE_MULTI_AUDIO_DEFAULT_FILE "${UTSURE_TEST_MEDIA_DIR}/multi-audio-defaul
 set(UTSURE_MULTI_AUDIO_FALLBACK_FILE "${UTSURE_TEST_MEDIA_DIR}/multi-audio-fallback.mkv")
 set(UTSURE_SUBTITLE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-sample.ass")
 set(UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-gradient-sample.ass")
+set(UTSURE_SUBTITLE_BS4_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-bs4-sample.ass")
+set(UTSURE_SUBTITLE_BS4_GRADIENT_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-bs4-gradient-sample.ass")
 set(UTSURE_SUBTITLE_EMPTY_BITMAP_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-empty-bitmap-sample.ass")
 set(UTSURE_SUBTITLE_IMG_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-img-sample.ass")
 set(UTSURE_SUBTITLE_STRESS_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-stress-sample.ass")
@@ -32,6 +34,16 @@ configure_file(
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-gradient-sample.ass"
     "${UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE}"
+    COPYONLY
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-bs4-sample.ass"
+    "${UTSURE_SUBTITLE_BS4_SAMPLE_FILE}"
+    COPYONLY
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-bs4-gradient-sample.ass"
+    "${UTSURE_SUBTITLE_BS4_GRADIENT_SAMPLE_FILE}"
     COPYONLY
 )
 configure_file(
@@ -907,6 +919,51 @@ add_test(
     COMMAND utsure_core_libassmod_subtitle_adapter_tests --invalid-positive
 )
 
+add_test(
+    NAME utsure.core.subtitles.libassmod.adapter.large_clipped
+    COMMAND utsure_core_libassmod_subtitle_adapter_tests --large-clipped
+)
+
+add_executable(utsure_core_libassmod_rgba_reproducer
+    libassmod_rgba_reproducer.cpp
+)
+
+target_link_libraries(utsure_core_libassmod_rgba_reproducer
+    PRIVATE
+        utsure::subtitle_renderer_dependency
+)
+
+target_compile_definitions(utsure_core_libassmod_rgba_reproducer
+    PRIVATE
+        UTSURE_LIBASSMOD_REF="${UTSURE_LIBASSMOD_REF}"
+)
+
+target_compile_features(utsure_core_libassmod_rgba_reproducer PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_libassmod_rgba_reproducer)
+
+add_test(
+    NAME utsure.core.subtitles.libassmod.rgba_reproducer.bs4
+    COMMAND utsure_core_libassmod_rgba_reproducer --rgba
+        "${UTSURE_SUBTITLE_BS4_SAMPLE_FILE}"
+        320
+        180
+        1
+        1
+        41667
+)
+
+add_test(
+    NAME utsure.core.subtitles.libassmod.rgba_reproducer.bs4_gradient
+    COMMAND utsure_core_libassmod_rgba_reproducer --rgba
+        "${UTSURE_SUBTITLE_BS4_GRADIENT_SAMPLE_FILE}"
+        320
+        180
+        1
+        1
+        41667
+)
+
 add_executable(utsure_core_subtitle_bitmap_compositor_tests
     subtitle_bitmap_compositor_tests.cpp
 )
@@ -963,6 +1020,16 @@ add_test(
 add_test(
     NAME utsure.core.subtitles.libassmod.render.gradient_rgba
     COMMAND utsure_core_subtitle_burn_in_tests --render-gradient "${UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE}"
+)
+
+add_test(
+    NAME utsure.core.subtitles.libassmod.render.bs4
+    COMMAND utsure_core_subtitle_burn_in_tests --render-bs4 "${UTSURE_SUBTITLE_BS4_SAMPLE_FILE}"
+)
+
+add_test(
+    NAME utsure.core.subtitles.libassmod.render.bs4_gradient_rgba
+    COMMAND utsure_core_subtitle_burn_in_tests --render-bs4-gradient "${UTSURE_SUBTITLE_BS4_GRADIENT_SAMPLE_FILE}"
 )
 
 add_test(

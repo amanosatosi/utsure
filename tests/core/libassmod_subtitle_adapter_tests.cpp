@@ -15,6 +15,7 @@ namespace {
 using utsure::core::subtitles::SubtitleCompositionDebugContext;
 using utsure::core::subtitles::SubtitleRenderRequest;
 using utsure::core::subtitles::detail::libassmod::collect_drawable_ass_image_rgba_nodes;
+using utsure::core::subtitles::detail::libassmod::maybe_log_ass_image_rgba_nodes_after_render;
 using utsure::core::subtitles::detail::libassmod::validate_ass_image_rgba;
 
 int fail(std::string_view message) {
@@ -163,13 +164,78 @@ int run_invalid_positive_bitmap_assertion() {
     return 0;
 }
 
+int run_large_clipped_bitmap_assertion() {
+    constexpr int kWidth = 320;
+    constexpr int kHeight = 180;
+    constexpr int kStride = kWidth * 4;
+
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(kStride) * kHeight, 0U);
+    for (std::size_t index = 3; index < pixels.size(); index += 4U) {
+        pixels[index] = 128U;
+    }
+
+    ASS_ImageRGBA full_frame_bitmap{};
+    full_frame_bitmap.type = 3;
+    full_frame_bitmap.dst_x = 0;
+    full_frame_bitmap.dst_y = 0;
+    full_frame_bitmap.w = kWidth;
+    full_frame_bitmap.h = kHeight;
+    full_frame_bitmap.stride = kStride;
+    full_frame_bitmap.rgba = pixels.data();
+
+    std::vector<std::string> diagnostics{};
+    SubtitleCompositionDebugContext debug_context{
+        .decoded_frame_index = 2,
+        .output_pts = 2,
+        .subtitle_timestamp_microseconds = 41667,
+        .worker_id = 0,
+        .session_id = 11,
+        .log_frame_details = true,
+        .log_bitmap_details = true,
+        .log_callback = [&diagnostics](const std::string &message) {
+            diagnostics.push_back(message);
+        }
+    };
+    const SubtitleRenderRequest request{
+        .timestamp_microseconds = 41667,
+        .debug_context = &debug_context
+    };
+    const std::vector<ASS_ImageRGBA *> image_nodes{&full_frame_bitmap};
+
+    maybe_log_ass_image_rgba_nodes_after_render(image_nodes, request, "direct");
+    const auto drawable_bitmaps = collect_drawable_ass_image_rgba_nodes(
+        image_nodes,
+        request,
+        "direct",
+        "bs4.ass",
+        11
+    );
+
+    if (drawable_bitmaps.size() != 1U || drawable_bitmaps.front().image != &full_frame_bitmap) {
+        return fail("A valid full-frame BorderStyle=4-style RGBA bitmap should be accepted as drawable.");
+    }
+
+    if (!messages_contain_text(diagnostics, "after_render") ||
+        !messages_contain_text(diagnostics, "alpha_sum=7372800") ||
+        !messages_contain_text(diagnostics, "estimated_bytes=230400") ||
+        !messages_contain_text(diagnostics, "accepted") ||
+        !messages_contain_text(diagnostics, "decision_reason=drawable")) {
+        return fail("The large RGBA bitmap diagnostics did not report the raw node and accepted decision.");
+    }
+
+    std::cout << "large_bitmap=accepted\n";
+    std::cout << "large_bitmap.size=320x180\n";
+    std::cout << "large_bitmap.alpha_sum=7372800\n";
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         return fail(
             "Usage: utsure_core_libassmod_subtitle_adapter_tests "
-            "[--empty-copied|--empty-direct|--invalid-positive]"
+            "[--empty-copied|--empty-direct|--invalid-positive|--large-clipped]"
         );
     }
 
@@ -184,6 +250,10 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--invalid-positive") {
         return run_invalid_positive_bitmap_assertion();
+    }
+
+    if (mode == "--large-clipped") {
+        return run_large_clipped_bitmap_assertion();
     }
 
     return fail("Unknown mode for utsure_core_libassmod_subtitle_adapter_tests.");

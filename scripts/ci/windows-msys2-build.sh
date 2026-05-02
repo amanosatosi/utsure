@@ -38,6 +38,7 @@ cmake -S . -B "${build_dir}" -G Ninja \
   -DCMAKE_BUILD_TYPE="${cmake_build_type}" \
   -DCMAKE_PREFIX_PATH="${msys2_prefix}" \
   -DUTSURE_BUILD_APP="${build_app}" \
+  -DUTSURE_LIBASSMOD_REF="${UTSURE_LIBASSMOD_REF:-88a338192faf50505eb4cedfe7d1320265f1081f}" \
   -DUTSURE_ENABLE_DEPENDENCY_AUDIT=ON \
   -DUTSURE_REQUIRE_FFMPEG=ON \
   -DUTSURE_FFMPEG_ROOT="${ffmpeg_prefix}" \
@@ -64,6 +65,7 @@ cmake --build "${build_dir}" --target utsure_core_subtitle_font_recovery_tests -
 cmake --build "${build_dir}" --target utsure_core_timeline_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_subtitle_renderer_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_libassmod_subtitle_adapter_tests --parallel
+cmake --build "${build_dir}" --target utsure_core_libassmod_rgba_reproducer --parallel
 cmake --build "${build_dir}" --target utsure_core_subtitle_bitmap_compositor_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_subtitle_burn_in_tests --parallel
 
