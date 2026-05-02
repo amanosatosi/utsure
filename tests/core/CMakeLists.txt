@@ -20,6 +20,7 @@ set(UTSURE_SUBTITLE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-sample.a
 set(UTSURE_SUBTITLE_GRADIENT_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-gradient-sample.ass")
 set(UTSURE_SUBTITLE_BS4_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-bs4-sample.ass")
 set(UTSURE_SUBTITLE_BS4_GRADIENT_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-bs4-gradient-sample.ass")
+set(UTSURE_SUBTITLE_BS4_FORCED_RGBA_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-bs4-forced-rgba-sample.ass")
 set(UTSURE_SUBTITLE_EMPTY_BITMAP_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-empty-bitmap-sample.ass")
 set(UTSURE_SUBTITLE_IMG_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-img-sample.ass")
 set(UTSURE_SUBTITLE_STRESS_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-stress-sample.ass")
@@ -44,6 +45,11 @@ configure_file(
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-bs4-gradient-sample.ass"
     "${UTSURE_SUBTITLE_BS4_GRADIENT_SAMPLE_FILE}"
+    COPYONLY
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-bs4-forced-rgba-sample.ass"
+    "${UTSURE_SUBTITLE_BS4_FORCED_RGBA_SAMPLE_FILE}"
     COPYONLY
 )
 configure_file(
@@ -964,6 +970,17 @@ add_test(
         41667
 )
 
+add_test(
+    NAME utsure.core.subtitles.libassmod.rgba_reproducer.bs4_forced_rgba
+    COMMAND utsure_core_libassmod_rgba_reproducer --rgba
+        "${UTSURE_SUBTITLE_BS4_FORCED_RGBA_SAMPLE_FILE}"
+        320
+        180
+        1
+        1
+        1204800000
+)
+
 add_executable(utsure_core_subtitle_bitmap_compositor_tests
     subtitle_bitmap_compositor_tests.cpp
 )
@@ -1030,6 +1047,11 @@ add_test(
 add_test(
     NAME utsure.core.subtitles.libassmod.render.bs4_gradient_rgba
     COMMAND utsure_core_subtitle_burn_in_tests --render-bs4-gradient "${UTSURE_SUBTITLE_BS4_GRADIENT_SAMPLE_FILE}"
+)
+
+add_test(
+    NAME utsure.core.subtitles.libassmod.render.bs4_forced_rgba
+    COMMAND utsure_core_subtitle_burn_in_tests --render-bs4-forced-rgba "${UTSURE_SUBTITLE_BS4_FORCED_RGBA_SAMPLE_FILE}"
 )
 
 add_test(

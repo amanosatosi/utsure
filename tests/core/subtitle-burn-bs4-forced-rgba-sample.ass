@@ -1,0 +1,17 @@
+[Script Info]
+Title: utsure persistent RGBA plus BorderStyle 4 subtitle sample
+ScriptType: v4.00+
+PlayResX: 320
+PlayResY: 180
+ScaledBorderAndShadow: yes
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Watermark,Arial,16,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+Style: BS4,Arial,24,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80202020,0,0,0,0,100,100,0,0,4,4,260,5,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,5:01:38.55,Watermark,title,0,0,0,,{\an7\pos(4,4)\bord0\shad0\1vc(&H2A87BC&,&HC7FCFC&,&H2A87BC&,&HC7FCFC&)\p1}m 0 0 l 80 0 80 18 0 18{\p0}
+Dialogue: 0,0:20:04.76,0:20:16.65,BS4,screen,0,0,0,,{\an5\pos(160,90)}BS4 FORCED RGBA\NBACKGROUND BOX\NVALID LARGE TILE

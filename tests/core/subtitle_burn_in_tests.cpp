@@ -401,7 +401,9 @@ std::string build_validation_report(
 int run_render_assertion(
     const std::filesystem::path &subtitle_path,
     const bool expect_opaque_color_variation = false,
-    const bool expect_near_frame_bitmap = false
+    const bool expect_near_frame_bitmap = false,
+    const std::int64_t visible_timestamp_microseconds = 41667LL,
+    const std::optional<std::int64_t> hidden_timestamp_microseconds = std::optional<std::int64_t>{500000LL}
 ) {
     auto subtitle_renderer = create_default_subtitle_renderer();
     if (!subtitle_renderer) {
@@ -427,7 +429,7 @@ int run_render_assertion(
     }
 
     const SubtitleRenderResult visible_result = session_result.session->render(SubtitleRenderRequest{
-        .timestamp_microseconds = 41667
+        .timestamp_microseconds = visible_timestamp_microseconds
     });
     if (!visible_result.succeeded()) {
         const std::string error_message =
@@ -438,24 +440,26 @@ int run_render_assertion(
         return fail(error_message);
     }
 
-    const SubtitleRenderResult hidden_result = session_result.session->render(SubtitleRenderRequest{
-        .timestamp_microseconds = 500000
-    });
-    if (!hidden_result.succeeded()) {
-        const std::string error_message =
-            "Hidden subtitle render failed unexpectedly: " +
-            hidden_result.error->message +
-            " Hint: " +
-            hidden_result.error->actionable_hint;
-        return fail(error_message);
-    }
-
     if (visible_result.rendered_frame->bitmaps.empty()) {
-        return fail("Expected visible subtitle content at 41667 us.");
+        return fail("Expected visible subtitle content at the requested visible timestamp.");
     }
 
-    if (!hidden_result.rendered_frame->bitmaps.empty()) {
-        return fail("Expected no subtitle content at 500000 us.");
+    if (hidden_timestamp_microseconds.has_value()) {
+        const SubtitleRenderResult hidden_result = session_result.session->render(SubtitleRenderRequest{
+            .timestamp_microseconds = *hidden_timestamp_microseconds
+        });
+        if (!hidden_result.succeeded()) {
+            const std::string error_message =
+                "Hidden subtitle render failed unexpectedly: " +
+                hidden_result.error->message +
+                " Hint: " +
+                hidden_result.error->actionable_hint;
+            return fail(error_message);
+        }
+
+        if (!hidden_result.rendered_frame->bitmaps.empty()) {
+            return fail("Expected no subtitle content at the requested hidden timestamp.");
+        }
     }
 
     if (expect_opaque_color_variation &&
@@ -472,7 +476,7 @@ int run_render_assertion(
     std::cout << "session.format_hint=ass\n";
     std::cout << "session.canvas=320x180\n";
     std::cout << "session.sample_aspect_ratio=" << format_rational(session_request.sample_aspect_ratio) << '\n';
-    std::cout << "visible.timestamp_us=41667\n";
+    std::cout << "visible.timestamp_us=" << visible_timestamp_microseconds << '\n';
     std::cout << "visible.has_content=yes\n";
     if (expect_opaque_color_variation) {
         std::cout << "visible.opaque_color_variation=yes\n";
@@ -480,8 +484,10 @@ int run_render_assertion(
     if (expect_near_frame_bitmap) {
         std::cout << "visible.near_frame_bitmap=yes\n";
     }
-    std::cout << "hidden.timestamp_us=500000\n";
-    std::cout << "hidden.has_content=no\n";
+    if (hidden_timestamp_microseconds.has_value()) {
+        std::cout << "hidden.timestamp_us=" << *hidden_timestamp_microseconds << '\n';
+        std::cout << "hidden.has_content=no\n";
+    }
     return 0;
 }
 
@@ -1385,6 +1391,7 @@ int main(int argc, char *argv[]) {
             "Usage: utsure_core_subtitle_burn_in_tests "
             "[--render <subtitle>|--render-gradient <subtitle>|--render-empty-effect <subtitle>|"
             "--render-unsupported-img <subtitle>|--render-bs4 <subtitle>|--render-bs4-gradient <subtitle>|"
+            "--render-bs4-forced-rgba <subtitle>|"
             "--h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--empty-bitmap-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--best-effort-img-h264 <input> <subtitle> <plain-output> <burned-output>|"
@@ -1412,6 +1419,16 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--render-bs4-gradient" && argc == 3) {
         return run_render_assertion(std::filesystem::path(argv[2]), true, true);
+    }
+
+    if (mode == "--render-bs4-forced-rgba" && argc == 3) {
+        return run_render_assertion(
+            std::filesystem::path(argv[2]),
+            true,
+            true,
+            1204800000LL,
+            std::nullopt
+        );
     }
 
     if (mode == "--render-empty-effect" && argc == 3) {
