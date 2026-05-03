@@ -17,6 +17,8 @@ ffms2_prefix="${UTSURE_FFMS2_PREFIX:-${third_party_root}/ffms2/prefix}"
 ffms2_pcdir="${ffms2_prefix}/lib/pkgconfig"
 libassmod_prefix="${UTSURE_LIBASSMOD_PREFIX:-${third_party_root}/libassmod/prefix}"
 libassmod_pcdir="${libassmod_prefix}/lib/pkgconfig"
+fontcollector_tool_dir="${UTSURE_FONTCOLLECTOR_TOOL_DIR:-${third_party_root}/fontcollector/prefix/tools/fontcollector}"
+package_fontcollector="${UTSURE_PACKAGE_FONTCOLLECTOR:-ON}"
 msys2_prefix="${UTSURE_MSYS2_PREFIX:-/ucrt64}"
 msys2_bin_dir="${msys2_prefix}/bin"
 qt_plugin_root="${msys2_prefix}/share/qt6/plugins"
@@ -121,6 +123,26 @@ write_bundle_manifest() {
   } | LC_ALL=C sort > "${bundle_manifest}"
 }
 
+copy_fontcollector_tool() {
+  if [[ "${package_fontcollector}" != "ON" ]]; then
+    return 0
+  fi
+
+  if [ ! -f "${fontcollector_tool_dir}/fontcollector.exe" ]; then
+    echo "Portable packaging requires FontCollector at '${fontcollector_tool_dir}/fontcollector.exe'."
+    echo "Run scripts/ci/windows-build-fontcollector.ps1 before packaging, or set UTSURE_PACKAGE_FONTCOLLECTOR=OFF for a non-release diagnostic bundle."
+    exit 1
+  fi
+
+  mkdir -p "${bundle_dir}/tools/fontcollector"
+  cp -R "${fontcollector_tool_dir}/." "${bundle_dir}/tools/fontcollector/"
+
+  if [ ! -f "${bundle_dir}/tools/fontcollector/fontcollector.exe" ]; then
+    echo "Portable bundle is missing tools/fontcollector/fontcollector.exe after copy."
+    exit 1
+  fi
+}
+
 windeployqt="$(find_windeployqt)"
 
 if [ ! -f "${app_executable}" ]; then
@@ -158,6 +180,8 @@ if [ -f "${qt_iconengines_dir}/qsvgicon.dll" ] && [ ! -f "${bundle_dir}/iconengi
 fi
 
 write_qt_runtime_manifest
+
+copy_fontcollector_tool
 
 declare -A scanned_binaries=()
 declare -A copied_non_qt_dependencies=()
@@ -221,6 +245,11 @@ Expand-Archive -Path '${bundle_zip_windows}' -DestinationPath '${validation_root
 \$env:QT_QPA_PLATFORM='offscreen'; \
 \$env:QT_PLUGIN_PATH=''; \
 \$env:QML2_IMPORT_PATH=''; \
+if ('${package_fontcollector}' -eq 'ON') { \
+  \$fontCollectorPath=\"\$portablePath/tools/fontcollector/fontcollector.exe\"; \
+  if (!(Test-Path \$fontCollectorPath)) { throw \"Portable bundle is missing tools/fontcollector/fontcollector.exe\" }; \
+  & \$fontCollectorPath --help | Out-Null; \
+}; \
 & \"\$portablePath/utsure.exe\" --dump-window-structure --smoke-test"
 
 echo "Portable bundle created at ${bundle_dir}"

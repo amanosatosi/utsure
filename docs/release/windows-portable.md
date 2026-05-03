@@ -5,6 +5,7 @@ This repository currently ships one documented release shape: a Windows x64 port
 ## What the portable bundle contains
 
 - `utsure.exe`
+- `tools/fontcollector/fontcollector.exe`
 - Qt runtime files deployed by `windeployqt`
 - manually copied non-Qt runtime DLLs from MSYS2 and the pinned `libassmod` prefix
 - `LICENSE`
@@ -28,6 +29,7 @@ The packaging entry point is `scripts/ci/windows-msys2-package-portable.sh`.
 
 - target platform: Windows x64
 - toolchain/runtime source: MSYS2 UCRT64
+- bundled ASS font collector: pinned `FontCollector` built into a standalone `fontcollector.exe`
 - pinned media runtime: source-built FFmpeg 7.1.2 from `.deps/ffmpeg/prefix`
 - distribution format: portable zip, not an installer
 - signing: not implemented yet
@@ -38,7 +40,7 @@ The packaging entry point is `scripts/ci/windows-msys2-package-portable.sh`.
 1. Start from a green `windows-msys2` workflow run on the target commit.
 2. Confirm the portable bundle smoke test passed after re-extracting the zip.
 3. Keep the bundle manifests with the artifact so dependency contents remain auditable.
-4. Record the pinned `UTSURE_FFMPEG_VERSION`, `UTSURE_LIBASSMOD_REF`, and any dependency version changes made for the release.
+4. Record the pinned `UTSURE_FFMPEG_VERSION`, `UTSURE_LIBASSMOD_REF`, `UTSURE_FONTCOLLECTOR_VERSION`, and any dependency version changes made for the release.
 5. Test the zip on a clean Windows machine before treating it as a user-facing release.
 6. Review redistribution and licensing obligations for FFmpeg, x264, x265, Qt, and `libassmod`.
 
@@ -46,7 +48,6 @@ The packaging entry point is `scripts/ci/windows-msys2-package-portable.sh`.
 
 - No installer, file association, or uninstaller path exists yet.
 - No code signing is wired into CI.
-- The portable bundle does not yet build and ship a standalone `FontCollector`; ASS subtitle users must provide `fontcollector.exe` on `PATH`, beside `utsure.exe`, under `tools/fontcollector`, or through `UTSURE_FONTCOLLECTOR_PATH`.
 - The smoke test proves launchability, not full encode validation on a clean machine.
 - Linux and macOS packaging are not implemented.
 - libassmod `\img` host-side resource registration is still not part of the shipped pipeline.

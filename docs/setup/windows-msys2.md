@@ -72,8 +72,11 @@ Create the current portable release artifact:
 
 ```bash
 UTSURE_CMAKE_BUILD_TYPE=Release ./scripts/ci/windows-msys2-build.sh
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w ./scripts/ci/windows-build-fontcollector.ps1)"
 ./scripts/ci/windows-msys2-package-portable.sh
 ```
+
+The FontCollector bundling step requires a Windows Python on `PATH`; GitHub Actions uses `actions/setup-python` with Python 3.13 for that step.
 
 ## Important paths
 

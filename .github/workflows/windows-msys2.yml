@@ -22,6 +22,8 @@ jobs:
       UTSURE_FFMPEG_CONFIGURE_FLAGS: >-
         --enable-gpl --enable-libx264 --enable-libx265 --enable-shared --disable-static
         --disable-debug --disable-doc --disable-ffplay --disable-programs --enable-ffmpeg --enable-ffprobe
+      UTSURE_FONTCOLLECTOR_VERSION: "4.0.2"
+      UTSURE_PYINSTALLER_VERSION: "6.19.0"
       UTSURE_LIBASSMOD_REF: "88a338192faf50505eb4cedfe7d1320265f1081f"
       UTSURE_PORTABLE_BUNDLE_NAME: encoder-windows-x64-portable
 
@@ -32,6 +34,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: Set up Python for FontCollector
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          architecture: "x64"
+
+      - name: Build FontCollector portable tool
+        shell: pwsh
+        run: ./scripts/ci/windows-build-fontcollector.ps1
 
       - name: Set up MSYS2
         uses: msys2/setup-msys2@v2
