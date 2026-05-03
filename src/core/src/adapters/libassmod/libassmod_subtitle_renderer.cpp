@@ -926,7 +926,7 @@ public:
                     return make_session_error(
                         request,
                         "Cannot create a subtitle render session because the recovered-font directory is empty.",
-                        "Provide an existing directory of recovered font files, or clear the fallback font directory."
+                        "Provide an existing directory of FontCollector-staged font files."
                     );
                 }
 
@@ -939,8 +939,7 @@ public:
                     return make_session_error(
                         request,
                         "Cannot create a subtitle render session because the recovered-font directory is not available.",
-                        "Re-run the subtitle font recovery step, or clear the fallback directory and rely on the "
-                        "normal system-font path."
+                        "Re-run the FontCollector subtitle font preparation step before creating the renderer session."
                     );
                 }
             }

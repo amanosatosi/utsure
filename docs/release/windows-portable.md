@@ -46,6 +46,7 @@ The packaging entry point is `scripts/ci/windows-msys2-package-portable.sh`.
 
 - No installer, file association, or uninstaller path exists yet.
 - No code signing is wired into CI.
+- The portable bundle does not yet build and ship a standalone `FontCollector`; ASS subtitle users must provide `fontcollector.exe` on `PATH`, beside `utsure.exe`, under `tools/fontcollector`, or through `UTSURE_FONTCOLLECTOR_PATH`.
 - The smoke test proves launchability, not full encode validation on a clean machine.
 - Linux and macOS packaging are not implemented.
 - libassmod `\img` host-side resource registration is still not part of the shipped pipeline.

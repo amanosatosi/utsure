@@ -66,6 +66,8 @@ Rebuild and rerun the current validation set:
 UTSURE_CMAKE_BUILD_TYPE=Debug ./scripts/ci/windows-msys2-build.sh
 ```
 
+ASS subtitle preview, preflight, and encode paths require `FontCollector` to prepare script fonts before libassmod session creation. Install it into a reachable Python environment and make `fontcollector` visible on `PATH`, or set `UTSURE_FONTCOLLECTOR_PATH` to the executable path before running subtitle-enabled jobs.
+
 Create the current portable release artifact:
 
 ```bash

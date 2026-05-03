@@ -4467,6 +4467,21 @@ PreparedSubtitleSession create_subtitle_session(
         emit_runtime_log(log_callback, "Hint: " + prepared_request.font_recovery_report.actionable_hint);
     }
 
+    if (subtitles::font_recovery_blocks_subtitle_rendering(prepared_request.font_recovery_report)) {
+        auto session_result = subtitles::SubtitleRenderSessionResult{
+            .session = nullptr,
+            .error = subtitles::SubtitleRendererError{
+                .subtitle_path = prepared_request.font_recovery_report.subtitle_path.lexically_normal().string(),
+                .message = prepared_request.font_recovery_report.message,
+                .actionable_hint = prepared_request.font_recovery_report.actionable_hint
+            }
+        };
+        return PreparedSubtitleSession{
+            .prepared_request = std::move(prepared_request),
+            .session_result = std::move(session_result)
+        };
+    }
+
     auto session_result = subtitle_renderer.create_session(prepared_request.session_request);
     return PreparedSubtitleSession{
         .prepared_request = std::move(prepared_request),

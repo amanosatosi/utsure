@@ -27,6 +27,59 @@ set(UTSURE_SUBTITLE_STRESS_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-s
 set(UTSURE_SUBTITLE_STRESS_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-main.mp4")
 
 file(MAKE_DIRECTORY "${UTSURE_TEST_MEDIA_DIR}")
+if(WIN32)
+    set(UTSURE_TEST_FONTCOLLECTOR_STUB "${CMAKE_CURRENT_BINARY_DIR}/fontcollector-test-stub.cmd")
+    file(WRITE "${UTSURE_TEST_FONTCOLLECTOR_STUB}"
+        "@echo off\r\n"
+        "setlocal EnableExtensions\r\n"
+        "set \"LOG_PATH=\"\r\n"
+        ":parse\r\n"
+        "if \"%~1\"==\"\" goto parsed\r\n"
+        "if /I \"%~1\"==\"--logging\" (\r\n"
+        "  set \"LOG_PATH=%~2\"\r\n"
+        "  shift\r\n"
+        "  shift\r\n"
+        "  goto parse\r\n"
+        ")\r\n"
+        "shift\r\n"
+        "goto parse\r\n"
+        ":parsed\r\n"
+        "if not \"%LOG_PATH%\"==\"\" echo fontcollector ctest stub>\"%LOG_PATH%\"\r\n"
+        "exit /b 0\r\n"
+    )
+else()
+    set(UTSURE_TEST_FONTCOLLECTOR_STUB "${CMAKE_CURRENT_BINARY_DIR}/fontcollector-test-stub.sh")
+    file(WRITE "${UTSURE_TEST_FONTCOLLECTOR_STUB}"
+        "#!/bin/sh\n"
+        "LOG_PATH=\"\"\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  case \"$1\" in\n"
+        "    --logging)\n"
+        "      LOG_PATH=\"$2\"\n"
+        "      shift 2\n"
+        "      ;;\n"
+        "    *)\n"
+        "      shift\n"
+        "      ;;\n"
+        "  esac\n"
+        "done\n"
+        "if [ -n \"$LOG_PATH\" ]; then printf \"fontcollector ctest stub\" > \"$LOG_PATH\"; fi\n"
+        "exit 0\n"
+    )
+    file(CHMOD "${UTSURE_TEST_FONTCOLLECTOR_STUB}"
+        FILE_PERMISSIONS
+            OWNER_READ OWNER_WRITE OWNER_EXECUTE
+            GROUP_READ GROUP_EXECUTE
+            WORLD_READ WORLD_EXECUTE
+    )
+endif()
+
+function(utsure_enable_fontcollector_stub_for_test test_name)
+    set_tests_properties("${test_name}" PROPERTIES
+        ENVIRONMENT "UTSURE_FONTCOLLECTOR_PATH=${UTSURE_TEST_FONTCOLLECTOR_STUB}"
+    )
+endfunction()
+
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-sample.ass"
     "${UTSURE_SUBTITLE_SAMPLE_FILE}"
@@ -636,6 +689,7 @@ add_test(
         "${UTSURE_SUBTITLE_SAMPLE_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/preflight-valid.mp4"
 )
+utsure_enable_fontcollector_stub_for_test(utsure.core.job.preflight.valid_preview)
 
 add_test(
     NAME utsure.core.job.preflight.mismatched_fps_preview
@@ -1072,6 +1126,7 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-plain-h264.mp4"
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-h264.mp4"
 )
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.h264)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.gradient.h264
@@ -1081,6 +1136,7 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-gradient-plain-h264.mp4"
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-gradient-burn-h264.mp4"
 )
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.gradient.h264)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.empty_bitmap_effect.h264
@@ -1092,6 +1148,7 @@ add_test(
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-empty-bitmap-plain-h264.mp4"
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-empty-bitmap-burn-h264.mp4"
 )
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.empty_bitmap_effect.h264)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.img_best_effort.h264
@@ -1103,6 +1160,7 @@ add_test(
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-img-best-effort-plain-h264.mp4"
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-img-best-effort-burn-h264.mp4"
 )
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.img_best_effort.h264)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.h265
@@ -1112,6 +1170,7 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-plain-h265.mp4"
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-h265.mp4"
 )
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.h265)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.trimmed.h264
@@ -1121,6 +1180,7 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-trimmed-plain-h264.mp4"
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-trimmed-burn-h264.mp4"
 )
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.trimmed.h264)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.timeline.h264
@@ -1132,6 +1192,7 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/timeline-subtitle-plain-h264.mp4"
         "${UTSURE_TEST_MEDIA_DIR}/timeline-subtitle-burn-h264.mp4"
 )
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.timeline.h264)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.timeline.full_output.h264
@@ -1143,6 +1204,7 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/timeline-full-subtitle-plain-h264.mp4"
         "${UTSURE_TEST_MEDIA_DIR}/timeline-full-subtitle-burn-h264.mp4"
 )
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.timeline.full_output.h264)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.stress.copied_serialized.h264
@@ -1155,6 +1217,7 @@ add_test(
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-plain-copied-serialized-h264.mp4"
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-burn-copied-serialized-h264.mp4"
 )
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.stress.copied_serialized.h264)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.stress.direct_serialized.h264
@@ -1167,6 +1230,7 @@ add_test(
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-plain-direct-serialized-h264.mp4"
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-burn-direct-serialized-h264.mp4"
 )
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.stress.direct_serialized.h264)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.stress.copied_worker.h264
@@ -1179,6 +1243,7 @@ add_test(
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-plain-copied-worker-h264.mp4"
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-burn-copied-worker-h264.mp4"
 )
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.stress.copied_worker.h264)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.stress.direct_worker.h264
@@ -1191,3 +1256,4 @@ add_test(
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-plain-direct-worker-h264.mp4"
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-burn-direct-worker-h264.mp4"
 )
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.stress.direct_worker.h264)

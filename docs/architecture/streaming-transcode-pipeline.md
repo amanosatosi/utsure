@@ -127,6 +127,8 @@ Rules:
 
 Subtitle rendering stays behind the existing abstraction. The active libassmod adapter uses the RGBA-capable path unconditionally for rendered frames so RGBA-only effects are not forced back through the old `ASS_Image` bitmap flow.
 
+ASS subtitle sessions are prepared with `FontCollector` before libassmod session creation. The prepared font directory is passed through `SubtitleRenderSessionCreateRequest::font_search_directory`, kept alive for the session lifetime, and treated as the primary font-preparation result for preview, preflight, legacy burn-in, and streaming encode. Missing or failed `FontCollector` blocks ASS rendering instead of silently falling back to the normal font provider.
+
 The libassmod calls currently used in the adapter are:
 
 - `ass_library_init`

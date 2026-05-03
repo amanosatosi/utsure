@@ -344,6 +344,17 @@ void validate_subtitle_session(
         .canvas_height = video_stream.height,
         .sample_aspect_ratio = video_stream.sample_aspect_ratio
     });
+    if (subtitles::font_recovery_blocks_subtitle_rendering(prepared_session_request.font_recovery_report)) {
+        append_issue(
+            issues,
+            EncodeJobPreflightIssueSeverity::error,
+            EncodeJobPreflightIssueCode::subtitle_validation_failed,
+            prepared_session_request.font_recovery_report.message,
+            prepared_session_request.font_recovery_report.actionable_hint
+        );
+        return;
+    }
+
     auto session_result = subtitle_renderer->create_session(prepared_session_request.session_request);
     if (!session_result.succeeded()) {
         append_issue(

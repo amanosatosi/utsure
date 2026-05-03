@@ -591,6 +591,7 @@ void PreviewFrameRendererWorker::invalidate_subtitle_session() {
     cached_subtitle_canvas_height_ = 0;
     cached_subtitle_sample_aspect_ratio_.reset();
     subtitle_session_.reset();
+    subtitle_font_recovery_artifacts_.reset();
 }
 
 bool PreviewFrameRendererWorker::should_start_sequential_prefetch(const PreviewFrameRenderRequest &request) const {
@@ -876,13 +877,24 @@ void PreviewFrameRendererWorker::ensure_subtitle_session(
         throw std::runtime_error("The default libassmod-backed subtitle renderer is not available.");
     }
 
-    auto session_result = subtitle_renderer_->create_session(utsure::core::subtitles::SubtitleRenderSessionCreateRequest{
-        .subtitle_path = qstring_to_path(normalized_subtitle_path),
-        .format_hint = normalized_format_hint.toUtf8().toStdString(),
-        .canvas_width = preview_frame.width,
-        .canvas_height = preview_frame.height,
-        .sample_aspect_ratio = preview_frame.sample_aspect_ratio
-    });
+    auto prepared_session_request = utsure::core::subtitles::prepare_subtitle_render_session_request(
+        utsure::core::subtitles::SubtitleRenderSessionCreateRequest{
+            .subtitle_path = qstring_to_path(normalized_subtitle_path),
+            .format_hint = normalized_format_hint.toUtf8().toStdString(),
+            .canvas_width = preview_frame.width,
+            .canvas_height = preview_frame.height,
+            .sample_aspect_ratio = preview_frame.sample_aspect_ratio
+        }
+    );
+    if (utsure::core::subtitles::font_recovery_blocks_subtitle_rendering(
+            prepared_session_request.font_recovery_report)) {
+        throw std::runtime_error(
+            prepared_session_request.font_recovery_report.message + " " +
+            prepared_session_request.font_recovery_report.actionable_hint
+        );
+    }
+
+    auto session_result = subtitle_renderer_->create_session(prepared_session_request.session_request);
     if (!session_result.succeeded()) {
         throw std::runtime_error(
             session_result.error->message + " " + session_result.error->actionable_hint
@@ -890,6 +902,7 @@ void PreviewFrameRendererWorker::ensure_subtitle_session(
     }
 
     subtitle_session_ = std::move(session_result.session);
+    subtitle_font_recovery_artifacts_ = std::move(prepared_session_request.font_recovery_artifacts);
     cached_subtitle_path_ = normalized_subtitle_path;
     cached_subtitle_format_hint_ = normalized_format_hint;
     cached_subtitle_canvas_width_ = preview_frame.width;

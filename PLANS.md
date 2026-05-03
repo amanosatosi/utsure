@@ -25,7 +25,7 @@ This file is the living execution plan for the repository. Update it when a mile
   * Remaining FFMS2 preview-backend follow-up and CI validation are deferred and no longer block M17 completion.
   * M18 Automatic output naming completed.
   * M19 Automatic subtitle selection completed.
-  * M20 FontCollector-based subtitle font recovery and fallback completed.
+  * M20 FontCollector-based subtitle font recovery completed.
   * M21 Global parallel batch encoding with bounded job counts and pre-reserved output naming completed.
   * M22 FFMS2 preview latency investigation and responsiveness hardening completed.
 - [x] M23 Encode-throughput investigation and subtitle-free fast path completed.
@@ -779,7 +779,7 @@ Done criteria:
   * `.fx`-qualified ASS subtitles win over lower-priority ASS candidates when both match the same source.
   * Implemented with a dedicated core selector, UI auto/manual override wiring, focused subtitle-selection tests, and CI target coverage for the new test executable.
 
-### M20 Add FontCollector-based subtitle font recovery and fallback
+### M20 Add FontCollector-based subtitle font recovery
 
 Status: Completed
 
@@ -811,7 +811,7 @@ Validation:
   * Local validation for this slice is limited to patch-level checks because compile/test validation is reserved for GitHub Actions in this repository.
 
 Done criteria:
-  * The app can use `FontCollector` as an explicit fallback path for ASS subtitle font recovery.
+  * The app can use `FontCollector` as an explicit ASS subtitle font recovery path.
   * Recovered fonts can be made available to the subtitle pipeline so bad-font cases are reduced in practical Windows encode runs.
   * The integration preserves the existing `encoder-core` vs desktop-shell separation and does not bury tool-specific policy across unrelated modules.
   * Implemented with a dedicated subtitle session-preparation helper, a small core external-tool runner, explicit encode-path logs for recovered/no-font/tool-unavailable cases, and focused stub-driven core tests plus CI target coverage.
@@ -928,6 +928,8 @@ Current slice status:
   * Completed: fixed the follow-up Qt desktop-shell regression from the branding patch by updating the busy Start-button refresh path to the renamed generic widget-style helper, restoring MSYS2 CI app-target compilation.
   * Completed: added a narrow core-owned multi-audio slice that enumerates audio streams, captures language/title/disposition metadata, prefers explicitly Japanese streams over defaults, falls back deterministically by stream index, and threads that selected stream through inspection, decode, and main encode-path usage without adding a manual picker.
   * Completed: fixed the Windows subtitle AddressSanitizer CI setup by moving that dedicated job to MSYS2 `CLANG64`, parameterizing the CI scripts around the active MSYS2 prefix, and adding an early configure-time guard so unsupported MinGW GCC ASan requests fail with a clear message instead of a late `-lasan` link error.
+  * Completed: promoted `FontCollector` from optional ASS-font fallback to the primary subtitle font-preparation path across preview, preflight, legacy burn-in, and streaming encode; missing or failed `FontCollector` now blocks ASS subtitle rendering with an actionable setup hint instead of silently continuing through the normal provider.
+  * Completed: added app-local `FontCollector` discovery beside `utsure.exe` and under `tools/fontcollector`, while preserving explicit `UTSURE_FONTCOLLECTOR_PATH` and PATH-based discovery.
   * Completed: fixed the follow-up `CLANG64` FFmpeg configure failure in that subtitle AddressSanitizer job by forwarding the explicit clang/LLVM tool env (`CC`, `CXX`, `AR`, `NM`, `RANLIB`, `STRIP`, `WINDRES`) into `ffmpeg/configure`, so it stops falling back to the default `gcc` probe on Windows.
   * Completed: added a narrow desktop-shell drag-and-drop source-import follow-up that keeps intake centralized in `MainWindow`, expands dropped folders one level only through a non-UI helper, filters to supported video extensions, and shows one whole-window overlay instead of per-panel drop targets.
   * Completed: fixed the follow-up Windows MSYS2 CI regression from that drag-and-drop slice by adding the new `utsure_core_source_import_paths_tests` target to the shared `windows-msys2-build.sh` target list before `ctest`, so the registered test executable is present when the April 5, 2026 workflow runs its smoke/test step.

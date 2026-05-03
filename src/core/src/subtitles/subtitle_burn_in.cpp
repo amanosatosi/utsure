@@ -53,6 +53,12 @@ SubtitleBurnInResult apply(
         .canvas_height = first_frame.height,
         .sample_aspect_ratio = first_frame.sample_aspect_ratio
     });
+    if (font_recovery_blocks_subtitle_rendering(prepared_session_request.font_recovery_report)) {
+        return make_error(
+            prepared_session_request.font_recovery_report.message,
+            prepared_session_request.font_recovery_report.actionable_hint
+        );
+    }
 
     SubtitleRenderSessionResult session_result = subtitle_renderer.create_session(prepared_session_request.session_request);
     if (!session_result.succeeded()) {

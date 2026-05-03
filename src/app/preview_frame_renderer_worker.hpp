@@ -1,6 +1,7 @@
 #pragma once
 
 #include "utsure/core/media/decoded_media.hpp"
+#include "utsure/core/subtitles/subtitle_font_recovery.hpp"
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 
 #include <QImage>
@@ -87,5 +88,6 @@ private:
     std::optional<utsure::core::media::Rational> cached_subtitle_sample_aspect_ratio_{};
     std::unique_ptr<utsure::core::subtitles::SubtitleRenderer> subtitle_renderer_{};
     std::unique_ptr<utsure::core::subtitles::SubtitleRenderSession> subtitle_session_{};
+    std::shared_ptr<utsure::core::subtitles::SubtitleFontRecoveryArtifacts> subtitle_font_recovery_artifacts_{};
     std::atomic<quint64> *latest_request_generation_{nullptr};
 };

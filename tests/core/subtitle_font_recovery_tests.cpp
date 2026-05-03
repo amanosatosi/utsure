@@ -39,6 +39,7 @@ using utsure::core::subtitles::SubtitleRenderSessionResult;
 using utsure::core::subtitles::SubtitleRenderer;
 using utsure::core::subtitles::SubtitleRendererError;
 using utsure::core::subtitles::burn_in::apply;
+using utsure::core::subtitles::font_recovery_blocks_subtitle_rendering;
 using utsure::core::subtitles::prepare_subtitle_render_session_request;
 
 int fail(std::string_view message) {
@@ -308,6 +309,7 @@ int assert_successful_recovery_behavior(const std::filesystem::path &root, const
 
     if (prepared_request.font_recovery_report.outcome != SubtitleFontRecoveryOutcome::recovered_fonts ||
         !prepared_request.font_recovery_report.attempted() ||
+        font_recovery_blocks_subtitle_rendering(prepared_request.font_recovery_report) ||
         !prepared_request.font_recovery_report.recovered_fonts_applied ||
         !prepared_request.session_request.font_search_directory.has_value() ||
         !prepared_request.font_recovery_artifacts ||
@@ -343,6 +345,7 @@ int assert_no_fonts_behavior(const std::filesystem::path &root, const std::files
 
     if (prepared_request.font_recovery_report.outcome != SubtitleFontRecoveryOutcome::no_additional_fonts ||
         !prepared_request.font_recovery_report.attempted() ||
+        font_recovery_blocks_subtitle_rendering(prepared_request.font_recovery_report) ||
         prepared_request.font_recovery_report.recovered_fonts_applied ||
         prepared_request.session_request.font_search_directory.has_value() ||
         !prepared_request.font_recovery_artifacts ||
@@ -350,7 +353,7 @@ int assert_no_fonts_behavior(const std::filesystem::path &root, const std::files
         return fail("Font recovery did not report the no-font-found path correctly.");
     }
 
-    if (prepared_request.font_recovery_report.message.find("did not recover any additional font files") ==
+    if (prepared_request.font_recovery_report.message.find("did not stage any font files") ==
         std::string::npos) {
         return fail("Font recovery no-font-found reporting was not explicit.");
     }
@@ -372,17 +375,50 @@ int assert_tool_unavailable_behavior(const std::filesystem::path &root) {
 
     if (prepared_request.font_recovery_report.outcome != SubtitleFontRecoveryOutcome::tool_unavailable ||
         prepared_request.font_recovery_report.attempted() ||
+        !font_recovery_blocks_subtitle_rendering(prepared_request.font_recovery_report) ||
         prepared_request.font_recovery_artifacts ||
         prepared_request.session_request.font_search_directory.has_value()) {
         return fail("Font recovery did not report the tool-unavailable path correctly.");
     }
 
-    if (prepared_request.font_recovery_report.message.find("unavailable") == std::string::npos ||
+    if (prepared_request.font_recovery_report.message.find("required") == std::string::npos ||
         prepared_request.font_recovery_report.actionable_hint.find("UTSURE_FONTCOLLECTOR_PATH") == std::string::npos) {
-        return fail("Font recovery tool-unavailable reporting did not explain the fallback state.");
+        return fail("Font recovery tool-unavailable reporting did not explain the required-tool state.");
     }
 
     std::cout << prepared_request.font_recovery_report.message << '\n';
+    return 0;
+}
+
+int assert_burn_in_pipeline_blocks_missing_primary_fontcollector(const std::filesystem::path &root) {
+    const ScopedEnvironmentVariable fontcollector_path(
+        "UTSURE_FONTCOLLECTOR_PATH",
+        (root / "missing-primary-fontcollector.exe").string()
+    );
+
+    const auto subtitle_path = root / "episode05.ass";
+    write_text_file(subtitle_path, "[Script Info]\nTitle: episode05\n");
+
+    auto recording_state = std::make_shared<RecordingState>();
+    RecordingSubtitleRenderer renderer(recording_state);
+    const auto decoded_media_source = make_minimal_decoded_media_source();
+
+    const auto burn_in_result = apply(
+        decoded_media_source,
+        renderer,
+        EncodeJobSubtitleSettings{
+            .subtitle_path = subtitle_path,
+            .format_hint = "ass"
+        }
+    );
+    if (burn_in_result.succeeded() ||
+        !burn_in_result.error.has_value() ||
+        burn_in_result.error->message.find("FontCollector is required") == std::string::npos ||
+        recording_state->create_request.has_value()) {
+        return fail("Subtitle burn-in did not block ASS rendering when the primary FontCollector tool was missing.");
+    }
+
+    std::cout << burn_in_result.error->message << '\n';
     return 0;
 }
 
@@ -451,6 +487,10 @@ int main() {
     }
 
     if (assert_burn_in_pipeline_applies_recovered_font_directory(root, tool_path) != 0) {
+        return 1;
+    }
+
+    if (assert_burn_in_pipeline_blocks_missing_primary_fontcollector(root) != 0) {
         return 1;
     }
 

@@ -12,6 +12,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -153,23 +154,65 @@ std::optional<std::filesystem::path> resolve_fontcollector_executable(const Subt
         return std::nullopt;
     }
 
-    return process::find_executable_on_path({
+    std::vector<std::string> candidates{};
+#ifdef _WIN32
+    std::wstring module_path(MAX_PATH, L'\0');
+    for (;;) {
+        const DWORD written = GetModuleFileNameW(
+            nullptr,
+            module_path.data(),
+            static_cast<DWORD>(module_path.size())
+        );
+        if (written == 0) {
+            break;
+        }
+
+        if (written < module_path.size()) {
+            module_path.resize(static_cast<std::size_t>(written));
+            const auto executable_directory = std::filesystem::path(module_path).parent_path();
+            const std::array<std::filesystem::path, 11> app_local_candidates{
+                executable_directory / "fontcollector.exe",
+                executable_directory / "fontcollector.cmd",
+                executable_directory / "fontcollector.bat",
+                executable_directory / "fontcollector",
+                executable_directory / "FontCollector.exe",
+                executable_directory / "tools" / "fontcollector" / "fontcollector.exe",
+                executable_directory / "tools" / "fontcollector" / "fontcollector.cmd",
+                executable_directory / "tools" / "fontcollector" / "fontcollector.bat",
+                executable_directory / "tools" / "FontCollector" / "fontcollector.exe",
+                executable_directory / "tools" / "FontCollector" / "fontcollector.cmd",
+                executable_directory / "tools" / "FontCollector" / "fontcollector.bat"
+            };
+            for (const auto &candidate : app_local_candidates) {
+                candidates.push_back(path_to_utf8_string(candidate));
+            }
+            break;
+        }
+
+        module_path.resize(module_path.size() * 2U);
+    }
+#endif
+
+    candidates.insert(candidates.end(), {
         "fontcollector",
         "fontcollector.exe",
         "fontcollector.cmd",
         "fontcollector.bat"
     });
+    return process::find_executable_on_path(candidates);
 }
 
 SubtitleFontRecoveryReport make_tool_unavailable_report(const std::filesystem::path &subtitle_path) {
     return SubtitleFontRecoveryReport{
         .outcome = SubtitleFontRecoveryOutcome::tool_unavailable,
         .subtitle_path = subtitle_path,
-        .message = "FontCollector fallback is unavailable for '" + format_path_leaf(subtitle_path) +
-            "'. Continuing with the normal subtitle font resolution path.",
+        .message = "FontCollector is required for ASS subtitle rendering, but no usable FontCollector executable was "
+            "found for '" +
+            format_path_leaf(subtitle_path) + "'.",
         .actionable_hint =
-            "Install FontCollector or set " + std::string(kFontCollectorEnvVar) +
-            " to a valid executable path to enable recovered-font staging."
+            "Install FontCollector and put fontcollector.exe on PATH, place it next to utsure.exe or under "
+            "tools/fontcollector, or set " +
+            std::string(kFontCollectorEnvVar) + " to a valid executable path."
     };
 }
 
@@ -268,9 +311,9 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
             *fontcollector_executable,
             prepared_request.font_recovery_artifacts->font_directory(),
             prepared_request.font_recovery_artifacts->temporary_root_directory() / "fontcollector.log",
-            "FontCollector fallback could not create a temporary staging directory for '" +
+            "FontCollector could not create a temporary staging directory for '" +
                 format_path_leaf(normalized_subtitle_path) +
-                "'. Continuing with the normal subtitle font resolution path.",
+                "'. ASS subtitle rendering cannot start.",
             "The operating system reported: " + create_error.message()
         );
         return prepared_request;
@@ -299,8 +342,8 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
             *fontcollector_executable,
             artifacts->font_directory_,
             prepared_request.font_recovery_report.tool_log_path,
-            "FontCollector fallback could not be launched for '" + format_path_leaf(normalized_subtitle_path) +
-                "'. Continuing with the normal subtitle font resolution path.",
+            "FontCollector could not be launched for '" + format_path_leaf(normalized_subtitle_path) +
+                "'. ASS subtitle rendering cannot start.",
             tool_run_result.failure_message.empty()
                 ? "The tool launch failed before FontCollector could inspect the subtitle script."
                 : tool_run_result.failure_message
@@ -317,10 +360,10 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
             *fontcollector_executable,
             artifacts->font_directory_,
             prepared_request.font_recovery_report.tool_log_path,
-            "FontCollector fallback failed for '" + format_path_leaf(normalized_subtitle_path) + "' with exit code " +
+            "FontCollector failed for '" + format_path_leaf(normalized_subtitle_path) + "' with exit code " +
                 std::to_string(tool_run_result.exit_code) +
-                ". Continuing with the normal subtitle font resolution path.",
-            "Review the FontCollector invocation and subtitle script compatibility if the wrong fonts persist."
+                ". ASS subtitle rendering cannot start.",
+            "Review the FontCollector log, invocation, and subtitle script compatibility."
         );
         prepared_request.font_recovery_report.recovered_font_files = artifacts->recovered_font_files_;
         return prepared_request;
@@ -335,8 +378,8 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
             .tool_log_path = prepared_request.font_recovery_report.tool_log_path,
             .recovered_font_files = {},
             .message = "FontCollector ran for '" + format_path_leaf(normalized_subtitle_path) +
-                "' but did not recover any additional font files. Continuing with the normal subtitle font resolution "
-                "path.",
+                "' but did not stage any font files. The renderer will continue with libassmod's normal font "
+                "provider because there is no recovered font directory to apply.",
             .actionable_hint =
                 "If the rendered subtitle fonts are still wrong, confirm that the ASS script references installed fonts "
                 "and that FontCollector can access them on this machine.",
@@ -361,6 +404,11 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
         .recovered_fonts_applied = true
     };
     return prepared_request;
+}
+
+bool font_recovery_blocks_subtitle_rendering(const SubtitleFontRecoveryReport &report) noexcept {
+    return report.outcome == SubtitleFontRecoveryOutcome::tool_unavailable ||
+        report.outcome == SubtitleFontRecoveryOutcome::failed;
 }
 
 const char *to_string(const SubtitleFontRecoveryOutcome outcome) noexcept {

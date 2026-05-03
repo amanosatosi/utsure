@@ -76,6 +76,7 @@ struct PreparedSubtitleRenderSessionRequest final {
     const SubtitleFontRecoveryOptions &options = {}
 );
 
+[[nodiscard]] bool font_recovery_blocks_subtitle_rendering(const SubtitleFontRecoveryReport &report) noexcept;
 [[nodiscard]] const char *to_string(SubtitleFontRecoveryOutcome outcome) noexcept;
 
 }  // namespace utsure::core::subtitles
