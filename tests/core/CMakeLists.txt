@@ -1064,6 +1064,11 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.subtitles.compositor.direct_offscreen_rgba
+    COMMAND utsure_core_subtitle_bitmap_compositor_tests --direct-offscreen
+)
+
+add_test(
     NAME utsure.core.subtitles.compositor.invalid_bitmap
     COMMAND utsure_core_subtitle_bitmap_compositor_tests --invalid-bitmap
 )

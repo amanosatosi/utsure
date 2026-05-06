@@ -24,6 +24,7 @@ extern "C" {
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -306,8 +307,38 @@ std::uint8_t ass_color_opacity(const std::uint32_t color) noexcept {
     return static_cast<std::uint8_t>(255U - (color & 0xFFU));
 }
 
+int packed_rgba_stride_bytes(const int width, const std::string_view label) {
+    const std::int64_t stride = static_cast<std::int64_t>(width) * 4LL;
+    if (width <= 0 || stride <= 0 || stride > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
+        std::ostringstream message;
+        message << "Cannot safely copy a libassmod RGBA subtitle " << label
+                << " into app-owned memory because its packed row size is invalid: width="
+                << width << '.';
+        throw runtime_policy::RuntimeAnomalyError(
+            runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+            message.str()
+        );
+    }
+
+    return static_cast<int>(stride);
+}
+
 SubtitleBitmap copy_ass_image_rgba(const ASS_ImageRGBA &image) {
-    const int line_stride_bytes = image.w * 4;
+    const int line_stride_bytes = packed_rgba_stride_bytes(image.w, "bitmap");
+    if (image.rgba == nullptr || image.stride < line_stride_bytes) {
+        std::ostringstream message;
+        message << "Cannot safely copy a libassmod RGBA subtitle bitmap into app-owned memory: origin="
+                << image.dst_x << ',' << image.dst_y
+                << ", width=" << image.w
+                << ", height=" << image.h
+                << ", stride=" << image.stride
+                << ", rgba=" << static_cast<const void *>(image.rgba) << '.';
+        throw runtime_policy::RuntimeAnomalyError(
+            runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+            message.str()
+        );
+    }
+
     std::vector<std::uint8_t> bytes(detail::required_rgba_buffer_size(
         image.w,
         image.h,

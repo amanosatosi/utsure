@@ -4,8 +4,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 
 namespace utsure::core::subtitles::detail {
 
@@ -26,6 +28,104 @@ std::string describe_bitmap_surface(const PremultipliedRgbaBitmapView &bitmap) {
             << ", stride=" << bitmap.line_stride_bytes
             << ", bytes=" << (bitmap.bytes != nullptr ? "present" : "null");
     return message.str();
+}
+
+struct ClippedBitmapRegion final {
+    int left{0};
+    int top{0};
+    int right{0};
+    int bottom{0};
+};
+
+std::optional<ClippedBitmapRegion> clip_bitmap_to_destination(
+    const media::DecodedVideoFrame &video_frame,
+    const PremultipliedRgbaBitmapView &bitmap
+) {
+    if (bitmap.width <= 0 || bitmap.height <= 0) {
+        return std::nullopt;
+    }
+
+    const std::int64_t bitmap_left = static_cast<std::int64_t>(bitmap.origin_x);
+    const std::int64_t bitmap_top = static_cast<std::int64_t>(bitmap.origin_y);
+    const std::int64_t bitmap_right = bitmap_left + static_cast<std::int64_t>(bitmap.width);
+    const std::int64_t bitmap_bottom = bitmap_top + static_cast<std::int64_t>(bitmap.height);
+    const std::int64_t clipped_left64 = std::max<std::int64_t>(0, bitmap_left);
+    const std::int64_t clipped_top64 = std::max<std::int64_t>(0, bitmap_top);
+    const std::int64_t clipped_right64 = std::min<std::int64_t>(video_frame.width, bitmap_right);
+    const std::int64_t clipped_bottom64 = std::min<std::int64_t>(video_frame.height, bitmap_bottom);
+    if (clipped_left64 >= clipped_right64 || clipped_top64 >= clipped_bottom64) {
+        return std::nullopt;
+    }
+
+    return ClippedBitmapRegion{
+        .left = static_cast<int>(clipped_left64),
+        .top = static_cast<int>(clipped_top64),
+        .right = static_cast<int>(clipped_right64),
+        .bottom = static_cast<int>(clipped_bottom64)
+    };
+}
+
+void validate_bitmap_read_window(
+    const PremultipliedRgbaBitmapView &bitmap,
+    const ClippedBitmapRegion &region
+) {
+    if (bitmap.bytes == nullptr) {
+        throw std::runtime_error(
+            "Premultiplied RGBA composition received a truncated frame or bitmap buffer. bitmap=" +
+            describe_bitmap_surface(bitmap)
+        );
+    }
+
+    if (bitmap.line_stride_bytes <= 0) {
+        throw std::runtime_error(
+            "Premultiplied RGBA composition received an invalid bitmap surface: " +
+            describe_bitmap_surface(bitmap)
+        );
+    }
+
+    const std::int64_t max_source_x =
+        static_cast<std::int64_t>(region.right) - static_cast<std::int64_t>(bitmap.origin_x) - 1LL;
+    const std::int64_t max_source_y =
+        static_cast<std::int64_t>(region.bottom) - static_cast<std::int64_t>(bitmap.origin_y) - 1LL;
+    if (max_source_x < 0 || max_source_y < 0 ||
+        max_source_x >= static_cast<std::int64_t>(bitmap.width) ||
+        max_source_y >= static_cast<std::int64_t>(bitmap.height)) {
+        throw std::runtime_error(
+            "Premultiplied RGBA composition produced an invalid clipped source window. bitmap=" +
+            describe_bitmap_surface(bitmap)
+        );
+    }
+
+    const std::uint64_t required_row_bytes =
+        (static_cast<std::uint64_t>(max_source_x) + 1ULL) * 4ULL;
+    if (required_row_bytes > static_cast<std::uint64_t>(std::numeric_limits<int>::max()) ||
+        static_cast<std::uint64_t>(bitmap.line_stride_bytes) < required_row_bytes) {
+        std::ostringstream message;
+        message << "Premultiplied RGBA composition received an invalid bitmap surface: "
+                << describe_bitmap_surface(bitmap)
+                << ", required_visible_row_bytes=" << required_row_bytes << '.';
+        throw std::runtime_error(message.str());
+    }
+
+    if (max_source_y > 0 &&
+        static_cast<std::uint64_t>(bitmap.line_stride_bytes) >
+            (static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) /
+             static_cast<std::uint64_t>(max_source_y))) {
+        throw std::runtime_error(
+            "Premultiplied RGBA composition overflowed the bitmap row offset calculation. bitmap=" +
+            describe_bitmap_surface(bitmap)
+        );
+    }
+
+    const std::uint64_t max_row_offset =
+        static_cast<std::uint64_t>(max_source_y) * static_cast<std::uint64_t>(bitmap.line_stride_bytes);
+    if (max_row_offset >
+        static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) - required_row_bytes) {
+        throw std::runtime_error(
+            "Premultiplied RGBA composition overflowed the bitmap source window calculation. bitmap=" +
+            describe_bitmap_surface(bitmap)
+        );
+    }
 }
 
 }  // namespace
@@ -101,37 +201,14 @@ void composite_premultiplied_rgba_bitmap_into_frame(
     validate_rgba_frame_surface(video_frame, "Premultiplied RGBA composition");
 
     auto &plane = video_frame.planes.front();
-    [[maybe_unused]] const auto required_bitmap_bytes = required_rgba_buffer_size(
-        bitmap.width,
-        bitmap.height,
-        bitmap.line_stride_bytes,
-        "bitmap"
-    );
-    if (bitmap.bytes == nullptr) {
-        throw std::runtime_error(
-            "Premultiplied RGBA composition received a truncated frame or bitmap buffer. " +
-            describe_destination_surface(video_frame) + "; bitmap=" + describe_bitmap_surface(bitmap)
-        );
-    }
-
-    const std::int64_t bitmap_left = static_cast<std::int64_t>(bitmap.origin_x);
-    const std::int64_t bitmap_top = static_cast<std::int64_t>(bitmap.origin_y);
-    const std::int64_t bitmap_right = bitmap_left + static_cast<std::int64_t>(bitmap.width);
-    const std::int64_t bitmap_bottom = bitmap_top + static_cast<std::int64_t>(bitmap.height);
-    const std::int64_t clipped_left64 = std::max<std::int64_t>(0, bitmap_left);
-    const std::int64_t clipped_top64 = std::max<std::int64_t>(0, bitmap_top);
-    const std::int64_t clipped_right64 = std::min<std::int64_t>(video_frame.width, bitmap_right);
-    const std::int64_t clipped_bottom64 = std::min<std::int64_t>(video_frame.height, bitmap_bottom);
-    if (clipped_left64 >= clipped_right64 || clipped_top64 >= clipped_bottom64) {
+    const auto clipped_region = clip_bitmap_to_destination(video_frame, bitmap);
+    if (!clipped_region.has_value()) {
         return;
     }
 
-    const int clipped_left = static_cast<int>(clipped_left64);
-    const int clipped_top = static_cast<int>(clipped_top64);
-    const int clipped_right = static_cast<int>(clipped_right64);
-    const int clipped_bottom = static_cast<int>(clipped_bottom64);
+    validate_bitmap_read_window(bitmap, *clipped_region);
 
-    for (int destination_y = clipped_top; destination_y < clipped_bottom; ++destination_y) {
+    for (int destination_y = clipped_region->top; destination_y < clipped_region->bottom; ++destination_y) {
         const int source_y = destination_y - bitmap.origin_y;
         if (source_y < 0 || source_y >= bitmap.height) {
             throw std::runtime_error(
@@ -145,7 +222,7 @@ void composite_premultiplied_rgba_bitmap_into_frame(
         const auto *source_row = bitmap.bytes +
             static_cast<std::size_t>(source_y) * static_cast<std::size_t>(bitmap.line_stride_bytes);
 
-        for (int destination_x = clipped_left; destination_x < clipped_right; ++destination_x) {
+        for (int destination_x = clipped_region->left; destination_x < clipped_region->right; ++destination_x) {
             const int source_x = destination_x - bitmap.origin_x;
             if (source_x < 0 || source_x >= bitmap.width) {
                 throw std::runtime_error(

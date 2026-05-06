@@ -119,6 +119,40 @@ int run_clipped_direct_view_assertion() {
     return 0;
 }
 
+int run_offscreen_direct_view_assertion() {
+    DecodedVideoFrame frame{
+        .width = 2,
+        .height = 1,
+        .pixel_format = NormalizedVideoPixelFormat::rgba8,
+        .planes = {VideoPlane{
+            .line_stride_bytes = 8,
+            .visible_width = 2,
+            .visible_height = 1,
+            .bytes = {11U, 12U, 13U, 255U, 21U, 22U, 23U, 255U}
+        }}
+    };
+    const auto expected_bytes = frame.planes.front().bytes;
+
+    composite_premultiplied_rgba_bitmap_into_frame(
+        frame,
+        PremultipliedRgbaBitmapView{
+            .origin_x = 40,
+            .origin_y = 40,
+            .width = 4,
+            .height = 4,
+            .line_stride_bytes = 0,
+            .bytes = nullptr
+        }
+    );
+
+    if (frame.planes.front().bytes != expected_bytes) {
+        return fail("Offscreen direct premultiplied RGBA bitmap unexpectedly changed the frame.");
+    }
+
+    std::cout << "direct_offscreen=skipped\n";
+    return 0;
+}
+
 int run_invalid_bitmap_assertion() {
     DecodedVideoFrame frame{
         .width = 2,
@@ -163,7 +197,7 @@ int main(int argc, char *argv[]) {
     if (argc != 2) {
         return fail(
             "Usage: utsure_core_subtitle_bitmap_compositor_tests "
-            "[--premultiplied|--direct-clipped|--invalid-bitmap]"
+            "[--premultiplied|--direct-clipped|--direct-offscreen|--invalid-bitmap]"
         );
     }
 
@@ -176,9 +210,13 @@ int main(int argc, char *argv[]) {
         return run_clipped_direct_view_assertion();
     }
 
+    if (mode == "--direct-offscreen") {
+        return run_offscreen_direct_view_assertion();
+    }
+
     if (mode == "--invalid-bitmap") {
         return run_invalid_bitmap_assertion();
     }
 
-    return fail("Unknown mode. Use --premultiplied, --direct-clipped, or --invalid-bitmap.");
+    return fail("Unknown mode. Use --premultiplied, --direct-clipped, --direct-offscreen, or --invalid-bitmap.");
 }
