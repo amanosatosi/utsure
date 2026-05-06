@@ -11,6 +11,7 @@
 #include "utsure/core/media/media_inspector.hpp"
 #include "utsure/core/media/source_import_paths.hpp"
 #include "utsure/core/subtitles/subtitle_auto_selection.hpp"
+#include "utsure/core/subtitles/thumbnail_preroll.hpp"
 
 #include <QAbstractButton>
 #include <QAbstractItemView>
@@ -1645,30 +1646,36 @@ QLabel#PreviewTimeBadge {
 
     auto *thumbnail_group = new QGroupBox("Thumbnail Pre-roll", special_tab_content);
     auto *thumbnail_layout = new QGridLayout(thumbnail_group);
+    thumbnail_enable_check_ = new QCheckBox("Enable thumbnail pre-roll", thumbnail_group);
     const auto thumbnail_row = create_path_field(
         thumbnail_group,
-        "Temporary placeholder for ./thumbnail.* or generated black frame",
+        "Auto TN.* from subtitle folder or manual image",
         "Choose thumbnail image"
     );
     thumbnail_image_path_edit_ = thumbnail_row.line_edit;
     thumbnail_image_browse_button_ = thumbnail_row.browse_button;
     thumbnail_title_edit_ = new QLineEdit(thumbnail_group);
-    thumbnail_title_edit_->setPlaceholderText("Temporary placeholder for thumbnail.ass Actor=TNEPTITLE");
-    thumbnail_load_ass_button_ = new QPushButton("Load thumbnail.ass (placeholder)", thumbnail_group);
-    thumbnail_edit_title_button_ = new QPushButton("Edit title source (placeholder)", thumbnail_group);
-    thumbnail_layout->addWidget(new QLabel("Picture", thumbnail_group), 0, 0);
-    thumbnail_layout->addWidget(thumbnail_row.container, 0, 1);
-    thumbnail_layout->addWidget(new QLabel("Title", thumbnail_group), 1, 0);
-    thumbnail_layout->addWidget(thumbnail_title_edit_, 1, 1);
-    thumbnail_layout->addWidget(thumbnail_load_ass_button_, 2, 0);
-    thumbnail_layout->addWidget(thumbnail_edit_title_button_, 2, 1);
+    thumbnail_title_edit_->setPlaceholderText("logo.ass Dialogue actor/name EPNUMBER text");
+    thumbnail_auto_button_ = new QPushButton("Auto", thumbnail_group);
+    thumbnail_auto_button_->setToolTip("Load TN.* and logo.ass from the selected subtitle folder");
+    thumbnail_auto_button_->setCursor(Qt::PointingHandCursor);
+    thumbnail_reset_title_button_ = new QPushButton("Reset title", thumbnail_group);
+    thumbnail_reset_title_button_->setToolTip("Reload the EPNUMBER text from logo.ass");
+    thumbnail_reset_title_button_->setCursor(Qt::PointingHandCursor);
+    thumbnail_layout->addWidget(thumbnail_enable_check_, 0, 0, 1, 2);
+    thumbnail_layout->addWidget(new QLabel("Picture", thumbnail_group), 1, 0);
+    thumbnail_layout->addWidget(thumbnail_row.container, 1, 1);
+    thumbnail_layout->addWidget(new QLabel("Title", thumbnail_group), 2, 0);
+    thumbnail_layout->addWidget(thumbnail_title_edit_, 2, 1);
+    thumbnail_layout->addWidget(thumbnail_auto_button_, 3, 0);
+    thumbnail_layout->addWidget(thumbnail_reset_title_button_, 3, 1);
     auto *thumbnail_note = new QLabel(
-        "Temporary placeholder: the thumbnail image/title UI is visible now, but thumbnail.ass loading, editing, and burn-in integration will be wired in a later milestone.",
+        "When enabled, the rendered thumbnail is inserted as the first two output frames before intro, main, and endcard content.",
         thumbnail_group
     );
     thumbnail_note->setObjectName("MutedNote");
     thumbnail_note->setWordWrap(true);
-    thumbnail_layout->addWidget(thumbnail_note, 3, 0, 1, 2);
+    thumbnail_layout->addWidget(thumbnail_note, 4, 0, 1, 2);
     special_tab_layout->addWidget(thumbnail_group);
     special_tab_layout->addStretch(1);
     editor_tabs_->addTab(wrap_in_scroll_area(special_tab_content, editor_tabs_), "Special");
@@ -1900,8 +1907,8 @@ QLabel#PreviewTimeBadge {
     connect(endcard_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_endcard_clip);
     connect(endcard_music_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_endcard_music_file);
     connect(thumbnail_image_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_thumbnail_image);
-    connect(thumbnail_load_ass_button_, &QPushButton::clicked, this, &MainWindow::show_thumbnail_placeholder_note);
-    connect(thumbnail_edit_title_button_, &QPushButton::clicked, this, &MainWindow::show_thumbnail_placeholder_note);
+    connect(thumbnail_auto_button_, &QPushButton::clicked, this, &MainWindow::restore_selected_job_auto_thumbnail_selection);
+    connect(thumbnail_reset_title_button_, &QPushButton::clicked, this, &MainWindow::reset_selected_job_thumbnail_title);
 
     connect(queue_table_, &QTableWidget::itemChanged, this, &MainWindow::handle_queue_item_changed);
     connect(queue_table_, &QTableWidget::itemSelectionChanged, this, &MainWindow::handle_queue_selection_changed);
@@ -1942,6 +1949,28 @@ QLabel#PreviewTimeBadge {
     connect(endcard_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
     connect(endcard_music_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
     connect(endcard_music_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(thumbnail_enable_check_, &QCheckBox::clicked, this, [this](bool) {
+        if (!is_valid_job_index(selected_job_index_)) {
+            return;
+        }
+
+        jobs_[static_cast<std::size_t>(selected_job_index_)].thumbnail_image_manual_override = false;
+    });
+    connect(thumbnail_enable_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
+    connect(thumbnail_image_path_edit_, &QLineEdit::textEdited, this, [this](const QString &) {
+        if (!is_valid_job_index(selected_job_index_)) {
+            return;
+        }
+
+        jobs_[static_cast<std::size_t>(selected_job_index_)].thumbnail_image_manual_override = true;
+    });
+    connect(thumbnail_title_edit_, &QLineEdit::textEdited, this, [this](const QString &) {
+        if (!is_valid_job_index(selected_job_index_)) {
+            return;
+        }
+
+        jobs_[static_cast<std::size_t>(selected_job_index_)].thumbnail_title_manual_override = true;
+    });
     connect(thumbnail_image_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
     connect(thumbnail_title_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
     connect(video_codec_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [bind_editor_change](int) { bind_editor_change(); });
@@ -2095,6 +2124,11 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job_from_entry(
         return std::nullopt;
     }
 
+    if (entry.thumbnail_enabled && (!entry.subtitle_enabled || entry.subtitle_path.trimmed().isEmpty())) {
+        error_message = "Thumbnail pre-roll needs a selected subtitle so TN.* and logo.ass can be resolved from that folder.";
+        return std::nullopt;
+    }
+
     utsure::core::job::EncodeJob job{};
     job.input.main_source_path = qstring_to_path(entry.source_path);
     job.output.output_path = qstring_to_path(entry.output_path);
@@ -2136,8 +2170,21 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job_from_entry(
         job.input.outro_source_path = qstring_to_path(entry.endcard_path);
     }
 
-    // Thumbnail pre-roll and intro/endcard music remain UI-only placeholders in this milestone
-    // because encoder-core does not expose the corresponding contracts yet.
+    if (entry.thumbnail_enabled) {
+        job.thumbnail_preroll = utsure::core::job::EncodeJobThumbnailPrerollSettings{
+            .enabled = true,
+            .auto_select = !entry.thumbnail_image_manual_override,
+            .image_path = (!entry.thumbnail_image_manual_override || entry.thumbnail_image_path.trimmed().isEmpty())
+                ? std::optional<std::filesystem::path>{}
+                : std::optional<std::filesystem::path>(qstring_to_path(entry.thumbnail_image_path)),
+            .overlay_ass_path = std::nullopt,
+            .title_text_override = entry.thumbnail_title_manual_override,
+            .title_text = entry.thumbnail_title.trimmed().toUtf8().toStdString()
+        };
+    }
+
+    // Intro/endcard music remains UI-only because encoder-core does not expose separate
+    // per-segment music replacement contracts yet.
     return job;
 }
 
@@ -2634,6 +2681,7 @@ void MainWindow::choose_subtitle_file() {
                 .arg(queue_source_display_name(job))
                 .arg(QFileInfo(selected_path).fileName())
         );
+        apply_automatic_thumbnail_selection(selected_job_index_, false);
     }
 }
 
@@ -2647,6 +2695,7 @@ void MainWindow::restore_selected_job_auto_subtitle_selection() {
     if (!decision_summary.trimmed().isEmpty()) {
         append_session_log("[info] " + decision_summary);
     }
+    apply_automatic_thumbnail_selection(selected_job_index_, false);
     refresh_all_views();
 }
 
@@ -2712,16 +2761,61 @@ void MainWindow::choose_thumbnail_image() {
         image_file_filter()
     );
     if (!selected_path.isEmpty()) {
+        if (is_valid_job_index(selected_job_index_)) {
+            auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+            job.thumbnail_enabled = true;
+            job.thumbnail_image_manual_override = true;
+            thumbnail_enable_check_->setChecked(true);
+        }
         thumbnail_image_path_edit_->setText(QDir::toNativeSeparators(selected_path));
     }
 }
 
-void MainWindow::show_thumbnail_placeholder_note() {
-    QMessageBox::information(
-        this,
-        "Thumbnail Placeholder",
-        "The thumbnail subtitle-file editing/loading flow is intentionally placeholder-only in this milestone.\n\nThe UI is present so the workflow is visible, but thumbnail.ass parsing and temporary-file save behavior will be added later."
-    );
+void MainWindow::restore_selected_job_auto_thumbnail_selection() {
+    if (!is_valid_job_index(selected_job_index_)) {
+        return;
+    }
+
+    QString decision_summary{};
+    apply_automatic_thumbnail_selection(selected_job_index_, true, &decision_summary);
+    if (!decision_summary.trimmed().isEmpty()) {
+        append_session_log("[info] " + decision_summary);
+    }
+    refresh_all_views();
+}
+
+void MainWindow::reset_selected_job_thumbnail_title() {
+    if (!is_valid_job_index(selected_job_index_)) {
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    if (job.thumbnail_overlay_ass_path.trimmed().isEmpty()) {
+        QString decision_summary{};
+        apply_automatic_thumbnail_selection(selected_job_index_, true, &decision_summary);
+        if (!decision_summary.trimmed().isEmpty()) {
+            append_session_log("[info] " + decision_summary);
+        }
+        refresh_all_views();
+        return;
+    }
+
+    const auto title_text =
+        utsure::core::subtitles::ThumbnailPrerollResolver::extract_epnumber_text(
+            qstring_to_path(job.thumbnail_overlay_ass_path)
+        );
+    if (!title_text.has_value()) {
+        append_session_log("[warning] Thumbnail pre-roll could not reload EPNUMBER text from logo.ass.");
+        return;
+    }
+
+    job.thumbnail_title = to_qstring(*title_text);
+    job.thumbnail_title_manual_override = false;
+    if (thumbnail_title_edit_ != nullptr) {
+        const QSignalBlocker blocker(thumbnail_title_edit_);
+        thumbnail_title_edit_->setText(job.thumbnail_title);
+    }
+    refresh_all_views();
 }
 
 void MainWindow::handle_queue_selection_changed() {
@@ -3619,6 +3713,7 @@ void MainWindow::sync_selected_job_from_editor() {
     job.endcard_path = endcard_path_edit_->text().trimmed();
     job.endcard_music_enabled = endcard_music_check_->isChecked();
     job.endcard_music_path = endcard_music_path_edit_->text().trimmed();
+    job.thumbnail_enabled = thumbnail_enable_check_->isChecked();
     job.thumbnail_image_path = thumbnail_image_path_edit_->text().trimmed();
     job.thumbnail_title = thumbnail_title_edit_->text().trimmed();
     job.video_codec = static_cast<utsure::core::media::OutputVideoCodec>(video_codec_combo_->currentData().toInt());
@@ -3633,6 +3728,9 @@ void MainWindow::sync_selected_job_from_editor() {
     }
     if (!job.subtitle_manual_override) {
         apply_automatic_subtitle_selection(selected_job_index_, false);
+    }
+    if (job.thumbnail_enabled && !job.thumbnail_image_manual_override) {
+        apply_automatic_thumbnail_selection(selected_job_index_, false);
     }
 
     if (job.state == UiJobState::pending) {
@@ -3661,6 +3759,7 @@ void MainWindow::load_selected_job_into_editor() {
         endcard_path_edit_->clear();
         endcard_music_check_->setChecked(false);
         endcard_music_path_edit_->clear();
+        thumbnail_enable_check_->setChecked(false);
         video_codec_combo_->setCurrentIndex(0);
         preset_combo_->setCurrentText("fast");
         crf_spin_box_->setValue(22);
@@ -3684,6 +3783,7 @@ void MainWindow::load_selected_job_into_editor() {
         endcard_path_edit_->setText(job.endcard_path);
         endcard_music_check_->setChecked(job.endcard_music_enabled);
         endcard_music_path_edit_->setText(job.endcard_music_path);
+        thumbnail_enable_check_->setChecked(job.thumbnail_enabled);
         video_codec_combo_->setCurrentIndex(video_codec_combo_->findData(static_cast<int>(job.video_codec)));
         preset_combo_->setCurrentText(job.video_preset);
         crf_spin_box_->setValue(job.video_crf);
@@ -3718,6 +3818,7 @@ void MainWindow::select_job(const int index) {
     if (!queue_run_active_) {
         apply_generated_output_path(index, false);
         apply_automatic_subtitle_selection(index, false);
+        apply_automatic_thumbnail_selection(index, false);
     }
 
     if (queue_table_ != nullptr && index < queue_table_->rowCount() && queue_table_->currentRow() != index) {
@@ -3801,6 +3902,7 @@ void MainWindow::ensure_job_inspection(const int job_index) {
         job.source_inspection_error = to_qstring(inspection_result.error->message);
         job.audio_track_display = "No source audio detected";
         apply_automatic_subtitle_selection(job_index, false);
+        apply_automatic_thumbnail_selection(job_index, false);
         return;
     }
 
@@ -3817,6 +3919,7 @@ void MainWindow::ensure_job_inspection(const int job_index) {
     job.trim_in_us = std::clamp<qint64>(job.trim_in_us, 0, std::max<qint64>(job.duration_us, 0));
     job.trim_out_us = std::clamp<qint64>(job.trim_out_us, job.trim_in_us, std::max<qint64>(job.duration_us, 0));
     apply_automatic_subtitle_selection(job_index, false);
+    apply_automatic_thumbnail_selection(job_index, false);
 }
 
 void MainWindow::reset_job_for_rerun(UiEncodeJob &job) {
@@ -3974,6 +4077,78 @@ void MainWindow::apply_automatic_subtitle_selection(
     }
 }
 
+void MainWindow::apply_automatic_thumbnail_selection(
+    const int job_index,
+    const bool force_auto_mode,
+    QString *decision_summary
+) {
+    if (decision_summary != nullptr) {
+        decision_summary->clear();
+    }
+    if (!is_valid_job_index(job_index)) {
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(job_index)];
+    if (force_auto_mode) {
+        job.thumbnail_enabled = true;
+        job.thumbnail_image_manual_override = false;
+        job.thumbnail_title_manual_override = false;
+    }
+    if (!job.thumbnail_enabled || job.thumbnail_image_manual_override) {
+        return;
+    }
+    if (!job.inspected_source_info.has_value() ||
+        !job.inspected_source_info->primary_video_stream.has_value() ||
+        job.subtitle_path.trimmed().isEmpty()) {
+        if (decision_summary != nullptr && job.thumbnail_enabled) {
+            *decision_summary = "Thumbnail pre-roll needs an inspected source video and selected subtitle before auto selection.";
+        }
+        return;
+    }
+
+    const auto &video_stream = *job.inspected_source_info->primary_video_stream;
+    const auto resolve_result = utsure::core::subtitles::ThumbnailPrerollResolver::resolve(
+        utsure::core::subtitles::ThumbnailPrerollResolveRequest{
+            .enabled = true,
+            .subtitle_path = qstring_to_path(job.subtitle_path),
+            .explicit_image_path = std::nullopt,
+            .explicit_overlay_ass_path = std::nullopt,
+            .required_width = video_stream.width,
+            .required_height = video_stream.height
+        }
+    );
+    if (decision_summary != nullptr) {
+        *decision_summary = to_qstring(resolve_result.decision_summary);
+    }
+
+    if (resolve_result.has_assets()) {
+        job.thumbnail_image_path = path_to_qstring(resolve_result.assets->image_path);
+        job.thumbnail_overlay_ass_path = path_to_qstring(resolve_result.assets->overlay_ass_path);
+        if (!job.thumbnail_title_manual_override) {
+            job.thumbnail_title = to_qstring(resolve_result.assets->title_text);
+        }
+    } else {
+        job.thumbnail_image_path.clear();
+        job.thumbnail_overlay_ass_path.clear();
+        if (!job.thumbnail_title_manual_override) {
+            job.thumbnail_title.clear();
+        }
+    }
+
+    if (job_index == selected_job_index_ &&
+        thumbnail_enable_check_ != nullptr &&
+        thumbnail_image_path_edit_ != nullptr &&
+        thumbnail_title_edit_ != nullptr) {
+        const QSignalBlocker enabled_blocker(thumbnail_enable_check_);
+        const QSignalBlocker image_blocker(thumbnail_image_path_edit_);
+        const QSignalBlocker title_blocker(thumbnail_title_edit_);
+        thumbnail_enable_check_->setChecked(job.thumbnail_enabled);
+        thumbnail_image_path_edit_->setText(job.thumbnail_image_path);
+        thumbnail_title_edit_->setText(job.thumbnail_title);
+    }
+}
+
 void MainWindow::refresh_all_views() {
     refresh_queue_table();
     refresh_editor_state();
@@ -4069,11 +4244,12 @@ void MainWindow::refresh_editor_state() {
     audio_format_combo_->setEnabled(editable);
     audio_quality_combo_->setEnabled(audio_quality_enabled);
     audio_track_combo_->setEnabled(editable);
-    thumbnail_image_path_edit_->setEnabled(editable);
-    thumbnail_image_browse_button_->setEnabled(editable);
-    thumbnail_title_edit_->setEnabled(editable);
-    thumbnail_load_ass_button_->setEnabled(editable);
-    thumbnail_edit_title_button_->setEnabled(editable);
+    thumbnail_enable_check_->setEnabled(editable);
+    thumbnail_image_path_edit_->setEnabled(editable && thumbnail_enable_check_->isChecked());
+    thumbnail_image_browse_button_->setEnabled(editable && thumbnail_enable_check_->isChecked());
+    thumbnail_title_edit_->setEnabled(editable && thumbnail_enable_check_->isChecked());
+    thumbnail_auto_button_->setEnabled(editable);
+    thumbnail_reset_title_button_->setEnabled(editable && thumbnail_enable_check_->isChecked());
 
     if (!has_job && preview_enabled_check_->isChecked()) {
         const QSignalBlocker blocker(preview_enabled_check_);
@@ -4122,8 +4298,10 @@ void MainWindow::refresh_selected_job_details() {
     detail_speed_value_->setText(display_text_or_fallback(job.speed_display, "--"));
     detail_input_size_value_->setText(format_file_size(job.input_size_bytes));
     detail_output_size_value_->setText(format_file_size(job.output_size_bytes));
+    const QString thumbnail_label = job.thumbnail_enabled ? "Thumb -> " : QString();
     detail_timeline_value_->setText(
-        QString("Thumb -> Intro -> Main [%1 to %2] -> EndCard")
+        QString("%1Intro -> Main [%2 to %3] -> EndCard")
+            .arg(thumbnail_label)
             .arg(format_time_us(job.trim_in_us))
             .arg(format_time_us(job.trim_out_us))
     );

@@ -2,6 +2,7 @@
 
 #include "utsure/core/job/encode_job.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -25,7 +26,8 @@ enum class EncodeJobPreflightIssueCode : std::uint8_t {
     output_will_be_overwritten,
     working_set_limit_exceeded,
     timeline_validation_failed,
-    subtitle_validation_failed
+    subtitle_validation_failed,
+    thumbnail_validation_failed
 };
 
 struct EncodeJobPreflightIssue final {
@@ -48,6 +50,7 @@ struct EncodeJobPreviewSummary final {
     EncodeJobProcessPriority process_priority{EncodeJobProcessPriority::below_normal};
     bool subtitles_enabled{false};
     timeline::SubtitleTimingMode subtitle_timing_mode{timeline::SubtitleTimingMode::main_segment_only};
+    bool thumbnail_preroll_enabled{false};
     bool output_exists{false};
 };
 

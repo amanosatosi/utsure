@@ -1,12 +1,14 @@
 #include "streaming_transcode_pipeline.hpp"
 
 #include "ffmpeg_media_support.hpp"
+#include "utsure/core/media/media_decoder.hpp"
 #include "transcode_threading.hpp"
 #include "../runtime_anomaly_policy.hpp"
 #include "../subtitles/subtitle_bitmap_compositor.hpp"
 #include "../subtitles/subtitle_runtime_options.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 #include "utsure/core/subtitles/subtitle_font_recovery.hpp"
+#include "utsure/core/subtitles/thumbnail_preroll.hpp"
 
 extern "C" {
 #include <libavutil/mathematics.h>
@@ -27,6 +29,8 @@ extern "C" {
 #include <deque>
 #include <exception>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <limits>
 #include <memory>
@@ -277,6 +281,19 @@ struct ProcessedVideoFrameOutput final {
     QueuedVideoFrameOutput output{};
     std::uint64_t process_microseconds{0};
     std::uint64_t subtitle_compose_microseconds{0};
+};
+
+struct PreparedThumbnailPrerollFrame final {
+    DecodedVideoFrame frame{};
+    std::filesystem::path image_path{};
+    std::filesystem::path overlay_ass_path{};
+    std::string title_text{};
+    bool overlay_applied{false};
+};
+
+struct ThumbnailPrerollEmitResult final {
+    std::int64_t video_frame_count{0};
+    std::int64_t audio_block_count{0};
 };
 
 struct EncoderSelection final {
@@ -3253,6 +3270,89 @@ DecodedAudioSamples make_output_audio_block(
     };
 }
 
+ThumbnailPrerollEmitResult emit_thumbnail_preroll_frames(
+    const PreparedThumbnailPrerollFrame &thumbnail,
+    const timeline::TimelinePlan &timeline_plan,
+    const VideoOutputPlan &video_output_plan,
+    const DecodeNormalizationPolicy &normalization_policy,
+    const std::optional<AudioOutputPlan> &audio_output_plan,
+    StreamingOutputSession &output_session,
+    StreamingEncodeProgressEmitter &progress_emitter,
+    StreamingPerformanceMetrics &performance_metrics,
+    std::int64_t &next_output_frame_index,
+    std::int64_t &next_output_video_pts,
+    std::int64_t &next_output_audio_pts
+) {
+    constexpr std::int64_t kThumbnailPrerollFrameCount = 2;
+    ThumbnailPrerollEmitResult result{};
+
+    for (std::int64_t frame_offset = 0; frame_offset < kThumbnailPrerollFrameCount; ++frame_offset) {
+        auto frame = thumbnail.frame;
+        frame.stream_index = -1;
+        frame.frame_index = next_output_frame_index;
+        frame.sample_aspect_ratio = video_output_plan.sample_aspect_ratio;
+        frame.timestamp = MediaTimestamp{
+            .source_time_base = timeline_plan.output_video_time_base,
+            .source_pts = next_output_video_pts,
+            .source_duration = video_output_plan.frame_duration_pts,
+            .origin = TimestampOrigin::stream_cursor,
+            .start_microseconds = rescale_to_microseconds(next_output_video_pts, timeline_plan.output_video_time_base),
+            .duration_microseconds = video_output_plan.frame_duration_microseconds
+        };
+
+        StreamingVideoFrame video_frame{
+            .native_frame = {},
+            .metadata = std::move(frame)
+        };
+
+        const auto encode_start = std::chrono::steady_clock::now();
+        output_session.push_frame(std::move(video_frame));
+        add_stage_timing(performance_metrics.video_encode, std::chrono::steady_clock::now() - encode_start);
+
+        next_output_video_pts += video_output_plan.frame_duration_pts;
+        ++next_output_frame_index;
+        ++result.video_frame_count;
+        progress_emitter.record_frame_written(
+            static_cast<std::uint64_t>(next_output_frame_index),
+            rescale_to_microseconds(next_output_video_pts, timeline_plan.output_video_time_base)
+        );
+    }
+
+    if (audio_output_plan.has_value() && audio_output_plan->encodes_audio()) {
+        if (normalization_policy.audio_block_samples <= 0) {
+            throw std::runtime_error("Thumbnail pre-roll audio silence requires a positive normalized audio block size.");
+        }
+
+        const auto audio_samples = rescale_value(
+            video_output_plan.frame_duration_pts * kThumbnailPrerollFrameCount,
+            timeline_plan.output_video_time_base,
+            audio_output_plan->time_base
+        );
+        std::int64_t remaining_samples = std::max<std::int64_t>(audio_samples, 0);
+        while (remaining_samples > 0) {
+            const int samples_to_emit = static_cast<int>(std::min<std::int64_t>(
+                remaining_samples,
+                normalization_policy.audio_block_samples
+            ));
+            auto audio_block = make_output_audio_block(
+                *audio_output_plan,
+                normalization_policy,
+                result.audio_block_count,
+                next_output_audio_pts,
+                samples_to_emit,
+                true,
+                {}
+            );
+            output_session.push_audio_block(audio_block);
+            next_output_audio_pts += samples_to_emit;
+            remaining_samples -= samples_to_emit;
+            ++result.audio_block_count;
+        }
+    }
+
+    return result;
+}
+
 std::vector<std::vector<float>> copy_audio_block_range(
     const std::vector<std::vector<float>> &channel_samples,
     const int start_sample_index,
@@ -4444,6 +4544,35 @@ struct PreparedSubtitleSession final {
     subtitles::SubtitleRenderSessionResult session_result{};
 };
 
+class ScopedTemporaryFile final {
+public:
+    explicit ScopedTemporaryFile(std::optional<std::filesystem::path> path) noexcept
+        : path_(std::move(path)) {}
+
+    ScopedTemporaryFile(const ScopedTemporaryFile &) = delete;
+    ScopedTemporaryFile &operator=(const ScopedTemporaryFile &) = delete;
+
+    ScopedTemporaryFile(ScopedTemporaryFile &&) = delete;
+    ScopedTemporaryFile &operator=(ScopedTemporaryFile &&) = delete;
+
+    ~ScopedTemporaryFile() {
+        remove_now();
+    }
+
+    void remove_now() noexcept {
+        if (!path_.has_value()) {
+            return;
+        }
+
+        std::error_code remove_error{};
+        std::filesystem::remove(*path_, remove_error);
+        path_.reset();
+    }
+
+private:
+    std::optional<std::filesystem::path> path_{};
+};
+
 PreparedSubtitleSession create_subtitle_session(
     subtitles::SubtitleRenderer &subtitle_renderer,
     const timeline::TimelinePlan &timeline_plan,
@@ -4489,6 +4618,214 @@ PreparedSubtitleSession create_subtitle_session(
     };
 }
 
+std::filesystem::path make_temporary_thumbnail_ass_path() {
+    static std::atomic<std::uint64_t> next_id{1};
+    std::error_code error{};
+    auto directory = std::filesystem::temp_directory_path(error);
+    if (error || directory.empty()) {
+        directory = std::filesystem::current_path(error);
+    }
+    if (error || directory.empty()) {
+        directory = ".";
+    }
+
+    const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+    return (directory /
+            ("utsure-thumbnail-logo-" + std::to_string(now) + "-" +
+             std::to_string(next_id.fetch_add(1, std::memory_order_relaxed)) + ".ass"))
+        .lexically_normal();
+}
+
+std::string read_text_file_or_throw(const std::filesystem::path &path, const std::string_view context) {
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream) {
+        throw std::runtime_error(
+            "Failed to read " + std::string(context) + " '" + path.lexically_normal().string() + "'."
+        );
+    }
+
+    return std::string{
+        std::istreambuf_iterator<char>(stream),
+        std::istreambuf_iterator<char>()
+    };
+}
+
+void write_text_file_or_throw(
+    const std::filesystem::path &path,
+    const std::string &text,
+    const std::string_view context
+) {
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    if (!stream) {
+        throw std::runtime_error(
+            "Failed to write " + std::string(context) + " '" + path.lexically_normal().string() + "'."
+        );
+    }
+
+    stream.write(text.data(), static_cast<std::streamsize>(text.size()));
+    if (!stream) {
+        throw std::runtime_error(
+            "Failed to finish writing " + std::string(context) + " '" + path.lexically_normal().string() + "'."
+        );
+    }
+}
+
+std::filesystem::path prepare_thumbnail_overlay_script(
+    const subtitles::ThumbnailPrerollAssets &assets,
+    const std::string &title_text,
+    const bool title_text_override,
+    std::optional<std::filesystem::path> &temporary_overlay_path
+) {
+    const std::string effective_title = title_text_override ? title_text : assets.title_text;
+    if (effective_title == assets.title_text) {
+        return assets.overlay_ass_path;
+    }
+
+    const auto source_text = read_text_file_or_throw(assets.overlay_ass_path, "thumbnail overlay script");
+    const auto edited_text = subtitles::ThumbnailPrerollResolver::replace_epnumber_text(
+        source_text,
+        effective_title
+    );
+    temporary_overlay_path = make_temporary_thumbnail_ass_path();
+    write_text_file_or_throw(*temporary_overlay_path, edited_text, "temporary thumbnail overlay script");
+    return *temporary_overlay_path;
+}
+
+PreparedThumbnailPrerollFrame prepare_thumbnail_preroll_frame(
+    const job::EncodeJobThumbnailPrerollSettings &settings,
+    const std::optional<job::EncodeJobSubtitleSettings> &subtitle_settings,
+    subtitles::SubtitleRenderer *subtitle_renderer,
+    const VideoOutputPlan &video_output_plan,
+    const std::function<void(const std::string &)> &log_callback
+) {
+    if (!subtitle_settings.has_value() || subtitle_settings->subtitle_path.empty()) {
+        throw std::runtime_error(
+            "Thumbnail pre-roll is enabled but no selected subtitle file is available for asset discovery."
+        );
+    }
+    if (subtitle_renderer == nullptr) {
+        throw std::runtime_error("Thumbnail pre-roll requires the libassmod-backed subtitle renderer.");
+    }
+
+    const auto resolve_result = subtitles::ThumbnailPrerollResolver::resolve(subtitles::ThumbnailPrerollResolveRequest{
+        .enabled = settings.enabled,
+        .auto_select = settings.auto_select,
+        .subtitle_path = subtitle_settings->subtitle_path,
+        .explicit_image_path = settings.image_path,
+        .explicit_overlay_ass_path = settings.overlay_ass_path,
+        .required_width = video_output_plan.width,
+        .required_height = video_output_plan.height
+    });
+    emit_runtime_log(log_callback, resolve_result.decision_summary);
+    for (const auto &diagnostic : resolve_result.diagnostics) {
+        emit_runtime_log(log_callback, "Thumbnail pre-roll diagnostic: " + diagnostic);
+    }
+
+    if (!resolve_result.has_assets()) {
+        throw std::runtime_error(
+            "Thumbnail pre-roll could not resolve usable assets. " + resolve_result.decision_summary
+        );
+    }
+
+    const auto &assets = *resolve_result.assets;
+    auto frame_result = MediaDecoder::decode_video_frame_at_time(
+        assets.image_path,
+        0,
+        DecodeNormalizationPolicy{
+            .video_pixel_format = NormalizedVideoPixelFormat::rgba8,
+            .audio_sample_format = NormalizedAudioSampleFormat::f32_planar,
+            .audio_block_samples = 1024,
+            .video_max_width = 0,
+            .video_max_height = 0
+        }
+    );
+    if (!frame_result.succeeded()) {
+        throw std::runtime_error(
+            "Thumbnail pre-roll failed to decode the selected thumbnail image. " + frame_result.error->message +
+            " Hint: " + frame_result.error->actionable_hint
+        );
+    }
+
+    auto thumbnail_frame = std::move(*frame_result.video_frame);
+    if (thumbnail_frame.width != video_output_plan.width || thumbnail_frame.height != video_output_plan.height) {
+        throw std::runtime_error(
+            "Thumbnail pre-roll decoded image size changed unexpectedly: " +
+            std::to_string(thumbnail_frame.width) + "x" + std::to_string(thumbnail_frame.height) +
+            ", expected " + std::to_string(video_output_plan.width) + "x" +
+            std::to_string(video_output_plan.height) + "."
+        );
+    }
+
+    std::optional<std::filesystem::path> temporary_overlay_path{};
+    const auto overlay_ass_path = prepare_thumbnail_overlay_script(
+        assets,
+        settings.title_text,
+        settings.title_text_override,
+        temporary_overlay_path
+    );
+    ScopedTemporaryFile temporary_overlay_cleanup(temporary_overlay_path);
+
+    auto prepared_request = subtitles::prepare_subtitle_render_session_request(subtitles::SubtitleRenderSessionCreateRequest{
+        .subtitle_path = overlay_ass_path,
+        .format_hint = "ass",
+        .canvas_width = video_output_plan.width,
+        .canvas_height = video_output_plan.height,
+        .sample_aspect_ratio = video_output_plan.sample_aspect_ratio
+    });
+
+    if (!prepared_request.font_recovery_report.message.empty()) {
+        emit_runtime_log(log_callback, prepared_request.font_recovery_report.message);
+    }
+    if (!prepared_request.font_recovery_report.actionable_hint.empty()) {
+        emit_runtime_log(log_callback, "Hint: " + prepared_request.font_recovery_report.actionable_hint);
+    }
+    if (subtitles::font_recovery_blocks_subtitle_rendering(prepared_request.font_recovery_report)) {
+        throw std::runtime_error(
+            "Thumbnail pre-roll overlay font preparation failed. " +
+            prepared_request.font_recovery_report.message +
+            " Hint: " + prepared_request.font_recovery_report.actionable_hint
+        );
+    }
+
+    auto session_result = subtitle_renderer->create_session(prepared_request.session_request);
+    if (!session_result.succeeded()) {
+        throw std::runtime_error(
+            "Thumbnail pre-roll failed to create the logo.ass render session. " +
+            session_result.error->message + " Hint: " + session_result.error->actionable_hint
+        );
+    }
+
+    const auto compose_result = session_result.session->compose_into_frame(
+        thumbnail_frame,
+        subtitles::SubtitleRenderRequest{
+            .timestamp_microseconds = 0
+        }
+    );
+    if (!compose_result.succeeded()) {
+        throw std::runtime_error(
+            "Thumbnail pre-roll failed while compositing logo.ass onto the thumbnail image. " +
+            compose_result.error->message + " Hint: " + compose_result.error->actionable_hint
+        );
+    }
+
+    session_result.session.reset();
+    temporary_overlay_cleanup.remove_now();
+
+    emit_runtime_log(
+        log_callback,
+        "Thumbnail pre-roll prepared from '" + assets.image_path.lexically_normal().string() +
+            "' with overlay '" + assets.overlay_ass_path.lexically_normal().string() + "'."
+    );
+
+    return PreparedThumbnailPrerollFrame{
+        .frame = std::move(thumbnail_frame),
+        .image_path = assets.image_path,
+        .overlay_ass_path = assets.overlay_ass_path,
+        .title_text = settings.title_text_override ? settings.title_text : assets.title_text,
+        .overlay_applied = compose_result.subtitles_applied
+    };
+}
+
 StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request) {
     if (request.timeline_plan == nullptr) {
         return make_error(
@@ -4520,6 +4857,19 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
         );
     }
 
+    const bool thumbnail_preroll_enabled =
+        request.thumbnail_preroll_settings != nullptr &&
+        request.thumbnail_preroll_settings->has_value() &&
+        request.thumbnail_preroll_settings->value().enabled;
+    if (thumbnail_preroll_enabled && request.subtitle_renderer == nullptr) {
+        return make_error(
+            "The streaming transcode request enabled thumbnail pre-roll without a subtitle renderer.",
+            "Create the libassmod-backed subtitle renderer before preparing thumbnail pre-roll.",
+            false,
+            runtime_policy::RuntimeAnomalyClass::unsupported_early
+        );
+    }
+
     try {
         const auto transcode_start = std::chrono::steady_clock::now();
         auto runtime_behavior = resolve_streaming_runtime_behavior(
@@ -4543,14 +4893,29 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
         );
 
         const VideoOutputPlan video_output_plan = build_video_output_plan(timeline_plan);
+        std::optional<PreparedThumbnailPrerollFrame> prepared_thumbnail_preroll{};
+        if (thumbnail_preroll_enabled) {
+            prepared_thumbnail_preroll = prepare_thumbnail_preroll_frame(
+                request.thumbnail_preroll_settings->value(),
+                request.subtitle_settings != nullptr
+                    ? *request.subtitle_settings
+                    : std::optional<job::EncodeJobSubtitleSettings>{},
+                request.subtitle_renderer,
+                video_output_plan,
+                request.log_callback
+            );
+        }
+
         const auto *main_source_audio_stream =
             timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info.primary_audio_stream.has_value()
                 ? &*timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info.primary_audio_stream
                 : nullptr;
+        const std::size_t effective_segment_count = timeline_plan.segments.size() +
+            (prepared_thumbnail_preroll.has_value() ? 1U : 0U);
         const auto resolved_audio_output = resolve_audio_output_plan(AudioOutputResolveRequest{
             .output_path = request.media_encode_request.output_path,
             .settings = request.media_encode_request.audio_settings,
-            .segment_count = timeline_plan.segments.size(),
+            .segment_count = effective_segment_count,
             .main_source_trimmed = timeline_plan.segments[timeline_plan.main_segment_index].has_source_trim(),
             .main_source_audio_stream = main_source_audio_stream
         });
@@ -4637,10 +5002,43 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
         std::int64_t decoded_video_frame_count = 0;
         std::int64_t decoded_audio_block_count = 0;
         std::int64_t subtitled_video_frame_count = 0;
+        auto progress_totals = estimate_video_progress_totals(timeline_plan);
+        if (prepared_thumbnail_preroll.has_value()) {
+            progress_totals.total_video_frames += 2U;
+            progress_totals.total_video_duration_pts += video_output_plan.frame_duration_pts * 2LL;
+            progress_totals.total_video_duration_us =
+                rescale_to_microseconds(progress_totals.total_video_duration_pts, timeline_plan.output_video_time_base);
+        }
         StreamingEncodeProgressEmitter progress_emitter(
-            estimate_video_progress_totals(timeline_plan),
+            progress_totals,
             request.progress_callback
         );
+
+        if (prepared_thumbnail_preroll.has_value()) {
+            const auto preroll_result = emit_thumbnail_preroll_frames(
+                *prepared_thumbnail_preroll,
+                timeline_plan,
+                video_output_plan,
+                request.normalization_policy,
+                audio_output_plan,
+                output_session,
+                progress_emitter,
+                performance_metrics,
+                next_output_frame_index,
+                next_output_video_pts,
+                next_output_audio_pts
+            );
+            decoded_video_frame_count += preroll_result.video_frame_count;
+            decoded_audio_block_count += preroll_result.audio_block_count;
+            if (prepared_thumbnail_preroll->overlay_applied) {
+                subtitled_video_frame_count += preroll_result.video_frame_count;
+            }
+            emit_runtime_log(
+                request.log_callback,
+                "Thumbnail pre-roll inserted " + std::to_string(preroll_result.video_frame_count) +
+                    " frame(s) before the timeline."
+            );
+        }
 
         for (const auto &segment_plan : timeline_plan.segments) {
             const auto segment_result = process_segment(

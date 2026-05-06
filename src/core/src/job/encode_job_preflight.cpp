@@ -5,6 +5,7 @@
 #include "utsure/core/media/media_inspector.hpp"
 #include "utsure/core/subtitles/subtitle_font_recovery.hpp"
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
+#include "utsure/core/subtitles/thumbnail_preroll.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -15,6 +16,7 @@
 #include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace utsure::core::job {
 
@@ -22,6 +24,18 @@ namespace {
 
 using utsure::core::subtitles::SubtitleRenderRequest;
 using utsure::core::subtitles::SubtitleRenderSessionCreateRequest;
+
+std::string join_diagnostics(const std::vector<std::string> &diagnostics) {
+    std::ostringstream joined;
+    for (std::size_t index = 0; index < diagnostics.size(); ++index) {
+        if (index > 0U) {
+            joined << ' ';
+        }
+        joined << diagnostics[index];
+    }
+
+    return joined.str();
+}
 
 media::streaming::PipelineQueueLimits resolve_pipeline_queue_limits(const EncodeJob &job) {
     auto queue_limits = media::streaming::kDefaultPipelineQueueLimits;
@@ -278,13 +292,16 @@ void validate_output_path(
     if (paths_match(output_path, job.input.main_source_path) ||
         conflicts_with_output(job.input.intro_source_path) ||
         conflicts_with_output(job.input.outro_source_path) ||
-        (job.subtitles.has_value() && paths_match(output_path, job.subtitles->subtitle_path))) {
+        (job.subtitles.has_value() && paths_match(output_path, job.subtitles->subtitle_path)) ||
+        (job.thumbnail_preroll.has_value() &&
+         (conflicts_with_output(job.thumbnail_preroll->image_path) ||
+          conflicts_with_output(job.thumbnail_preroll->overlay_ass_path)))) {
         append_issue(
             issues,
             EncodeJobPreflightIssueSeverity::error,
             EncodeJobPreflightIssueCode::invalid_output_path,
             "The output path matches one of the selected input files.",
-            "Choose a separate output file so the source media and subtitle inputs are not overwritten."
+            "Choose a separate output file so the source media, subtitle, and thumbnail inputs are not overwritten."
         );
     }
 }
@@ -381,6 +398,63 @@ void validate_subtitle_session(
     }
 }
 
+void validate_thumbnail_preroll(
+    const EncodeJob &job,
+    const timeline::TimelinePlan &timeline_plan,
+    std::vector<EncodeJobPreflightIssue> &issues
+) {
+    if (!job.thumbnail_preroll.has_value() || !job.thumbnail_preroll->enabled) {
+        return;
+    }
+
+    if (!job.subtitles.has_value()) {
+        append_issue(
+            issues,
+            EncodeJobPreflightIssueSeverity::error,
+            EncodeJobPreflightIssueCode::thumbnail_validation_failed,
+            "Thumbnail pre-roll is enabled but no subtitle file is selected.",
+            "Select the main subtitle first so TN.* and logo.ass can be resolved from its folder."
+        );
+        return;
+    }
+
+    const auto &main_segment_info = timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info;
+    if (!main_segment_info.primary_video_stream.has_value()) {
+        append_issue(
+            issues,
+            EncodeJobPreflightIssueSeverity::error,
+            EncodeJobPreflightIssueCode::thumbnail_validation_failed,
+            "Thumbnail pre-roll validation requires a readable main video stream.",
+            "Fix the main source media issue before validating thumbnail pre-roll."
+        );
+        return;
+    }
+
+    const auto &video_stream = *main_segment_info.primary_video_stream;
+    const auto resolve_result = subtitles::ThumbnailPrerollResolver::resolve(subtitles::ThumbnailPrerollResolveRequest{
+        .enabled = true,
+        .auto_select = job.thumbnail_preroll->auto_select,
+        .subtitle_path = job.subtitles->subtitle_path,
+        .explicit_image_path = job.thumbnail_preroll->image_path,
+        .explicit_overlay_ass_path = job.thumbnail_preroll->overlay_ass_path,
+        .required_width = video_stream.width,
+        .required_height = video_stream.height
+    });
+
+    if (!resolve_result.has_assets()) {
+        const auto diagnostics = join_diagnostics(resolve_result.diagnostics);
+        append_issue(
+            issues,
+            EncodeJobPreflightIssueSeverity::error,
+            EncodeJobPreflightIssueCode::thumbnail_validation_failed,
+            resolve_result.decision_summary,
+            diagnostics.empty()
+                ? "Place a same-resolution TN.* image and logo.ass with an EPNUMBER dialogue line beside the selected subtitle."
+                : diagnostics
+        );
+    }
+}
+
 std::string format_rational(const media::Rational &value) {
     if (!value.is_valid()) {
         return "unknown";
@@ -451,6 +525,8 @@ const char *to_string(const EncodeJobPreflightIssueCode code) noexcept {
         return "timeline_validation_failed";
     case EncodeJobPreflightIssueCode::subtitle_validation_failed:
         return "subtitle_validation_failed";
+    case EncodeJobPreflightIssueCode::thumbnail_validation_failed:
+        return "thumbnail_validation_failed";
     default:
         return "unknown";
     }
@@ -488,6 +564,7 @@ std::string format_encode_job_preview(const EncodeJobPreviewSummary &preview_sum
     } else {
         preview << "off";
     }
+    preview << " | thumbnail pre-roll " << (preview_summary.thumbnail_preroll_enabled ? "on" : "off");
     preview << " | overwrite " << (preview_summary.output_exists ? "yes" : "no");
     preview << "\nEncoding runtime: encoder threads " << preview_summary.encoder_threading_summary;
     preview << " | video queue " << preview_summary.video_frame_queue_depth << " frames";
@@ -565,11 +642,15 @@ EncodeJobPreflightResult EncodeJobPreflight::inspect(const EncodeJob &job) noexc
 
         const auto &timeline_plan = *timeline_result.timeline_plan;
         validate_subtitle_session(job, timeline_plan, issues);
+        const bool thumbnail_preroll_enabled = job.thumbnail_preroll.has_value() && job.thumbnail_preroll->enabled;
+        validate_thumbnail_preroll(job, timeline_plan, issues);
+        const std::size_t effective_segment_count = timeline_plan.segments.size() +
+            (thumbnail_preroll_enabled ? 1U : 0U);
 
         const auto resolved_audio_output = media::resolve_audio_output_plan(media::AudioOutputResolveRequest{
             .output_path = job.output.output_path,
             .settings = job.output.audio,
-            .segment_count = timeline_plan.segments.size(),
+            .segment_count = effective_segment_count,
             .main_source_trimmed = timeline_plan.segments[timeline_plan.main_segment_index].has_source_trim(),
             .main_source_audio_stream = timeline_plan.segments[timeline_plan.main_segment_index]
                 .inspected_source_info.primary_audio_stream.has_value()
@@ -627,6 +708,7 @@ EncodeJobPreflightResult EncodeJobPreflight::inspect(const EncodeJob &job) noexc
             .subtitle_timing_mode = job.subtitles.has_value()
                 ? job.subtitles->timing_mode
                 : timeline::SubtitleTimingMode::main_segment_only,
+            .thumbnail_preroll_enabled = thumbnail_preroll_enabled,
             .output_exists = output_exists
         };
         preview_summary.segment_kinds.reserve(timeline_plan.segments.size());

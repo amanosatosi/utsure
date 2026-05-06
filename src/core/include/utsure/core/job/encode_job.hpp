@@ -76,6 +76,15 @@ struct EncodeJobSubtitleSettings final {
     timeline::SubtitleTimingMode timing_mode{timeline::SubtitleTimingMode::main_segment_only};
 };
 
+struct EncodeJobThumbnailPrerollSettings final {
+    bool enabled{false};
+    bool auto_select{true};
+    std::optional<std::filesystem::path> image_path{};
+    std::optional<std::filesystem::path> overlay_ass_path{};
+    bool title_text_override{false};
+    std::string title_text{};
+};
+
 struct EncodeJobVideoOutputSettings final {
     media::OutputVideoCodec codec{media::OutputVideoCodec::h264};
     std::string preset{"fast"};
@@ -97,6 +106,7 @@ struct EncodeJobExecutionSettings final {
 struct EncodeJob final {
     EncodeJobInput input{};
     std::optional<EncodeJobSubtitleSettings> subtitles{};
+    std::optional<EncodeJobThumbnailPrerollSettings> thumbnail_preroll{};
     EncodeJobOutputSettings output{};
     EncodeJobExecutionSettings execution{};
 };

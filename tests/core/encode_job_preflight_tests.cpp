@@ -15,6 +15,7 @@ using utsure::core::job::EncodeJobPreflightIssueCode;
 using utsure::core::job::EncodeJobPreflightIssueSeverity;
 using utsure::core::job::EncodeJobPreflightResult;
 using utsure::core::job::EncodeJobSubtitleSettings;
+using utsure::core::job::EncodeJobThumbnailPrerollSettings;
 using utsure::core::job::format_encode_job_preview;
 using utsure::core::media::AudioOutputMode;
 using utsure::core::media::OutputVideoCodec;
@@ -426,6 +427,54 @@ int run_auto_copy_preview_assertion(
     return 0;
 }
 
+int run_thumbnail_preroll_preflight_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &output_path
+) {
+    remove_file_if_present(output_path);
+
+    auto job = make_base_job(main_path, output_path);
+    job.subtitles = EncodeJobSubtitleSettings{
+        .subtitle_path = subtitle_path,
+        .format_hint = "ass"
+    };
+    job.thumbnail_preroll = EncodeJobThumbnailPrerollSettings{
+        .enabled = true
+    };
+
+    const auto result = EncodeJobPreflight::inspect(job);
+    if (!result.can_start_encode()) {
+        return fail("A thumbnail pre-roll preflight job was blocked unexpectedly.");
+    }
+
+    if (!result.preview_summary.has_value() || !result.preview_summary->thumbnail_preroll_enabled) {
+        return fail("A thumbnail pre-roll preflight job did not report thumbnail pre-roll in the preview.");
+    }
+
+    const auto preview_text = format_encode_job_preview(*result.preview_summary);
+    if (!contains_text(preview_text, "thumbnail pre-roll on")) {
+        return fail("The thumbnail pre-roll preview text did not include the feature state.");
+    }
+
+    auto invalid_job = job;
+    invalid_job.thumbnail_preroll->image_path = subtitle_path;
+    const auto invalid_result = EncodeJobPreflight::inspect(invalid_job);
+    if (invalid_result.can_start_encode()) {
+        return fail("A thumbnail pre-roll job with an invalid manual image passed unexpectedly.");
+    }
+
+    if (!issues_contain(
+            invalid_result,
+            EncodeJobPreflightIssueCode::thumbnail_validation_failed,
+            EncodeJobPreflightIssueSeverity::error)) {
+        return fail("The invalid thumbnail pre-roll job did not report the expected thumbnail validation error.");
+    }
+
+    std::cout << "thumbnail_preroll_preflight=validated\n";
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -440,7 +489,8 @@ int main(int argc, char *argv[]) {
             "--output-conflicts-main <main>|"
             "--streaming-memory-budget <main> <output>|"
             "--copy-fallback-warning <main> <output>|"
-            "--auto-copy-preview <main> <output>]"
+            "--auto-copy-preview <main> <output>|"
+            "--thumbnail-preroll <main> <subtitle> <output>]"
         );
     }
 
@@ -508,6 +558,14 @@ int main(int argc, char *argv[]) {
         return run_auto_copy_preview_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3])
+        );
+    }
+
+    if (mode == "--thumbnail-preroll" && argc == 5) {
+        return run_thumbnail_preroll_preflight_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4])
         );
     }
 

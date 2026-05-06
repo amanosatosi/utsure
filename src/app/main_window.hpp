@@ -74,7 +74,11 @@ public:
         QString endcard_path{};
         bool endcard_music_enabled{false};
         QString endcard_music_path{};
+        bool thumbnail_enabled{false};
+        bool thumbnail_image_manual_override{false};
+        bool thumbnail_title_manual_override{false};
         QString thumbnail_image_path{};
+        QString thumbnail_overlay_ass_path{};
         QString thumbnail_title{};
         utsure::core::media::OutputVideoCodec video_codec{utsure::core::media::OutputVideoCodec::h265};
         QString video_preset{"fast"};
@@ -160,7 +164,8 @@ private:
     void choose_endcard_clip();
     void choose_endcard_music_file();
     void choose_thumbnail_image();
-    void show_thumbnail_placeholder_note();
+    void restore_selected_job_auto_thumbnail_selection();
+    void reset_selected_job_thumbnail_title();
 
     void handle_queue_selection_changed();
     void handle_queue_item_changed(QTableWidgetItem *item);
@@ -185,6 +190,7 @@ private:
     void reserve_batch_output_paths_for_jobs(const std::vector<int> &job_indices);
     [[nodiscard]] QString generate_output_path_for_job(const UiEncodeJob &job) const;
     void apply_automatic_subtitle_selection(int job_index, bool force_auto_mode, QString *decision_summary = nullptr);
+    void apply_automatic_thumbnail_selection(int job_index, bool force_auto_mode, QString *decision_summary = nullptr);
     void request_selected_job_preview_frame();
     void clear_preview_surface();
     void reset_preview_pipeline_for_trim_change();
@@ -320,11 +326,12 @@ private:
     QComboBox *audio_format_combo_{nullptr};
     QComboBox *audio_quality_combo_{nullptr};
     QComboBox *audio_track_combo_{nullptr};
+    QCheckBox *thumbnail_enable_check_{nullptr};
     QLineEdit *thumbnail_image_path_edit_{nullptr};
     QPushButton *thumbnail_image_browse_button_{nullptr};
     QLineEdit *thumbnail_title_edit_{nullptr};
-    QPushButton *thumbnail_load_ass_button_{nullptr};
-    QPushButton *thumbnail_edit_title_button_{nullptr};
+    QPushButton *thumbnail_auto_button_{nullptr};
+    QPushButton *thumbnail_reset_title_button_{nullptr};
     QPlainTextEdit *session_log_view_{nullptr};
     QPlainTextEdit *task_log_view_{nullptr};
     QLabel *task_log_summary_label_{nullptr};

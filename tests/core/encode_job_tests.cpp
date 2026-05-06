@@ -31,7 +31,9 @@ using utsure::core::job::EncodeJobResult;
 using utsure::core::job::EncodeJobRunner;
 using utsure::core::job::EncodeJobRunOptions;
 using utsure::core::job::EncodeJobStage;
+using utsure::core::job::EncodeJobSubtitleSettings;
 using utsure::core::job::EncodeJobSummary;
+using utsure::core::job::EncodeJobThumbnailPrerollSettings;
 using utsure::core::job::format_encode_job_report;
 using utsure::core::media::AudioOutputMode;
 using utsure::core::media::CpuUsageMode;
@@ -2043,6 +2045,104 @@ int run_irregular_timestamp_assertion(
     return 0;
 }
 
+int run_thumbnail_preroll_job_assertion(
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &output_path
+) {
+    CollectingObserver observer{};
+    EncodeJob job{
+        .input = {
+            .main_source_path = main_path
+        },
+        .output = {
+            .output_path = output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+    job.subtitles = EncodeJobSubtitleSettings{
+        .subtitle_path = subtitle_path,
+        .format_hint = "ass"
+    };
+    job.thumbnail_preroll = EncodeJobThumbnailPrerollSettings{
+        .enabled = true
+    };
+    job.output.audio.mode = AudioOutputMode::encode_aac;
+
+    const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!job_result.succeeded()) {
+        const std::string error_message =
+            "The thumbnail pre-roll encode job failed unexpectedly: " +
+            job_result.error->message +
+            " Hint: " +
+            job_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    const auto &summary = *job_result.encode_job_summary;
+    if (summary.timeline_summary.segments.size() != 1 ||
+        summary.timeline_summary.output_video_frame_count != 50 ||
+        summary.decoded_video_frame_count != 50 ||
+        summary.encoded_media_summary.encoded_video_frame_count != 50) {
+        return fail("The thumbnail pre-roll encode job did not prepend exactly two video frames.");
+    }
+
+    if (summary.subtitled_video_frame_count < 2) {
+        return fail("The thumbnail pre-roll encode job did not report the rendered thumbnail overlay.");
+    }
+
+    int subtitle_stage_count = 0;
+    for (const auto &progress : observer.progress_updates) {
+        if (progress.stage == EncodeJobStage::burning_in_subtitles) {
+            ++subtitle_stage_count;
+        }
+    }
+    if (subtitle_stage_count != 2) {
+        return fail("The thumbnail pre-roll encode job did not report both subtitle and thumbnail preparation stages.");
+    }
+
+    if (!observer_logs_contain_text(observer, "Thumbnail pre-roll prepared from") ||
+        !observer_logs_contain_text(observer, "Thumbnail pre-roll inserted 2 frame(s) before the timeline.")) {
+        return fail("The thumbnail pre-roll encode job did not log thumbnail preparation and insertion.");
+    }
+
+    const auto report = format_encode_job_report(summary);
+    if (!contains_text(report, "job.thumbnail_preroll.enabled=yes")) {
+        return fail("The thumbnail pre-roll encode job report did not preserve the feature state.");
+    }
+
+    const MediaDecodeResult output_decode_result = MediaDecoder::decode(output_path);
+    if (!output_decode_result.succeeded()) {
+        const std::string error_message =
+            "The thumbnail pre-roll output decode failed unexpectedly: " +
+            output_decode_result.error->message +
+            " Hint: " +
+            output_decode_result.error->actionable_hint;
+        return fail(error_message);
+    }
+
+    if (assert_output_decode(*output_decode_result.decoded_media_source, 50U, true) != 0) {
+        return 1;
+    }
+
+    if (assert_fine_encode_progress(observer, summary) != 0) {
+        return 1;
+    }
+
+    std::cout << build_validation_report(
+        *job_result.encode_job_summary,
+        *output_decode_result.decoded_media_source
+    ) << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -2062,7 +2162,8 @@ int main(int argc, char *argv[]) {
             "[--copy-audio-fallback] <input> <output> | "
             "[--multi-audio-selected] <input> <output> | "
             "[--coarse-timebase-ntsc] <input> <output> | "
-            "[--irregular-timestamps] <input> <output>"
+            "[--irregular-timestamps] <input> <output> | "
+            "[--thumbnail-preroll] <input> <subtitle> <output>"
         );
     }
 
@@ -2177,6 +2278,14 @@ int main(int argc, char *argv[]) {
         return run_irregular_timestamp_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3])
+        );
+    }
+
+    if (mode == "--thumbnail-preroll" && argc == 5) {
+        return run_thumbnail_preroll_job_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4])
         );
     }
 

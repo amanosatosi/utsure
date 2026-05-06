@@ -97,6 +97,7 @@ struct StreamingEncodeProgress final {
 struct StreamingTranscodeRequest final {
     const timeline::TimelinePlan *timeline_plan{nullptr};
     const std::optional<job::EncodeJobSubtitleSettings> *subtitle_settings{nullptr};
+    const std::optional<job::EncodeJobThumbnailPrerollSettings> *thumbnail_preroll_settings{nullptr};
     MediaEncodeRequest media_encode_request{};
     DecodeNormalizationPolicy normalization_policy{};
     subtitles::SubtitleRenderer *subtitle_renderer{nullptr};

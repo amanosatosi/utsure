@@ -114,6 +114,17 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
         report << "job.subtitles.format_hint=" << encode_job_summary.job.subtitles->format_hint << '\n';
         report << "job.subtitles.timing_mode=" << timeline::to_string(encode_job_summary.job.subtitles->timing_mode) << '\n';
     }
+    report << "job.thumbnail_preroll.present="
+           << (encode_job_summary.job.thumbnail_preroll.has_value() ? "yes" : "no") << '\n';
+    if (encode_job_summary.job.thumbnail_preroll.has_value()) {
+        const auto &thumbnail = *encode_job_summary.job.thumbnail_preroll;
+        report << "job.thumbnail_preroll.enabled=" << (thumbnail.enabled ? "yes" : "no") << '\n';
+        report << "job.thumbnail_preroll.auto_select=" << (thumbnail.auto_select ? "yes" : "no") << '\n';
+        report << "job.thumbnail_preroll.image=" << format_optional_path_leaf(thumbnail.image_path) << '\n';
+        report << "job.thumbnail_preroll.overlay_ass=" << format_optional_path_leaf(thumbnail.overlay_ass_path) << '\n';
+        report << "job.thumbnail_preroll.title_override=" << (thumbnail.title_text_override ? "yes" : "no") << '\n';
+        report << "job.thumbnail_preroll.title_text=" << thumbnail.title_text << '\n';
+    }
     report << "job.output.path=" << format_path_leaf(encode_job_summary.job.output.output_path) << '\n';
     report << "job.output.video.codec=" << media::to_string(encode_job_summary.job.output.video.codec) << '\n';
     report << "job.output.video.preset=" << encode_job_summary.job.output.video.preset << '\n';

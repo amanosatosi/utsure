@@ -55,6 +55,10 @@ int calculate_total_steps(const EncodeJob &job) {
         ++total_steps;
     }
 
+    if (job.thumbnail_preroll.has_value() && job.thumbnail_preroll->enabled) {
+        ++total_steps;
+    }
+
     return total_steps;
 }
 
@@ -395,6 +399,23 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             }
         }
 
+        if (job.thumbnail_preroll.has_value() && job.thumbnail_preroll->enabled) {
+            notify_progress(
+                telemetry,
+                EncodeJobStage::burning_in_subtitles,
+                "Preparing thumbnail pre-roll."
+            );
+            notify_log(
+                telemetry,
+                EncodeJobLogLevel::info,
+                "Preparing the thumbnail pre-roll image and logo.ass overlay."
+            );
+
+            if (auto renderer_error = ensure_subtitle_renderer(); renderer_error.has_value()) {
+                return *renderer_error;
+            }
+        }
+
         notify_progress(
             telemetry,
             EncodeJobStage::composing_timeline,
@@ -426,6 +447,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             media::streaming::StreamingTranscodeRequest{
                 .timeline_plan = &timeline_plan,
                 .subtitle_settings = &job.subtitles,
+                .thumbnail_preroll_settings = &job.thumbnail_preroll,
                 .media_encode_request = build_media_encode_request(job),
                 .normalization_policy = options.decode_normalization_policy,
                 .subtitle_renderer = subtitle_renderer.get(),

@@ -25,6 +25,9 @@ set(UTSURE_SUBTITLE_EMPTY_BITMAP_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-
 set(UTSURE_SUBTITLE_IMG_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-img-sample.ass")
 set(UTSURE_SUBTITLE_STRESS_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-stress-sample.ass")
 set(UTSURE_SUBTITLE_STRESS_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-main.mp4")
+set(UTSURE_THUMBNAIL_PREROLL_IMAGE_FILE "${UTSURE_TEST_MEDIA_DIR}/TN.png")
+set(UTSURE_THUMBNAIL_PREROLL_SUBTITLE_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail-source.ass")
+set(UTSURE_THUMBNAIL_PREROLL_LOGO_FILE "${UTSURE_TEST_MEDIA_DIR}/logo.ass")
 
 file(MAKE_DIRECTORY "${UTSURE_TEST_MEDIA_DIR}")
 if(WIN32)
@@ -119,6 +122,29 @@ configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-stress-sample.ass"
     "${UTSURE_SUBTITLE_STRESS_SAMPLE_FILE}"
     COPYONLY
+)
+
+file(WRITE "${UTSURE_THUMBNAIL_PREROLL_SUBTITLE_FILE}"
+    "[Script Info]\n"
+    "Title: thumbnail source placeholder\n"
+    "\n"
+    "[Events]\n"
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+)
+file(WRITE "${UTSURE_THUMBNAIL_PREROLL_LOGO_FILE}"
+    "[Script Info]\n"
+    "Title: thumbnail logo overlay\n"
+    "ScriptType: v4.00+\n"
+    "PlayResX: 320\n"
+    "PlayResY: 180\n"
+    "\n"
+    "[V4+ Styles]\n"
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+    "Style: Default,Arial,28,&H00FFFFFF,&H000000FF,&H80000000,&H80000000,0,0,0,0,100,100,0,0,1,1,0,5,10,10,10,1\n"
+    "\n"
+    "[Events]\n"
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    "Dialogue: 0,0:00:00.00,0:00:05.00,Default,EPNUMBER,0,0,0,,{\\an5}Episode 06\n"
 )
 
 add_custom_command(
@@ -392,6 +418,15 @@ add_custom_command(
     VERBATIM
 )
 
+add_custom_command(
+    OUTPUT "${UTSURE_THUMBNAIL_PREROLL_IMAGE_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "color=c=black:size=320x180"
+        -frames:v 1
+        "${UTSURE_THUMBNAIL_PREROLL_IMAGE_FILE}"
+    VERBATIM
+)
+
 add_custom_target(
     utsure_generate_sample_media
     DEPENDS
@@ -410,6 +445,7 @@ add_custom_target(
         "${UTSURE_MULTI_AUDIO_DEFAULT_FILE}"
         "${UTSURE_MULTI_AUDIO_FALLBACK_FILE}"
         "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
+        "${UTSURE_THUMBNAIL_PREROLL_IMAGE_FILE}"
 )
 
 add_executable(utsure_core_media_inspection_tests
@@ -567,6 +603,15 @@ add_test(
         "${UTSURE_SAMPLE_MEDIA_FILE}"
         "${UTSURE_TEST_MEDIA_DIR}/job-sample-h264.mp4"
 )
+
+add_test(
+    NAME utsure.core.job.encode.thumbnail_preroll
+    COMMAND utsure_core_encode_job_tests --thumbnail-preroll
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-thumbnail-preroll.mp4"
+)
+utsure_enable_fontcollector_stub_for_test(utsure.core.job.encode.thumbnail_preroll)
 
 add_test(
     NAME utsure.core.job.encode.h265
@@ -748,6 +793,15 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/preflight-auto-copy.mp4"
 )
 
+add_test(
+    NAME utsure.core.job.preflight.thumbnail_preroll
+    COMMAND utsure_core_encode_job_preflight_tests --thumbnail-preroll
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/preflight-thumbnail-preroll.mp4"
+)
+utsure_enable_fontcollector_stub_for_test(utsure.core.job.preflight.thumbnail_preroll)
+
 add_executable(utsure_core_output_naming_tests
     output_naming_tests.cpp
 )
@@ -818,6 +872,31 @@ utsure_enable_warnings(utsure_core_subtitle_auto_selection_tests)
 add_test(
     NAME utsure.core.subtitles.auto_selection
     COMMAND utsure_core_subtitle_auto_selection_tests
+)
+
+add_executable(utsure_core_thumbnail_preroll_tests
+    thumbnail_preroll_tests.cpp
+)
+
+target_link_libraries(utsure_core_thumbnail_preroll_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_core_thumbnail_preroll_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_thumbnail_preroll_tests)
+
+add_dependencies(utsure_core_thumbnail_preroll_tests utsure_generate_sample_media)
+
+add_test(
+    NAME utsure.core.subtitles.thumbnail_preroll.parse
+    COMMAND utsure_core_thumbnail_preroll_tests --parse
+)
+
+add_test(
+    NAME utsure.core.subtitles.thumbnail_preroll.resolve
+    COMMAND utsure_core_thumbnail_preroll_tests --resolve "${UTSURE_THUMBNAIL_PREROLL_SUBTITLE_FILE}"
 )
 
 add_executable(utsure_core_subtitle_font_recovery_tests
