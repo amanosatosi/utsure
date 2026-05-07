@@ -4631,7 +4631,7 @@ std::filesystem::path make_temporary_thumbnail_ass_path() {
 
     const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
     return (directory /
-            ("utsure-thumbnail-logo-" + std::to_string(now) + "-" +
+            ("utsure-thumbnail-overlay-" + std::to_string(now) + "-" +
              std::to_string(next_id.fetch_add(1, std::memory_order_relaxed)) + ".ass"))
         .lexically_normal();
 }
@@ -4682,7 +4682,7 @@ std::filesystem::path prepare_thumbnail_overlay_script(
     }
 
     const auto source_text = read_text_file_or_throw(assets.overlay_ass_path, "thumbnail overlay script");
-    const auto edited_text = subtitles::ThumbnailPrerollResolver::replace_epnumber_text(
+    const auto edited_text = subtitles::ThumbnailPrerollResolver::replace_utsure_data_text(
         source_text,
         effective_title
     );
@@ -4790,7 +4790,7 @@ PreparedThumbnailPrerollFrame prepare_thumbnail_preroll_frame(
     auto session_result = subtitle_renderer->create_session(prepared_request.session_request);
     if (!session_result.succeeded()) {
         throw std::runtime_error(
-            "Thumbnail pre-roll failed to create the logo.ass render session. " +
+            "Thumbnail pre-roll failed to create the thumbnail overlay render session. " +
             session_result.error->message + " Hint: " + session_result.error->actionable_hint
         );
     }
@@ -4803,7 +4803,7 @@ PreparedThumbnailPrerollFrame prepare_thumbnail_preroll_frame(
     );
     if (!compose_result.succeeded()) {
         throw std::runtime_error(
-            "Thumbnail pre-roll failed while compositing logo.ass onto the thumbnail image. " +
+            "Thumbnail pre-roll failed while compositing the thumbnail overlay onto the thumbnail image. " +
             compose_result.error->message + " Hint: " + compose_result.error->actionable_hint
         );
     }

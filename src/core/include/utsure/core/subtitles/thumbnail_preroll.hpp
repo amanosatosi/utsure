@@ -44,8 +44,10 @@ struct ThumbnailPrerollResolveResult final {
 class ThumbnailPrerollResolver final {
 public:
     [[nodiscard]] static ThumbnailPrerollResolveResult resolve(const ThumbnailPrerollResolveRequest &request);
-    [[nodiscard]] static std::optional<std::string> extract_epnumber_text(const std::filesystem::path &overlay_ass_path);
-    [[nodiscard]] static std::string replace_epnumber_text(
+    [[nodiscard]] static std::optional<std::string> extract_utsure_data_text(
+        const std::filesystem::path &overlay_ass_path
+    );
+    [[nodiscard]] static std::string replace_utsure_data_text(
         const std::string &ass_script_text,
         const std::string &replacement_text
     );

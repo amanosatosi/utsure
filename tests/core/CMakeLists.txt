@@ -25,9 +25,9 @@ set(UTSURE_SUBTITLE_EMPTY_BITMAP_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-
 set(UTSURE_SUBTITLE_IMG_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-img-sample.ass")
 set(UTSURE_SUBTITLE_STRESS_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-stress-sample.ass")
 set(UTSURE_SUBTITLE_STRESS_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-main.mp4")
-set(UTSURE_THUMBNAIL_PREROLL_IMAGE_FILE "${UTSURE_TEST_MEDIA_DIR}/TN.png")
+set(UTSURE_THUMBNAIL_PREROLL_IMAGE_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail.png")
 set(UTSURE_THUMBNAIL_PREROLL_SUBTITLE_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail-source.ass")
-set(UTSURE_THUMBNAIL_PREROLL_LOGO_FILE "${UTSURE_TEST_MEDIA_DIR}/logo.ass")
+set(UTSURE_THUMBNAIL_PREROLL_OVERLAY_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail.ass")
 
 file(MAKE_DIRECTORY "${UTSURE_TEST_MEDIA_DIR}")
 if(WIN32)
@@ -131,9 +131,9 @@ file(WRITE "${UTSURE_THUMBNAIL_PREROLL_SUBTITLE_FILE}"
     "[Events]\n"
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
 )
-file(WRITE "${UTSURE_THUMBNAIL_PREROLL_LOGO_FILE}"
+file(WRITE "${UTSURE_THUMBNAIL_PREROLL_OVERLAY_FILE}"
     "[Script Info]\n"
-    "Title: thumbnail logo overlay\n"
+    "Title: thumbnail overlay\n"
     "ScriptType: v4.00+\n"
     "PlayResX: 320\n"
     "PlayResY: 180\n"
@@ -144,7 +144,7 @@ file(WRITE "${UTSURE_THUMBNAIL_PREROLL_LOGO_FILE}"
     "\n"
     "[Events]\n"
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-    "Dialogue: 0,0:00:00.00,0:00:05.00,Default,EPNUMBER,0,0,0,,{\\an5}Episode 06\n"
+    "Dialogue: 0,0:00:00.00,0:00:05.00,Default,utsure_data,0,0,0,,{\\an5}Episode 06\n"
 )
 
 add_custom_command(

@@ -113,8 +113,8 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M24 slice also permits one narrow user-requested runtime-anomaly follow-up, limited to standardizing continue-vs-log-vs-fail handling across inspected media/timeline/subtitle hotspots with one small internal classification scheme and clearer user-facing messages, without rewriting unrelated pipeline architecture.
 - The current M24 slice also permits one narrow user-requested subtitle reliability follow-up, limited to making app-side direct RGBA composition less brittle around clipped/off-frame libassmod tiles while still trusting positive-size libassmod render nodes and preserving hard failures for unsafe app-side memory access.
 - Runtime anomaly policy note: harmless no-op cases are skipped, recoverable normalization and reduced-fidelity fallbacks continue with diagnostics, clearly unsupported setups fail in preflight when they can be detected early, and only unsafe/corrupt runtime states remain encode-stopping failures.
-- The current M25 slice is limited to thumbnail pre-roll: auto-discovering a same-resolution `TN.*` image beside the selected subtitle, loading `logo.ass` from that same folder, exposing the `EPNUMBER` actor line text for per-job editing without modifying the original ASS file, rendering the edited overlay through libassmod onto the thumbnail image, and prepending the resulting still as the first two video frames before any intro/main/outro content.
-- The M25 implementation assumes `TN.*` matching is case-insensitive on the file stem and supports common FFmpeg-readable still formats (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tif`, `.tiff`); manually chosen thumbnail images are accepted only when their decoded video dimensions match the main source resolution.
+- The current M25 slice is limited to thumbnail pre-roll: auto-discovering a same-resolution `thumbnail.*` image beside the selected subtitle, loading the matching same-stem `.ass` overlay such as `thumbnail.ass`, exposing the `utsure_data` actor line text for per-job editing without modifying the original ASS file, rendering the edited overlay through libassmod onto the thumbnail image, and prepending the resulting still as the first two video frames before any intro/main/outro content.
+- The M25 implementation assumes `thumbnail.*` matching is case-insensitive on the file stem and supports common FFmpeg-readable still formats (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tif`, `.tiff`); manually chosen thumbnail images are accepted only when their decoded video dimensions match the main source resolution.
 
 ## Architecture direction
 
@@ -973,21 +973,21 @@ Current slice status:
 Status: Implemented; awaiting external validation
 
 Scope:
-  * Discover thumbnail pre-roll assets from the selected subtitle folder when the feature is enabled: `TN.*` still image plus `logo.ass`.
+  * Discover thumbnail pre-roll assets from the selected subtitle folder when the feature is enabled: `thumbnail.*` still image plus a same-stem ASS overlay such as `thumbnail.ass`.
   * Accept the thumbnail image only when its decoded dimensions exactly match the main source video dimensions.
-  * Parse `logo.ass` for the `EPNUMBER` actor/name event and expose that event text, including ASS override tags, as editable per-job data.
-  * Render the editable title overlay through the existing libassmod subtitle renderer onto the selected thumbnail image without modifying the original `logo.ass`.
+  * Parse the same-stem ASS overlay for the `utsure_data` actor/name event and expose that event text, including ASS override tags, as editable per-job data.
+  * Render the editable title overlay through the existing libassmod subtitle renderer onto the selected thumbnail image without modifying the original ASS overlay.
   * Insert the rendered thumbnail still as exactly the first two output video frames, before intro/main/outro content, preserving main-source output cadence and existing codec quality defaults.
 
 Current slice status:
-  * Completed: added core thumbnail asset resolution for same-resolution `TN.*` images, same-folder `logo.ass`, and `EPNUMBER` ASS text extraction/replacement while preserving override tags.
+  * Completed: added core thumbnail asset resolution for same-resolution `thumbnail.*` images, matching same-stem ASS overlays, and `utsure_data` ASS text extraction/replacement while preserving override tags.
   * Completed: wired encode-job settings and preflight validation so thumbnail assets are checked before encode, source-audio copy falls back when pre-roll adds a generated segment, and encode reports preserve thumbnail state.
-  * Completed: added streaming pre-roll preparation that decodes the thumbnail still, renders the editable `logo.ass` overlay through libassmod using a temporary edited ASS copy, and emits exactly two video frames before any intro/main/outro segment.
-  * Completed: replaced the Special-tab placeholder with thin Qt controls for enabling thumbnail pre-roll, auto-selecting same-folder assets, manually selecting an image, and editing/resetting the `EPNUMBER` title text without saving back to `logo.ass`.
+  * Completed: added streaming pre-roll preparation that decodes the thumbnail still, renders the editable same-stem ASS overlay through libassmod using a temporary edited ASS copy, and emits exactly two video frames before any intro/main/outro segment.
+  * Completed: replaced the Special-tab placeholder with thin Qt controls for enabling thumbnail pre-roll, auto-selecting same-folder assets, manually selecting an image, and editing/resetting the `utsure_data` title text without saving back to the source overlay file.
   * Completed: added focused CI tests for ASS parsing/replacement, asset resolution, preflight thumbnail validation, and encode-job output frame-count behavior.
 
 Validation:
-  * Added focused core tests for asset discovery, `EPNUMBER` ASS text parsing/replacement, preflight validation, and pre-roll output frame-count behavior.
+  * Added focused core tests for asset discovery, `utsure_data` ASS text parsing/replacement, preflight validation, and pre-roll output frame-count behavior.
   * Local compile/test execution remains reserved for GitHub Actions; local validation for this slice was limited to focused code inspection, stale-symbol searches, and `git diff --check`.
 
 ## Immediate next milestone

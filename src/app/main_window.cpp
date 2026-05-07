@@ -130,7 +130,7 @@ QString subtitle_format_hint_for_path(const QString &subtitle_path) {
 }
 
 QString image_file_filter() {
-    return "Image Files (*.png *.jpg *.jpeg *.webp *.bmp);;All Files (*)";
+    return "Image Files (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff);;All Files (*)";
 }
 
 QString format_preflight_issue(const utsure::core::job::EncodeJobPreflightIssue &issue) {
@@ -1649,18 +1649,18 @@ QLabel#PreviewTimeBadge {
     thumbnail_enable_check_ = new QCheckBox("Enable thumbnail pre-roll", thumbnail_group);
     const auto thumbnail_row = create_path_field(
         thumbnail_group,
-        "Auto TN.* from subtitle folder or manual image",
+        "Auto thumbnail.* from subtitle folder or manual image",
         "Choose thumbnail image"
     );
     thumbnail_image_path_edit_ = thumbnail_row.line_edit;
     thumbnail_image_browse_button_ = thumbnail_row.browse_button;
     thumbnail_title_edit_ = new QLineEdit(thumbnail_group);
-    thumbnail_title_edit_->setPlaceholderText("logo.ass Dialogue actor/name EPNUMBER text");
+    thumbnail_title_edit_->setPlaceholderText("thumbnail.ass Dialogue actor/name utsure_data text");
     thumbnail_auto_button_ = new QPushButton("Auto", thumbnail_group);
-    thumbnail_auto_button_->setToolTip("Load TN.* and logo.ass from the selected subtitle folder");
+    thumbnail_auto_button_->setToolTip("Load thumbnail.* and matching thumbnail.ass from the selected subtitle folder");
     thumbnail_auto_button_->setCursor(Qt::PointingHandCursor);
     thumbnail_reset_title_button_ = new QPushButton("Reset title", thumbnail_group);
-    thumbnail_reset_title_button_->setToolTip("Reload the EPNUMBER text from logo.ass");
+    thumbnail_reset_title_button_->setToolTip("Reload the utsure_data text from thumbnail.ass");
     thumbnail_reset_title_button_->setCursor(Qt::PointingHandCursor);
     thumbnail_layout->addWidget(thumbnail_enable_check_, 0, 0, 1, 2);
     thumbnail_layout->addWidget(new QLabel("Picture", thumbnail_group), 1, 0);
@@ -2125,7 +2125,7 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job_from_entry(
     }
 
     if (entry.thumbnail_enabled && (!entry.subtitle_enabled || entry.subtitle_path.trimmed().isEmpty())) {
-        error_message = "Thumbnail pre-roll needs a selected subtitle so TN.* and logo.ass can be resolved from that folder.";
+        error_message = "Thumbnail pre-roll needs a selected subtitle so thumbnail.* and thumbnail.ass can be resolved from that folder.";
         return std::nullopt;
     }
 
@@ -2801,11 +2801,11 @@ void MainWindow::reset_selected_job_thumbnail_title() {
     }
 
     const auto title_text =
-        utsure::core::subtitles::ThumbnailPrerollResolver::extract_epnumber_text(
+        utsure::core::subtitles::ThumbnailPrerollResolver::extract_utsure_data_text(
             qstring_to_path(job.thumbnail_overlay_ass_path)
         );
     if (!title_text.has_value()) {
-        append_session_log("[warning] Thumbnail pre-roll could not reload EPNUMBER text from logo.ass.");
+        append_session_log("[warning] Thumbnail pre-roll could not reload utsure_data text from thumbnail.ass.");
         return;
     }
 

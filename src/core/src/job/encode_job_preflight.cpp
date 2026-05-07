@@ -413,7 +413,7 @@ void validate_thumbnail_preroll(
             EncodeJobPreflightIssueSeverity::error,
             EncodeJobPreflightIssueCode::thumbnail_validation_failed,
             "Thumbnail pre-roll is enabled but no subtitle file is selected.",
-            "Select the main subtitle first so TN.* and logo.ass can be resolved from its folder."
+            "Select the main subtitle first so thumbnail.* and thumbnail.ass can be resolved from its folder."
         );
         return;
     }
@@ -449,7 +449,7 @@ void validate_thumbnail_preroll(
             EncodeJobPreflightIssueCode::thumbnail_validation_failed,
             resolve_result.decision_summary,
             diagnostics.empty()
-                ? "Place a same-resolution TN.* image and logo.ass with an EPNUMBER dialogue line beside the selected subtitle."
+                ? "Place a same-resolution thumbnail.* image and matching thumbnail.ass with a utsure_data dialogue line beside the selected subtitle."
                 : diagnostics
         );
     }

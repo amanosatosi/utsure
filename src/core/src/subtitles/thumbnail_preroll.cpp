@@ -19,6 +19,9 @@ namespace utsure::core::subtitles {
 
 namespace {
 
+constexpr std::string_view kThumbnailImageStem{"thumbnail"};
+constexpr std::string_view kThumbnailDataActor{"utsure_data"};
+
 struct AssDialogueFormat final {
     std::size_t actor_index{4};
     std::size_t text_index{9};
@@ -177,7 +180,7 @@ std::optional<AssDialogueFormat> parse_format_line(const std::string_view line) 
     return found_actor && found_text ? std::optional<AssDialogueFormat>(format) : std::nullopt;
 }
 
-std::optional<std::string> extract_epnumber_text_from_script(const std::string &script_text) {
+std::optional<std::string> extract_utsure_data_text_from_script(const std::string &script_text) {
     bool in_events_section = false;
     AssDialogueFormat format{};
 
@@ -217,7 +220,7 @@ std::optional<std::string> extract_epnumber_text_from_script(const std::string &
             continue;
         }
 
-        if (trim_ascii(fields[format.actor_index]) == "EPNUMBER") {
+        if (iequals_ascii(trim_ascii(fields[format.actor_index]), kThumbnailDataActor)) {
             return fields[format.text_index];
         }
     }
@@ -273,7 +276,7 @@ AssDialogueTextReplacement rebuild_dialogue_line_with_text(
     const std::string payload = original_line.substr(colon + 1U);
     auto fields = split_ass_fields(payload, format.field_count);
     if (format.actor_index >= fields.size() || format.text_index >= fields.size() ||
-        trim_ascii(fields[format.actor_index]) != "EPNUMBER") {
+        !iequals_ascii(trim_ascii(fields[format.actor_index]), kThumbnailDataActor)) {
         return AssDialogueTextReplacement{.line = original_line};
     }
 
@@ -333,7 +336,7 @@ std::vector<std::filesystem::path> find_thumbnail_candidates(const std::filesyst
         }
 
         const auto path = entry.path();
-        if (iequals_ascii(path.stem().string(), "TN") && supported_thumbnail_extension(path)) {
+        if (iequals_ascii(path.stem().string(), kThumbnailImageStem) && supported_thumbnail_extension(path)) {
             candidates.push_back(path.lexically_normal());
         }
     }
@@ -430,7 +433,7 @@ const char *to_string(const ThumbnailPrerollDecisionCode decision) noexcept {
     }
 }
 
-std::optional<std::string> ThumbnailPrerollResolver::extract_epnumber_text(
+std::optional<std::string> ThumbnailPrerollResolver::extract_utsure_data_text(
     const std::filesystem::path &overlay_ass_path
 ) {
     const auto script_text = read_text_file(overlay_ass_path);
@@ -438,10 +441,10 @@ std::optional<std::string> ThumbnailPrerollResolver::extract_epnumber_text(
         return std::nullopt;
     }
 
-    return extract_epnumber_text_from_script(script_text);
+    return extract_utsure_data_text_from_script(script_text);
 }
 
-std::string ThumbnailPrerollResolver::replace_epnumber_text(
+std::string ThumbnailPrerollResolver::replace_utsure_data_text(
     const std::string &ass_script_text,
     const std::string &replacement_text
 ) {
@@ -506,7 +509,7 @@ ThumbnailPrerollResolveResult ThumbnailPrerollResolver::resolve(
     } else if (!request.auto_select) {
         return make_result(
             ThumbnailPrerollDecisionCode::no_accepted_thumbnail,
-            "Thumbnail pre-roll needs a manually selected image because automatic TN.* selection is disabled."
+            "Thumbnail pre-roll needs a manually selected image because automatic thumbnail.* selection is disabled."
         );
     } else {
         for (const auto &candidate : find_thumbnail_candidates(subtitle_directory)) {
@@ -522,7 +525,7 @@ ThumbnailPrerollResolveResult ThumbnailPrerollResolver::resolve(
     if (!selected_image_path.has_value()) {
         return make_result(
             ThumbnailPrerollDecisionCode::no_accepted_thumbnail,
-            "Thumbnail pre-roll did not find a same-resolution TN.* image beside the selected subtitle.",
+            "Thumbnail pre-roll did not find a same-resolution thumbnail.* image beside the selected subtitle.",
             std::move(diagnostics)
         );
     }
@@ -530,27 +533,31 @@ ThumbnailPrerollResolveResult ThumbnailPrerollResolver::resolve(
     const auto overlay_ass_path =
         request.explicit_overlay_ass_path.has_value() && !request.explicit_overlay_ass_path->empty()
             ? request.explicit_overlay_ass_path->lexically_normal()
-            : find_case_insensitive_file(subtitle_directory, "logo", ".ass");
+            : find_case_insensitive_file(
+                  selected_image_path->parent_path(),
+                  selected_image_path->stem().string(),
+                  ".ass"
+              );
     if (overlay_ass_path.empty()) {
         return make_result(
             ThumbnailPrerollDecisionCode::missing_overlay_script,
-            "Thumbnail pre-roll found a thumbnail image but did not find logo.ass beside the selected subtitle.",
+            "Thumbnail pre-roll found a thumbnail image but did not find a same-stem .ass overlay beside it.",
             std::move(diagnostics)
         );
     }
     if (!is_regular_file_quiet(overlay_ass_path)) {
         return make_result(
             ThumbnailPrerollDecisionCode::missing_overlay_script,
-            "Thumbnail pre-roll found a thumbnail image but the selected logo.ass path is not a readable file.",
+            "Thumbnail pre-roll found a thumbnail image but the selected same-stem .ass overlay is not a readable file.",
             std::move(diagnostics)
         );
     }
 
-    auto title_text = ThumbnailPrerollResolver::extract_epnumber_text(overlay_ass_path);
+    auto title_text = ThumbnailPrerollResolver::extract_utsure_data_text(overlay_ass_path);
     if (!title_text.has_value()) {
         return make_result(
             ThumbnailPrerollDecisionCode::missing_title_event,
-            "Thumbnail pre-roll found logo.ass but did not find a Dialogue line with actor/name EPNUMBER.",
+            "Thumbnail pre-roll found the same-stem .ass overlay but did not find a Dialogue line with actor/name utsure_data.",
             std::move(diagnostics)
         );
     }

@@ -408,7 +408,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             notify_log(
                 telemetry,
                 EncodeJobLogLevel::info,
-                "Preparing the thumbnail pre-roll image and logo.ass overlay."
+                "Preparing the thumbnail pre-roll image and same-stem ASS overlay."
             );
 
             if (auto renderer_error = ensure_subtitle_renderer(); renderer_error.has_value()) {

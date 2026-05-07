@@ -27,10 +27,10 @@ int run_parse_assertion() {
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
         "Dialogue: 0,0:00:00.00,0:00:05.00,Default,IGNORED,0,0,0,,Not this\n"
-        "Dialogue: 0,0:00:00.00,0:00:05.00,Default,EPNUMBER,0,0,0,,{\\an5}Episode 06\n";
+        "Dialogue: 0,0:00:00.00,0:00:05.00,Default,utsure_data,0,0,0,,{\\an5}Episode 06\n";
 
     const std::string replaced =
-        utsure::core::subtitles::ThumbnailPrerollResolver::replace_epnumber_text(
+        utsure::core::subtitles::ThumbnailPrerollResolver::replace_utsure_data_text(
             script,
             "{\\an5\\bord2}Episode 07"
         );
@@ -39,8 +39,8 @@ int run_parse_assertion() {
         return fail("Thumbnail ASS replacement changed an unrelated dialogue line.");
     }
 
-    if (!contains_text(replaced, "EPNUMBER,0,0,0,,{\\an5\\bord2}Episode 07")) {
-        return fail("Thumbnail ASS replacement did not update the EPNUMBER dialogue text.");
+    if (!contains_text(replaced, "utsure_data,0,0,0,,{\\an5\\bord2}Episode 07")) {
+        return fail("Thumbnail ASS replacement did not update the utsure_data dialogue text.");
     }
 
     const auto temp_path =
@@ -52,15 +52,15 @@ int run_parse_assertion() {
         output << script;
     }
 
-    const auto extracted = utsure::core::subtitles::ThumbnailPrerollResolver::extract_epnumber_text(temp_path);
+    const auto extracted = utsure::core::subtitles::ThumbnailPrerollResolver::extract_utsure_data_text(temp_path);
     std::error_code remove_error{};
     std::filesystem::remove(temp_path, remove_error);
 
     if (!extracted.has_value() || *extracted != "{\\an5}Episode 06") {
-        return fail("Thumbnail ASS parser did not return the EPNUMBER text including override tags.");
+        return fail("Thumbnail ASS parser did not return the utsure_data text including override tags.");
     }
 
-    std::cout << "thumbnail.ass.epnumber={\\an5}Episode 06\n";
+    std::cout << "thumbnail.ass.utsure_data={\\an5}Episode 06\n";
     std::cout << "thumbnail.ass.replaced=yes\n";
     return 0;
 }
@@ -78,11 +78,11 @@ int run_resolve_assertion(const std::filesystem::path &subtitle_path) {
     );
 
     if (!result.has_assets()) {
-        return fail("Thumbnail resolver did not select the same-resolution TN.* and logo.ass assets.");
+        return fail("Thumbnail resolver did not select the same-resolution thumbnail.* and thumbnail.ass assets.");
     }
 
-    if (result.assets->image_path.filename().string() != "TN.png" ||
-        result.assets->overlay_ass_path.filename().string() != "logo.ass" ||
+    if (result.assets->image_path.filename().string() != "thumbnail.png" ||
+        result.assets->overlay_ass_path.filename().string() != "thumbnail.ass" ||
         result.assets->title_text != "{\\an5}Episode 06") {
         return fail("Thumbnail resolver selected unexpected assets or title text.");
     }
@@ -100,11 +100,11 @@ int run_resolve_assertion(const std::filesystem::path &subtitle_path) {
 
     if (mismatch_result.has_assets() ||
         mismatch_result.decision != utsure::core::subtitles::ThumbnailPrerollDecisionCode::no_accepted_thumbnail) {
-        return fail("Thumbnail resolver accepted a TN.* image with the wrong dimensions.");
+        return fail("Thumbnail resolver accepted a thumbnail.* image with the wrong dimensions.");
     }
 
-    std::cout << "thumbnail.resolve.image=TN.png\n";
-    std::cout << "thumbnail.resolve.overlay=logo.ass\n";
+    std::cout << "thumbnail.resolve.image=thumbnail.png\n";
+    std::cout << "thumbnail.resolve.overlay=thumbnail.ass\n";
     std::cout << "thumbnail.resolve.mismatch=rejected\n";
     return 0;
 }
