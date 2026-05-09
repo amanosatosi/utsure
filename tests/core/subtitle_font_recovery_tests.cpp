@@ -108,7 +108,10 @@ std::filesystem::path make_fontcollector_stub(const std::filesystem::path &root)
         ")\r\n"
         "if /I \"%UTSURE_FONTCOLLECTOR_STUB_MODE%\"==\"no-fonts\" exit /b 0\r\n"
         "if /I \"%UTSURE_FONTCOLLECTOR_STUB_MODE%\"==\"fail\" exit /b 7\r\n"
-        "if /I \"%UTSURE_FONTCOLLECTOR_STUB_MODE%\"==\"fail-no-log\" exit /b 7\r\n"
+        "if /I \"%UTSURE_FONTCOLLECTOR_STUB_MODE%\"==\"fail-no-log\" (\r\n"
+        "  echo fontcollector stderr stub 1>&2\r\n"
+        "  exit /b 7\r\n"
+        ")\r\n"
         "exit /b 0\r\n"
     );
     return script_path;
@@ -149,6 +152,7 @@ std::filesystem::path make_fontcollector_stub(const std::filesystem::path &root)
         "    exit 7\n"
         "    ;;\n"
         "  fail-no-log)\n"
+        "    printf \"fontcollector stderr stub\\n\" >&2\n"
         "    exit 7\n"
         "    ;;\n"
         "esac\n"
@@ -395,7 +399,7 @@ int assert_tool_unavailable_behavior(const std::filesystem::path &root) {
 }
 
 int assert_failed_tool_preserves_diagnostic_log(const std::filesystem::path &root, const std::filesystem::path &tool_path) {
-    const ScopedEnvironmentVariable stub_mode("UTSURE_FONTCOLLECTOR_STUB_MODE", std::string("fail"));
+    const ScopedEnvironmentVariable stub_mode("UTSURE_FONTCOLLECTOR_STUB_MODE", std::string("fail-no-log"));
     const auto subtitle_path = root / "episode06.ass";
     write_text_file(subtitle_path, "[Script Info]\nTitle: episode06\n");
 
@@ -415,8 +419,13 @@ int assert_failed_tool_preserves_diagnostic_log(const std::filesystem::path &roo
             prepared_request.font_recovery_report.actionable_hint.find("FontCollector log:") == std::string::npos ||
             prepared_request.font_recovery_report.actionable_hint.find("FontCollector log excerpt:") ==
                 std::string::npos ||
-            prepared_request.font_recovery_report.actionable_hint.find("fontcollector stub") == std::string::npos) {
-            return fail("Font recovery did not report a failed FontCollector run with a diagnostic log hint.");
+            prepared_request.font_recovery_report.actionable_hint.find("requested_tool_log_present=no") ==
+                std::string::npos ||
+            prepared_request.font_recovery_report.actionable_hint.find("captured_stdout_stderr:") ==
+                std::string::npos ||
+            prepared_request.font_recovery_report.actionable_hint.find("fontcollector stderr stub") ==
+                std::string::npos) {
+            return fail("Font recovery did not report a failed FontCollector run with captured tool output.");
         }
 
         if (!std::filesystem::exists(prepared_request.font_recovery_report.tool_log_path)) {

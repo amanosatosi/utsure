@@ -172,6 +172,13 @@ std::optional<std::filesystem::path> write_failed_tool_diagnostic_log(
     }
     stream << "requested_tool_log=" << path_to_utf8_string(tool_log_path) << '\n';
     stream << "requested_tool_log_present=" << (has_tool_log ? "yes" : "no") << '\n';
+    if (!tool_run_result.combined_output.empty()) {
+        stream << "captured_stdout_stderr:\n";
+        stream << tool_run_result.combined_output;
+        if (tool_run_result.combined_output.back() != '\n') {
+            stream << '\n';
+        }
+    }
 
     if (!stream) {
         return std::nullopt;

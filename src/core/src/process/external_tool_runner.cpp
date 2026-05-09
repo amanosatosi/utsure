@@ -1,16 +1,18 @@
 #include "external_tool_runner.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
-#include <process.h>
 #include <windows.h>
 #else
 #include <spawn.h>
@@ -65,6 +67,52 @@ std::vector<std::string> split_string(const std::string &value, const char delim
 }
 
 #ifdef _WIN32
+class WindowsHandle final {
+public:
+    WindowsHandle() = default;
+    explicit WindowsHandle(HANDLE value) : value_(value) {}
+
+    ~WindowsHandle() {
+        reset();
+    }
+
+    WindowsHandle(const WindowsHandle &) = delete;
+    WindowsHandle &operator=(const WindowsHandle &) = delete;
+
+    WindowsHandle(WindowsHandle &&other) noexcept : value_(other.value_) {
+        other.value_ = nullptr;
+    }
+
+    WindowsHandle &operator=(WindowsHandle &&other) noexcept {
+        if (this != &other) {
+            reset();
+            value_ = other.value_;
+            other.value_ = nullptr;
+        }
+        return *this;
+    }
+
+    [[nodiscard]] HANDLE get() const noexcept {
+        return value_;
+    }
+
+    [[nodiscard]] HANDLE release() noexcept {
+        const HANDLE released = value_;
+        value_ = nullptr;
+        return released;
+    }
+
+    void reset(HANDLE value = nullptr) noexcept {
+        if (value_ != nullptr && value_ != INVALID_HANDLE_VALUE) {
+            CloseHandle(value_);
+        }
+        value_ = value;
+    }
+
+private:
+    HANDLE value_{nullptr};
+};
+
 std::wstring utf8_to_wstring(const std::string &value) {
     if (value.empty()) {
         return {};
@@ -96,6 +144,79 @@ std::wstring utf8_to_wstring(const std::string &value) {
     }
 
     return wide_value;
+}
+
+std::wstring quote_windows_command_line_argument(const std::wstring &argument) {
+    if (argument.empty()) {
+        return L"\"\"";
+    }
+
+    bool needs_quotes = false;
+    for (const wchar_t character : argument) {
+        if (character == L' ' || character == L'\t' || character == L'\n' || character == L'"') {
+            needs_quotes = true;
+            break;
+        }
+    }
+    if (!needs_quotes) {
+        return argument;
+    }
+
+    std::wstring quoted{L"\""};
+    std::size_t backslash_count = 0;
+    for (const wchar_t character : argument) {
+        if (character == L'\\') {
+            ++backslash_count;
+            continue;
+        }
+
+        if (character == L'"') {
+            quoted.append(backslash_count * 2U + 1U, L'\\');
+            quoted.push_back(character);
+            backslash_count = 0;
+            continue;
+        }
+
+        quoted.append(backslash_count, L'\\');
+        backslash_count = 0;
+        quoted.push_back(character);
+    }
+    quoted.append(backslash_count * 2U, L'\\');
+    quoted.push_back(L'"');
+    return quoted;
+}
+
+std::wstring build_windows_command_line(
+    const std::filesystem::path &executable,
+    const std::vector<std::string> &arguments
+) {
+    std::wstring command_line = quote_windows_command_line_argument(executable.wstring());
+    for (const auto &argument : arguments) {
+        command_line.push_back(L' ');
+        command_line += quote_windows_command_line_argument(utf8_to_wstring(argument));
+    }
+    return command_line;
+}
+
+std::string read_available_pipe_output(HANDLE pipe) {
+    std::string output{};
+    std::array<char, 4096> buffer{};
+
+    for (;;) {
+        DWORD available = 0;
+        if (PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr) == 0 || available == 0) {
+            break;
+        }
+
+        const DWORD bytes_to_read = std::min<DWORD>(available, static_cast<DWORD>(buffer.size()));
+        DWORD bytes_read = 0;
+        if (ReadFile(pipe, buffer.data(), bytes_to_read, &bytes_read, nullptr) == 0 || bytes_read == 0) {
+            break;
+        }
+        output.append(buffer.data(), buffer.data() + bytes_read);
+    }
+
+    return output;
 }
 
 std::vector<std::string> windows_executable_suffixes(const std::string &candidate_name) {
@@ -199,23 +320,103 @@ ExternalToolRunResult run_external_tool(const ExternalToolRunRequest &request) n
     }
 
 #ifdef _WIN32
-    std::vector<std::wstring> argument_storage{};
-    argument_storage.reserve(request.arguments.size() + 1U);
-    argument_storage.push_back(request.executable.wstring());
-    for (const auto &argument : request.arguments) {
-        argument_storage.push_back(utf8_to_wstring(argument));
+    SECURITY_ATTRIBUTES pipe_security{};
+    pipe_security.nLength = sizeof(SECURITY_ATTRIBUTES);
+    pipe_security.bInheritHandle = TRUE;
+
+    HANDLE raw_read_pipe = nullptr;
+    HANDLE raw_write_pipe = nullptr;
+    if (CreatePipe(&raw_read_pipe, &raw_write_pipe, &pipe_security, 0) == 0) {
+        return ExternalToolRunResult{
+            .launched = false,
+            .exit_code = -1,
+            .failure_message = "Failed to create output capture pipe for external tool invocation."
+        };
+    }
+    WindowsHandle read_pipe(raw_read_pipe);
+    WindowsHandle write_pipe(raw_write_pipe);
+    SetHandleInformation(read_pipe.get(), HANDLE_FLAG_INHERIT, 0);
+
+    WindowsHandle stdin_handle(CreateFileW(
+        L"NUL",
+        GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        &pipe_security,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+    ));
+
+    STARTUPINFOW startup_info{};
+    startup_info.cb = sizeof(STARTUPINFOW);
+    startup_info.dwFlags = STARTF_USESTDHANDLES;
+    startup_info.hStdInput = stdin_handle.get() != INVALID_HANDLE_VALUE ? stdin_handle.get() : nullptr;
+    startup_info.hStdOutput = write_pipe.get();
+    startup_info.hStdError = write_pipe.get();
+
+    PROCESS_INFORMATION process_info{};
+    auto command_line = build_windows_command_line(request.executable, request.arguments);
+    const BOOL created = CreateProcessW(
+        request.executable.c_str(),
+        command_line.data(),
+        nullptr,
+        nullptr,
+        TRUE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        nullptr,
+        &startup_info,
+        &process_info
+    );
+    if (created == 0) {
+        return ExternalToolRunResult{
+            .launched = false,
+            .exit_code = -1,
+            .failure_message = "CreateProcessW failed for external tool invocation."
+        };
     }
 
-    std::vector<wchar_t *> argument_pointers{};
-    argument_pointers.reserve(argument_storage.size() + 1U);
-    for (auto &argument : argument_storage) {
-        argument_pointers.push_back(argument.data());
-    }
-    argument_pointers.push_back(nullptr);
+    WindowsHandle process_handle(process_info.hProcess);
+    WindowsHandle thread_handle(process_info.hThread);
+    write_pipe.reset();
 
-    errno = 0;
-    const intptr_t spawn_result = _wspawnvp(_P_WAIT, request.executable.c_str(), argument_pointers.data());
-    if (spawn_result == -1) {
+    std::string combined_output{};
+    for (;;) {
+        combined_output += read_available_pipe_output(read_pipe.get());
+        const DWORD wait_result = WaitForSingleObject(process_handle.get(), 20);
+        if (wait_result == WAIT_OBJECT_0) {
+            break;
+        }
+        if (wait_result != WAIT_TIMEOUT) {
+            return ExternalToolRunResult{
+                .launched = true,
+                .exit_code = -1,
+                .failure_message = "Failed while waiting for external tool process.",
+                .combined_output = std::move(combined_output)
+            };
+        }
+    }
+    combined_output += read_available_pipe_output(read_pipe.get());
+
+    DWORD exit_code = 0;
+    if (GetExitCodeProcess(process_handle.get(), &exit_code) == 0) {
+        return ExternalToolRunResult{
+            .launched = true,
+            .exit_code = -1,
+            .failure_message = "Failed to read external tool exit code.",
+            .combined_output = std::move(combined_output)
+        };
+    }
+
+    return ExternalToolRunResult{
+        .launched = true,
+        .exit_code = static_cast<int>(exit_code),
+        .failure_message = {},
+        .combined_output = std::move(combined_output)
+    };
+#else
+    int output_pipe[2]{-1, -1};
+    if (pipe(output_pipe) != 0) {
         return ExternalToolRunResult{
             .launched = false,
             .exit_code = -1,
@@ -223,12 +424,6 @@ ExternalToolRunResult run_external_tool(const ExternalToolRunRequest &request) n
         };
     }
 
-    return ExternalToolRunResult{
-        .launched = true,
-        .exit_code = static_cast<int>(spawn_result),
-        .failure_message = {}
-    };
-#else
     std::vector<std::string> argument_storage{};
     argument_storage.reserve(request.arguments.size() + 1U);
     argument_storage.push_back(request.executable.string());
@@ -241,16 +436,25 @@ ExternalToolRunResult run_external_tool(const ExternalToolRunRequest &request) n
     }
     argument_pointers.push_back(nullptr);
 
+    posix_spawn_file_actions_t file_actions{};
+    posix_spawn_file_actions_init(&file_actions);
+    posix_spawn_file_actions_adddup2(&file_actions, output_pipe[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&file_actions, output_pipe[1], STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&file_actions, output_pipe[0]);
+
     pid_t child_pid = 0;
     const int spawn_result = posix_spawnp(
         &child_pid,
         request.executable.c_str(),
-        nullptr,
+        &file_actions,
         nullptr,
         argument_pointers.data(),
         environ
     );
+    posix_spawn_file_actions_destroy(&file_actions);
+    close(output_pipe[1]);
     if (spawn_result != 0) {
+        close(output_pipe[0]);
         return ExternalToolRunResult{
             .launched = false,
             .exit_code = -1,
@@ -258,12 +462,25 @@ ExternalToolRunResult run_external_tool(const ExternalToolRunRequest &request) n
         };
     }
 
+    std::string combined_output{};
+    std::array<char, 4096> output_buffer{};
+    for (;;) {
+        const ssize_t bytes_read = read(output_pipe[0], output_buffer.data(), output_buffer.size());
+        if (bytes_read > 0) {
+            combined_output.append(output_buffer.data(), output_buffer.data() + bytes_read);
+            continue;
+        }
+        break;
+    }
+    close(output_pipe[0]);
+
     int wait_status = 0;
     if (waitpid(child_pid, &wait_status, 0) < 0) {
         return ExternalToolRunResult{
             .launched = false,
             .exit_code = -1,
-            .failure_message = std::strerror(errno)
+            .failure_message = std::strerror(errno),
+            .combined_output = std::move(combined_output)
         };
     }
 
@@ -271,7 +488,8 @@ ExternalToolRunResult run_external_tool(const ExternalToolRunRequest &request) n
         return ExternalToolRunResult{
             .launched = true,
             .exit_code = WEXITSTATUS(wait_status),
-            .failure_message = {}
+            .failure_message = {},
+            .combined_output = std::move(combined_output)
         };
     }
 
@@ -279,14 +497,16 @@ ExternalToolRunResult run_external_tool(const ExternalToolRunRequest &request) n
         return ExternalToolRunResult{
             .launched = true,
             .exit_code = 128 + WTERMSIG(wait_status),
-            .failure_message = {}
+            .failure_message = {},
+            .combined_output = std::move(combined_output)
         };
     }
 
     return ExternalToolRunResult{
         .launched = true,
         .exit_code = wait_status,
-        .failure_message = {}
+        .failure_message = {},
+        .combined_output = std::move(combined_output)
     };
 #endif
 }

@@ -16,6 +16,7 @@ struct ExternalToolRunResult final {
     bool launched{false};
     int exit_code{-1};
     std::string failure_message{};
+    std::string combined_output{};
 
     [[nodiscard]] bool succeeded() const noexcept;
 };
