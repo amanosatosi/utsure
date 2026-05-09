@@ -112,6 +112,60 @@ std::filesystem::path make_temporary_root() {
     return std::filesystem::temp_directory_path() / root_name;
 }
 
+std::optional<std::filesystem::path> preserve_failed_tool_log(const std::filesystem::path &tool_log_path) {
+    std::error_code status_error{};
+    if (tool_log_path.empty() ||
+        !std::filesystem::exists(tool_log_path, status_error) ||
+        status_error ||
+        !std::filesystem::is_regular_file(tool_log_path, status_error) ||
+        status_error) {
+        return std::nullopt;
+    }
+
+    const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto diagnostics_directory =
+        std::filesystem::temp_directory_path() /
+        "utsure-fontcollector-logs" /
+        ("failure-" + std::to_string(current_process_id()) + "-" + std::to_string(timestamp));
+
+    std::error_code create_error{};
+    std::filesystem::create_directories(diagnostics_directory, create_error);
+    if (create_error) {
+        return std::nullopt;
+    }
+
+    const auto preserved_log_path = diagnostics_directory / "fontcollector.log";
+    std::error_code copy_error{};
+    std::filesystem::copy_file(
+        tool_log_path,
+        preserved_log_path,
+        std::filesystem::copy_options::overwrite_existing,
+        copy_error
+    );
+    if (copy_error) {
+        return std::nullopt;
+    }
+
+    return preserved_log_path.lexically_normal();
+}
+
+std::string append_tool_log_hint(
+    std::string actionable_hint,
+    const std::optional<std::filesystem::path> &preserved_log_path
+) {
+    if (!preserved_log_path.has_value()) {
+        return actionable_hint;
+    }
+
+    if (!actionable_hint.empty() && actionable_hint.back() != ' ') {
+        actionable_hint += ' ';
+    }
+    actionable_hint += "FontCollector log: ";
+    actionable_hint += path_to_utf8_string(*preserved_log_path);
+    actionable_hint += ".";
+    return actionable_hint;
+}
+
 std::vector<std::filesystem::path> collect_recovered_font_files(const std::filesystem::path &root_directory) {
     std::vector<std::filesystem::path> recovered_files{};
     std::error_code iteration_error{};
@@ -337,16 +391,21 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
         }
     });
     if (!tool_run_result.launched) {
+        const auto preserved_log_path =
+            preserve_failed_tool_log(prepared_request.font_recovery_report.tool_log_path);
         prepared_request.font_recovery_report = make_failed_report(
             normalized_subtitle_path,
             *fontcollector_executable,
             artifacts->font_directory_,
-            prepared_request.font_recovery_report.tool_log_path,
+            preserved_log_path.value_or(prepared_request.font_recovery_report.tool_log_path),
             "FontCollector could not be launched for '" + format_path_leaf(normalized_subtitle_path) +
                 "'. ASS subtitle rendering cannot start.",
-            tool_run_result.failure_message.empty()
-                ? "The tool launch failed before FontCollector could inspect the subtitle script."
-                : tool_run_result.failure_message
+            append_tool_log_hint(
+                tool_run_result.failure_message.empty()
+                    ? "The tool launch failed before FontCollector could inspect the subtitle script."
+                    : tool_run_result.failure_message,
+                preserved_log_path
+            )
         );
         return prepared_request;
     }
@@ -355,15 +414,20 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
     prepared_request.font_recovery_report.recovered_font_files = artifacts->recovered_font_files_;
 
     if (tool_run_result.exit_code != 0) {
+        const auto preserved_log_path =
+            preserve_failed_tool_log(prepared_request.font_recovery_report.tool_log_path);
         prepared_request.font_recovery_report = make_failed_report(
             normalized_subtitle_path,
             *fontcollector_executable,
             artifacts->font_directory_,
-            prepared_request.font_recovery_report.tool_log_path,
+            preserved_log_path.value_or(prepared_request.font_recovery_report.tool_log_path),
             "FontCollector failed for '" + format_path_leaf(normalized_subtitle_path) + "' with exit code " +
                 std::to_string(tool_run_result.exit_code) +
                 ". ASS subtitle rendering cannot start.",
-            "Review the FontCollector log, invocation, and subtitle script compatibility."
+            append_tool_log_hint(
+                "Review the FontCollector log, invocation, and subtitle script compatibility.",
+                preserved_log_path
+            )
         );
         prepared_request.font_recovery_report.recovered_font_files = artifacts->recovered_font_files_;
         return prepared_request;

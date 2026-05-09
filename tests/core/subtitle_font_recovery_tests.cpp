@@ -390,6 +390,45 @@ int assert_tool_unavailable_behavior(const std::filesystem::path &root) {
     return 0;
 }
 
+int assert_failed_tool_preserves_diagnostic_log(const std::filesystem::path &root, const std::filesystem::path &tool_path) {
+    const ScopedEnvironmentVariable stub_mode("UTSURE_FONTCOLLECTOR_STUB_MODE", std::string("fail"));
+    const auto subtitle_path = root / "episode06.ass";
+    write_text_file(subtitle_path, "[Script Info]\nTitle: episode06\n");
+
+    std::filesystem::path preserved_log_path{};
+    {
+        const PreparedSubtitleRenderSessionRequest prepared_request = prepare_subtitle_render_session_request(
+            make_session_request(subtitle_path),
+            SubtitleFontRecoveryOptions{
+                .fontcollector_executable_override = tool_path
+            }
+        );
+
+        if (prepared_request.font_recovery_report.outcome != SubtitleFontRecoveryOutcome::failed ||
+            !prepared_request.font_recovery_report.attempted() ||
+            !font_recovery_blocks_subtitle_rendering(prepared_request.font_recovery_report) ||
+            prepared_request.font_recovery_report.message.find("exit code 7") == std::string::npos ||
+            prepared_request.font_recovery_report.actionable_hint.find("FontCollector log:") == std::string::npos) {
+            return fail("Font recovery did not report a failed FontCollector run with a diagnostic log hint.");
+        }
+
+        if (!std::filesystem::exists(prepared_request.font_recovery_report.tool_log_path)) {
+            return fail("Font recovery failure did not preserve the FontCollector log while the request is alive.");
+        }
+
+        preserved_log_path = prepared_request.font_recovery_report.tool_log_path;
+    }
+
+    if (!std::filesystem::exists(preserved_log_path)) {
+        return fail("Font recovery failure diagnostic log was removed with the staging directory.");
+    }
+
+    std::error_code cleanup_error{};
+    std::filesystem::remove_all(preserved_log_path.parent_path(), cleanup_error);
+    std::cout << "fontcollector.failure_log=" << preserved_log_path.lexically_normal().string() << '\n';
+    return 0;
+}
+
 int assert_burn_in_pipeline_blocks_missing_primary_fontcollector(const std::filesystem::path &root) {
     const ScopedEnvironmentVariable fontcollector_path(
         "UTSURE_FONTCOLLECTOR_PATH",
@@ -483,6 +522,10 @@ int main() {
     }
 
     if (assert_tool_unavailable_behavior(root) != 0) {
+        return 1;
+    }
+
+    if (assert_failed_tool_preserves_diagnostic_log(root, tool_path) != 0) {
         return 1;
     }
 
