@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
 #include <sstream>
 #include <string_view>
 #include <system_error>
@@ -25,6 +26,7 @@ namespace utsure::core::subtitles {
 namespace {
 
 constexpr std::string_view kFontCollectorEnvVar = "UTSURE_FONTCOLLECTOR_PATH";
+constexpr std::size_t kMaxInlineToolLogBytes = 8192;
 
 std::string lowercase_ascii(std::string value) {
     std::transform(
@@ -112,16 +114,11 @@ std::filesystem::path make_temporary_root() {
     return std::filesystem::temp_directory_path() / root_name;
 }
 
-std::optional<std::filesystem::path> preserve_failed_tool_log(const std::filesystem::path &tool_log_path) {
-    std::error_code status_error{};
-    if (tool_log_path.empty() ||
-        !std::filesystem::exists(tool_log_path, status_error) ||
-        status_error ||
-        !std::filesystem::is_regular_file(tool_log_path, status_error) ||
-        status_error) {
-        return std::nullopt;
-    }
-
+std::optional<std::filesystem::path> write_failed_tool_diagnostic_log(
+    const std::filesystem::path &tool_log_path,
+    const process::ExternalToolRunRequest &tool_request,
+    const process::ExternalToolRunResult &tool_run_result
+) {
     const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
     const auto diagnostics_directory =
         std::filesystem::temp_directory_path() /
@@ -134,19 +131,53 @@ std::optional<std::filesystem::path> preserve_failed_tool_log(const std::filesys
         return std::nullopt;
     }
 
-    const auto preserved_log_path = diagnostics_directory / "fontcollector.log";
-    std::error_code copy_error{};
-    std::filesystem::copy_file(
-        tool_log_path,
-        preserved_log_path,
-        std::filesystem::copy_options::overwrite_existing,
-        copy_error
-    );
-    if (copy_error) {
+    const auto preserved_log_path = (diagnostics_directory / "fontcollector.log").lexically_normal();
+    std::error_code status_error{};
+    const bool has_tool_log =
+        !tool_log_path.empty() &&
+        std::filesystem::exists(tool_log_path, status_error) &&
+        !status_error &&
+        std::filesystem::is_regular_file(tool_log_path, status_error) &&
+        !status_error;
+
+    if (has_tool_log) {
+        std::error_code copy_error{};
+        std::filesystem::copy_file(
+            tool_log_path,
+            preserved_log_path,
+            std::filesystem::copy_options::overwrite_existing,
+            copy_error
+        );
+        if (!copy_error) {
+            return preserved_log_path;
+        }
+    }
+
+    std::ofstream stream(preserved_log_path, std::ios::binary | std::ios::trunc);
+    if (!stream) {
         return std::nullopt;
     }
 
-    return preserved_log_path.lexically_normal();
+    stream << "FontCollector invocation failed before a tool log could be preserved.\n";
+    stream << "executable=" << path_to_utf8_string(tool_request.executable) << '\n';
+    stream << "arguments:";
+    for (const auto &argument : tool_request.arguments) {
+        stream << ' ' << argument;
+    }
+    stream << '\n';
+    stream << "launched=" << (tool_run_result.launched ? "yes" : "no") << '\n';
+    stream << "exit_code=" << tool_run_result.exit_code << '\n';
+    if (!tool_run_result.failure_message.empty()) {
+        stream << "failure_message=" << tool_run_result.failure_message << '\n';
+    }
+    stream << "requested_tool_log=" << path_to_utf8_string(tool_log_path) << '\n';
+    stream << "requested_tool_log_present=" << (has_tool_log ? "yes" : "no") << '\n';
+
+    if (!stream) {
+        return std::nullopt;
+    }
+
+    return preserved_log_path;
 }
 
 std::string append_tool_log_hint(
@@ -163,6 +194,28 @@ std::string append_tool_log_hint(
     actionable_hint += "FontCollector log: ";
     actionable_hint += path_to_utf8_string(*preserved_log_path);
     actionable_hint += ".";
+
+    std::ifstream stream(*preserved_log_path, std::ios::binary);
+    if (!stream) {
+        return actionable_hint;
+    }
+
+    std::string log_excerpt{};
+    log_excerpt.reserve(kMaxInlineToolLogBytes);
+    char character = '\0';
+    while (log_excerpt.size() < kMaxInlineToolLogBytes && stream.get(character)) {
+        log_excerpt.push_back(character);
+    }
+    const bool truncated = stream.good();
+    if (log_excerpt.empty()) {
+        return actionable_hint;
+    }
+
+    actionable_hint += "\nFontCollector log excerpt:\n";
+    actionable_hint += log_excerpt;
+    if (truncated) {
+        actionable_hint += "\n[FontCollector log excerpt truncated.]";
+    }
     return actionable_hint;
 }
 
@@ -379,7 +432,7 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
     prepared_request.font_recovery_report.tool_log_path =
         prepared_request.font_recovery_artifacts->temporary_root_directory() / "fontcollector.log";
 
-    const auto tool_run_result = process::run_external_tool(process::ExternalToolRunRequest{
+    const auto tool_request = process::ExternalToolRunRequest{
         .executable = *fontcollector_executable,
         .arguments = {
             "--input",
@@ -389,10 +442,15 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
             "--logging",
             path_to_utf8_string(prepared_request.font_recovery_report.tool_log_path)
         }
-    });
+    };
+    const auto tool_run_result = process::run_external_tool(tool_request);
     if (!tool_run_result.launched) {
         const auto preserved_log_path =
-            preserve_failed_tool_log(prepared_request.font_recovery_report.tool_log_path);
+            write_failed_tool_diagnostic_log(
+                prepared_request.font_recovery_report.tool_log_path,
+                tool_request,
+                tool_run_result
+            );
         prepared_request.font_recovery_report = make_failed_report(
             normalized_subtitle_path,
             *fontcollector_executable,
@@ -415,7 +473,11 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
 
     if (tool_run_result.exit_code != 0) {
         const auto preserved_log_path =
-            preserve_failed_tool_log(prepared_request.font_recovery_report.tool_log_path);
+            write_failed_tool_diagnostic_log(
+                prepared_request.font_recovery_report.tool_log_path,
+                tool_request,
+                tool_run_result
+            );
         prepared_request.font_recovery_report = make_failed_report(
             normalized_subtitle_path,
             *fontcollector_executable,

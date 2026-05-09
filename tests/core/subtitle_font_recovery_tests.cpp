@@ -99,7 +99,7 @@ std::filesystem::path make_fontcollector_stub(const std::filesystem::path &root)
         "shift\r\n"
         "goto parse\r\n"
         ":parsed\r\n"
-        "if not \"%LOG_PATH%\"==\"\" echo fontcollector stub>\"%LOG_PATH%\"\r\n"
+        "if not \"%LOG_PATH%\"==\"\" if /I not \"%UTSURE_FONTCOLLECTOR_STUB_MODE%\"==\"fail-no-log\" echo fontcollector stub>\"%LOG_PATH%\"\r\n"
         "if /I \"%UTSURE_FONTCOLLECTOR_STUB_MODE%\"==\"success\" (\r\n"
         "  if not exist \"%OUTPUT_DIR%\" mkdir \"%OUTPUT_DIR%\"\r\n"
         "  >\"%OUTPUT_DIR%\\RecoveredA.ttf\" echo font-a\r\n"
@@ -108,6 +108,7 @@ std::filesystem::path make_fontcollector_stub(const std::filesystem::path &root)
         ")\r\n"
         "if /I \"%UTSURE_FONTCOLLECTOR_STUB_MODE%\"==\"no-fonts\" exit /b 0\r\n"
         "if /I \"%UTSURE_FONTCOLLECTOR_STUB_MODE%\"==\"fail\" exit /b 7\r\n"
+        "if /I \"%UTSURE_FONTCOLLECTOR_STUB_MODE%\"==\"fail-no-log\" exit /b 7\r\n"
         "exit /b 0\r\n"
     );
     return script_path;
@@ -133,7 +134,7 @@ std::filesystem::path make_fontcollector_stub(const std::filesystem::path &root)
         "      ;;\n"
         "  esac\n"
         "done\n"
-        "if [ -n \"$LOG_PATH\" ]; then printf \"fontcollector stub\" > \"$LOG_PATH\"; fi\n"
+        "if [ -n \"$LOG_PATH\" ] && [ \"$UTSURE_FONTCOLLECTOR_STUB_MODE\" != \"fail-no-log\" ]; then printf \"fontcollector stub\" > \"$LOG_PATH\"; fi\n"
         "case \"$UTSURE_FONTCOLLECTOR_STUB_MODE\" in\n"
         "  success)\n"
         "    mkdir -p \"$OUTPUT_DIR\"\n"
@@ -145,6 +146,9 @@ std::filesystem::path make_fontcollector_stub(const std::filesystem::path &root)
         "    exit 0\n"
         "    ;;\n"
         "  fail)\n"
+        "    exit 7\n"
+        "    ;;\n"
+        "  fail-no-log)\n"
         "    exit 7\n"
         "    ;;\n"
         "esac\n"
@@ -408,7 +412,10 @@ int assert_failed_tool_preserves_diagnostic_log(const std::filesystem::path &roo
             !prepared_request.font_recovery_report.attempted() ||
             !font_recovery_blocks_subtitle_rendering(prepared_request.font_recovery_report) ||
             prepared_request.font_recovery_report.message.find("exit code 7") == std::string::npos ||
-            prepared_request.font_recovery_report.actionable_hint.find("FontCollector log:") == std::string::npos) {
+            prepared_request.font_recovery_report.actionable_hint.find("FontCollector log:") == std::string::npos ||
+            prepared_request.font_recovery_report.actionable_hint.find("FontCollector log excerpt:") ==
+                std::string::npos ||
+            prepared_request.font_recovery_report.actionable_hint.find("fontcollector stub") == std::string::npos) {
             return fail("Font recovery did not report a failed FontCollector run with a diagnostic log hint.");
         }
 
