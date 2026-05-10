@@ -3393,7 +3393,6 @@ ResolvedVideoFrameTiming resolve_video_frame_timing_for_segment(
     const VideoOutputPlan &video_output_plan,
     const Rational &output_video_time_base,
     const std::int64_t segment_output_start_pts,
-    const bool allow_trimmed_main_sample_aspect_ratio_mismatch,
     std::optional<std::int64_t> &first_source_pts_in_output_time_base,
     std::optional<std::int64_t> &previous_source_pts,
     Rational &previous_source_time_base
@@ -3403,17 +3402,6 @@ ResolvedVideoFrameTiming resolve_video_frame_timing_for_segment(
         throw std::runtime_error(
             "The " + std::string(timeline::to_string(kind)) +
             " segment decoded into a resolution that does not match the main segment."
-        );
-    }
-
-    const auto normalized_frame_sample_aspect_ratio = normalize_sample_aspect_ratio(frame.metadata.sample_aspect_ratio);
-    if (kind == timeline::TimelineSegmentKind::main &&
-        !allow_trimmed_main_sample_aspect_ratio_mismatch &&
-        rational_is_positive(video_output_plan.sample_aspect_ratio) &&
-        !rationals_equal(normalized_frame_sample_aspect_ratio, video_output_plan.sample_aspect_ratio)) {
-        throw std::runtime_error(
-            "The " + std::string(timeline::to_string(kind)) +
-            " segment decoded with a sample aspect ratio that does not match the main segment."
         );
     }
 
@@ -3597,9 +3585,6 @@ SegmentProcessResult process_segment(
         segment_plan.inspected_source_info.primary_audio_stream.has_value() && rational_is_positive(audio_stream_time_base)
             ? av_rescale_q(segment_trim_in_us, AV_TIME_BASE_Q, to_av_rational(audio_stream_time_base))
             : 0;
-    const bool allow_trimmed_main_sample_aspect_ratio_mismatch =
-        segment_plan.kind == timeline::TimelineSegmentKind::main && segment_has_source_trim(segment_plan);
-
     std::int64_t next_fallback_source_pts = segment_has_source_trim(segment_plan)
         ? requested_video_trim_start_pts
         : segment_plan.inspected_source_info.primary_video_stream->timestamps.start_pts.value_or(0);
@@ -4131,7 +4116,6 @@ SegmentProcessResult process_segment(
             video_output_plan,
             timeline_plan.output_video_time_base,
             segment_output_start_pts,
-            allow_trimmed_main_sample_aspect_ratio_mismatch,
             first_video_source_pts_in_output_time_base,
             previous_video_source_pts,
             previous_video_source_time_base
