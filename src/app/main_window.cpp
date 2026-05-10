@@ -43,11 +43,14 @@
 #include <QLineEdit>
 #include <QLoggingCategory>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QMimeData>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QRunnable>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
@@ -61,6 +64,7 @@
 #include <QTime>
 #include <QTimer>
 #include <QToolButton>
+#include <QThreadPool>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -4406,15 +4410,16 @@ void MainWindow::refresh_parallel_batch_summary() {
 
 void MainWindow::refresh_toolbar_state() {
     const bool has_job = selected_job_index_ >= 0 && selected_job_index_ < static_cast<int>(jobs_.size());
-    add_button_->setEnabled(!queue_run_active_);
-    remove_button_->setEnabled(!queue_run_active_ && has_job);
+    const bool queue_busy = queue_run_active_ || queue_start_planning_active_;
+    add_button_->setEnabled(!queue_busy);
+    remove_button_->setEnabled(!queue_busy && has_job);
     if (parallel_button_ != nullptr) {
-        parallel_button_->setEnabled(!queue_run_active_);
+        parallel_button_->setEnabled(!queue_busy);
         parallel_button_->setChecked(parallel_batch_summary_.enabled);
         parallel_button_->setToolTip(format_parallel_tooltip());
     }
-    priority_combo_->setEnabled(!queue_run_active_);
-    start_button_->setEnabled(!jobs_.empty());
+    priority_combo_->setEnabled(!queue_busy);
+    start_button_->setEnabled(!jobs_.empty() && !queue_start_planning_active_);
     stop_button_->setEnabled(queue_run_active_);
     update_start_button_visuals();
 }
@@ -4431,11 +4436,11 @@ void MainWindow::refresh_audio_track_combo() {
 }
 
 void MainWindow::update_start_button_visuals() {
-    if (queue_run_active_) {
+    if (queue_run_active_ || queue_start_planning_active_) {
         if (!busy_spinner_timer_->isActive()) {
             busy_spinner_timer_->start();
         }
-        start_button_->setToolTip(stop_requested_ ? "Stopping..." : "Encoding...");
+        start_button_->setToolTip(queue_start_planning_active_ ? "Preparing..." : (stop_requested_ ? "Stopping..." : "Encoding..."));
         start_button_->setText(QString{});
         start_button_->setProperty("iconFallback", false);
         start_button_->setIcon(make_busy_icon(busy_spinner_phase_, current_busy_spinner_progress_fraction()));
@@ -4454,7 +4459,7 @@ void MainWindow::update_start_button_visuals() {
 }
 
 void MainWindow::advance_busy_spinner() {
-    if (!queue_run_active_) {
+    if (!queue_run_active_ && !queue_start_planning_active_) {
         return;
     }
 
@@ -4486,7 +4491,7 @@ void MainWindow::update_source_drop_overlay_geometry() {
 }
 
 void MainWindow::start_encode_queue() {
-    if (queue_run_active_ || any_runner_slot_running()) {
+    if (queue_run_active_ || queue_start_planning_active_ || any_runner_slot_running()) {
         return;
     }
 
@@ -4508,7 +4513,8 @@ void MainWindow::start_encode_queue() {
     reserve_batch_output_paths_for_jobs(checked_job_indices);
     refresh_parallel_batch_summary();
 
-    QHash<QString, int> reserved_output_paths{};
+    std::vector<CandidateBatchJob> candidate_jobs{};
+    candidate_jobs.reserve(checked_job_indices.size());
     for (int index = 0; index < static_cast<int>(jobs_.size()); ++index) {
         auto &job = jobs_[static_cast<std::size_t>(index)];
         if (!job.checked) {
@@ -4526,54 +4532,113 @@ void MainWindow::start_encode_queue() {
         utsure::core::job::BatchParallelism::apply_execution_settings(*built_job, parallel_batch_summary_);
 
         append_job_log(index, "[info] Validating job before queue start.");
-        const auto preflight = utsure::core::job::EncodeJobPreflight::inspect(*built_job);
+        job.last_status_message = "Preparing encode...";
+        candidate_jobs.push_back(CandidateBatchJob{
+            .job_index = index,
+            .job = *built_job
+        });
+    }
 
-        for (const auto &issue : preflight.issues) {
-            append_job_log(index, format_preflight_issue(issue));
+    if (candidate_jobs.empty()) {
+        append_session_log("[warning] No checked jobs were runnable.");
+        refresh_all_views();
+        return;
+    }
+
+    queue_start_planning_active_ = true;
+    append_session_log("[info] Preparing checked jobs before queue start.");
+    refresh_all_views();
+
+    const QPointer<MainWindow> window(this);
+    QThreadPool::globalInstance()->start(QRunnable::create(
+        [window, candidate_jobs = std::move(candidate_jobs)]() mutable {
+            std::vector<PreflightedBatchJob> preflighted_jobs{};
+            preflighted_jobs.reserve(candidate_jobs.size());
+            for (auto &candidate : candidate_jobs) {
+                auto preflight = utsure::core::job::EncodeJobPreflight::inspect(candidate.job);
+                preflighted_jobs.push_back(PreflightedBatchJob{
+                    .job_index = candidate.job_index,
+                    .job = std::move(candidate.job),
+                    .preflight = std::move(preflight)
+                });
+            }
+
+            if (window == nullptr) {
+                return;
+            }
+            QMetaObject::invokeMethod(
+                window.data(),
+                [window, preflighted_jobs = std::move(preflighted_jobs)]() mutable {
+                    if (window != nullptr) {
+                        window->handle_preflighted_queue_jobs(std::move(preflighted_jobs));
+                    }
+                },
+                Qt::QueuedConnection
+            );
+        }
+    ));
+}
+
+void MainWindow::handle_preflighted_queue_jobs(std::vector<MainWindow::PreflightedBatchJob> preflighted_jobs) {
+    if (!queue_start_planning_active_) {
+        return;
+    }
+
+    queue_start_planning_active_ = false;
+    QHash<QString, int> reserved_output_paths{};
+
+    for (auto &preflighted_job : preflighted_jobs) {
+        if (!is_valid_job_index(preflighted_job.job_index)) {
+            continue;
         }
 
-        if (!preflight.can_start_encode()) {
+        auto &job = jobs_[static_cast<std::size_t>(preflighted_job.job_index)];
+        for (const auto &issue : preflighted_job.preflight.issues) {
+            append_job_log(preflighted_job.job_index, format_preflight_issue(issue));
+        }
+
+        if (!preflighted_job.preflight.can_start_encode()) {
             const auto first_error = std::find_if(
-                preflight.issues.begin(),
-                preflight.issues.end(),
+                preflighted_job.preflight.issues.begin(),
+                preflighted_job.preflight.issues.end(),
                 [](const utsure::core::job::EncodeJobPreflightIssue &issue) {
                     return issue.severity == utsure::core::job::EncodeJobPreflightIssueSeverity::error;
                 }
             );
-            job.last_status_message = first_error != preflight.issues.end()
+            job.last_status_message = first_error != preflighted_job.preflight.issues.end()
                 ? to_qstring(first_error->message)
                 : "Job is not ready to start.";
             continue;
         }
 
         const QString normalized_output_key =
-            normalized_output_path_key(path_to_qstring(built_job->output.output_path));
+            normalized_output_path_key(path_to_qstring(preflighted_job.job.output.output_path));
         if (!normalized_output_key.isEmpty() && reserved_output_paths.contains(normalized_output_key)) {
             job.last_status_message = "Output path conflicts with another queued job.";
-            append_job_log(index, "[error] Output path conflicts with another queued job in this batch.");
+            append_job_log(preflighted_job.job_index, "[error] Output path conflicts with another queued job in this batch.");
             continue;
         }
 
-        if (preflight.requires_output_overwrite_confirmation()) {
+        if (preflighted_job.preflight.requires_output_overwrite_confirmation()) {
             const auto response = QMessageBox::question(
                 this,
                 "Overwrite Existing Output?",
                 QString("'%1' already exists.\n\nOverwrite it?")
-                    .arg(QDir::toNativeSeparators(path_to_qstring(built_job->output.output_path)))
+                    .arg(QDir::toNativeSeparators(path_to_qstring(preflighted_job.job.output.output_path)))
             );
             if (response != QMessageBox::Yes) {
-                append_job_log(index, "[warning] Overwrite declined. The job was skipped.");
+                append_job_log(preflighted_job.job_index, "[warning] Overwrite declined. The job was skipped.");
                 continue;
             }
         }
 
         job.last_status_message = "Queued for batch encode.";
         if (!normalized_output_key.isEmpty()) {
-            reserved_output_paths.insert(normalized_output_key, index);
+            reserved_output_paths.insert(normalized_output_key, preflighted_job.job_index);
         }
         planned_queue_jobs_.push_back(PlannedBatchJob{
-            .job_index = index,
-            .job = *built_job
+            .job_index = preflighted_job.job_index,
+            .job = std::move(preflighted_job.job)
         });
     }
 

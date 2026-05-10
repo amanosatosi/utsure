@@ -4581,6 +4581,7 @@ PreparedSubtitleSession create_subtitle_session(
 ) {
     const auto &main_segment_info = timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info;
     const auto &video_stream = *main_segment_info.primary_video_stream;
+    emit_runtime_log(log_callback, "Preparing ASS subtitle fonts with FontCollector.");
     auto prepared_request = subtitles::prepare_subtitle_render_session_request(subtitles::SubtitleRenderSessionCreateRequest{
         .subtitle_path = subtitle_settings.subtitle_path,
         .format_hint = subtitle_settings.format_hint,

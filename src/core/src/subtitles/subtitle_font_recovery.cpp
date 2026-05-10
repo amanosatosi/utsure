@@ -9,6 +9,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <mutex>
+#include <optional>
+#include <unordered_map>
 #include <sstream>
 #include <string_view>
 #include <system_error>
@@ -27,6 +30,11 @@ namespace {
 
 constexpr std::string_view kFontCollectorEnvVar = "UTSURE_FONTCOLLECTOR_PATH";
 constexpr std::size_t kMaxInlineToolLogBytes = 8192;
+
+struct FontRecoveryCacheEntry final {
+    std::shared_ptr<SubtitleFontRecoveryArtifacts> artifacts{};
+    SubtitleFontRecoveryReport report{};
+};
 
 std::string lowercase_ascii(std::string value) {
     std::transform(
@@ -316,6 +324,64 @@ std::optional<std::filesystem::path> resolve_fontcollector_executable(const Subt
     return process::find_executable_on_path(candidates);
 }
 
+std::mutex &font_recovery_cache_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::unordered_map<std::string, FontRecoveryCacheEntry> &font_recovery_cache() {
+    static std::unordered_map<std::string, FontRecoveryCacheEntry> cache;
+    return cache;
+}
+
+std::optional<std::string> make_font_recovery_cache_key(
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &fontcollector_executable
+) {
+    std::error_code error{};
+    const auto absolute_subtitle_path = std::filesystem::absolute(subtitle_path, error);
+    const auto normalized_subtitle_path = (error ? subtitle_path : absolute_subtitle_path).lexically_normal();
+
+    error.clear();
+    const auto subtitle_size = std::filesystem::file_size(normalized_subtitle_path, error);
+    if (error) {
+        return std::nullopt;
+    }
+
+    error.clear();
+    const auto subtitle_write_time = std::filesystem::last_write_time(normalized_subtitle_path, error);
+    if (error) {
+        return std::nullopt;
+    }
+
+    error.clear();
+    const auto absolute_tool_path = std::filesystem::absolute(fontcollector_executable, error);
+    const auto normalized_tool_path = (error ? fontcollector_executable : absolute_tool_path).lexically_normal();
+
+    return path_to_utf8_string(normalized_subtitle_path) + "|" +
+        std::to_string(subtitle_size) + "|" +
+        std::to_string(subtitle_write_time.time_since_epoch().count()) + "|" +
+        path_to_utf8_string(normalized_tool_path);
+}
+
+void apply_cached_font_recovery_entry(
+    PreparedSubtitleRenderSessionRequest &prepared_request,
+    const FontRecoveryCacheEntry &entry
+) {
+    prepared_request.font_recovery_artifacts = entry.artifacts;
+    prepared_request.font_recovery_report = entry.report;
+    if (prepared_request.font_recovery_report.recovered_fonts_applied &&
+        prepared_request.font_recovery_artifacts) {
+        prepared_request.session_request.font_search_directory =
+            prepared_request.font_recovery_artifacts->font_directory();
+    }
+
+    if (!prepared_request.font_recovery_report.message.empty()) {
+        prepared_request.font_recovery_report.message =
+            "Reusing cached " + prepared_request.font_recovery_report.message;
+    }
+}
+
 SubtitleFontRecoveryReport make_tool_unavailable_report(const std::filesystem::path &subtitle_path) {
     return SubtitleFontRecoveryReport{
         .outcome = SubtitleFontRecoveryOutcome::tool_unavailable,
@@ -410,6 +476,16 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
     if (!fontcollector_executable.has_value()) {
         prepared_request.font_recovery_report = make_tool_unavailable_report(normalized_subtitle_path);
         return prepared_request;
+    }
+
+    const auto cache_key = make_font_recovery_cache_key(normalized_subtitle_path, *fontcollector_executable);
+    if (cache_key.has_value()) {
+        std::lock_guard lock(font_recovery_cache_mutex());
+        const auto cached_entry = font_recovery_cache().find(*cache_key);
+        if (cached_entry != font_recovery_cache().end()) {
+            apply_cached_font_recovery_entry(prepared_request, cached_entry->second);
+            return prepared_request;
+        }
     }
 
     auto artifacts = std::make_shared<SubtitleFontRecoveryArtifacts>();
@@ -518,6 +594,13 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
                 "and that FontCollector can access them on this machine.",
             .recovered_fonts_applied = false
         };
+        if (cache_key.has_value()) {
+            std::lock_guard lock(font_recovery_cache_mutex());
+            font_recovery_cache()[*cache_key] = FontRecoveryCacheEntry{
+                .artifacts = prepared_request.font_recovery_artifacts,
+                .report = prepared_request.font_recovery_report
+            };
+        }
         return prepared_request;
     }
 
@@ -536,6 +619,13 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
         .actionable_hint = {},
         .recovered_fonts_applied = true
     };
+    if (cache_key.has_value()) {
+        std::lock_guard lock(font_recovery_cache_mutex());
+        font_recovery_cache()[*cache_key] = FontRecoveryCacheEntry{
+            .artifacts = prepared_request.font_recovery_artifacts,
+            .report = prepared_request.font_recovery_report
+        };
+    }
     return prepared_request;
 }
 

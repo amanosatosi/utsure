@@ -2,6 +2,7 @@
 
 #include "utsure/core/job/batch_parallelism.hpp"
 #include "utsure/core/job/encode_job.hpp"
+#include "utsure/core/job/encode_job_preflight.hpp"
 #include "utsure/core/job/output_naming.hpp"
 
 #include <QElapsedTimer>
@@ -114,6 +115,17 @@ private:
     struct PlannedBatchJob final {
         int job_index{-1};
         utsure::core::job::EncodeJob job{};
+    };
+
+    struct CandidateBatchJob final {
+        int job_index{-1};
+        utsure::core::job::EncodeJob job{};
+    };
+
+    struct PreflightedBatchJob final {
+        int job_index{-1};
+        utsure::core::job::EncodeJob job{};
+        utsure::core::job::EncodeJobPreflightResult preflight{};
     };
 
     struct RunnerSlot final {
@@ -236,6 +248,7 @@ private:
     void update_source_drop_overlay_geometry();
 
     void start_encode_queue();
+    void handle_preflighted_queue_jobs(std::vector<PreflightedBatchJob> preflighted_jobs);
     void start_available_queued_jobs();
     void stop_encode_queue();
     void finish_queue_run();
@@ -268,6 +281,7 @@ private:
     int selected_job_index_{-1};
     int queue_cursor_{0};
     bool queue_run_active_{false};
+    bool queue_start_planning_active_{false};
     bool stop_requested_{false};
     bool loading_selected_job_{false};
     bool suppress_queue_table_changes_{false};

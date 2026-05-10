@@ -335,6 +335,21 @@ int assert_successful_recovery_behavior(const std::filesystem::path &root, const
         return fail("Font recovery success did not preserve the FontCollector log while the request is alive.");
     }
 
+    const PreparedSubtitleRenderSessionRequest cached_request = prepare_subtitle_render_session_request(
+        make_session_request(subtitle_path),
+        SubtitleFontRecoveryOptions{
+            .fontcollector_executable_override = tool_path
+        }
+    );
+    if (cached_request.font_recovery_report.outcome != SubtitleFontRecoveryOutcome::recovered_fonts ||
+        !cached_request.font_recovery_report.recovered_fonts_applied ||
+        !cached_request.session_request.font_search_directory.has_value() ||
+        !prepared_request.session_request.font_search_directory.has_value() ||
+        *cached_request.session_request.font_search_directory != *prepared_request.session_request.font_search_directory ||
+        cached_request.font_recovery_report.message.find("Reusing cached") == std::string::npos) {
+        return fail("Font recovery did not reuse the cached recovered-font staging directory.");
+    }
+
     std::cout << prepared_request.font_recovery_report.message << '\n';
     return 0;
 }
