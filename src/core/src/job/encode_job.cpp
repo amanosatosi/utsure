@@ -481,7 +481,8 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                 job,
                 streaming_result.error->message,
                 streaming_result.error->actionable_hint,
-                &telemetry
+                &telemetry,
+                streaming_result.error->canceled
             );
         }
 
