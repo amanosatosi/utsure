@@ -66,7 +66,8 @@ int assert_missing_config_loads_defaults(const std::filesystem::path &root) {
 
     if (result.settings.version != AppSettings::kCurrentVersion ||
         result.settings.output_naming.tokens.empty() ||
-        result.settings.last_used.crf != 22) {
+        result.settings.last_used.crf != 22 ||
+        result.settings.toshi_mode_enabled) {
         return fail("Missing settings config did not return default settings.");
     }
 
@@ -118,6 +119,7 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
             .sequence_padding = 2
         }
     };
+    settings.toshi_mode_enabled = true;
     settings.set_sequence_counter_value("bdrip|show", 12);
 
     QString save_error;
@@ -135,8 +137,9 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
         loaded.settings.output_naming.tokens.size() != 2U ||
         loaded.settings.output_naming.tokens[0].type != utsure::core::job::OutputNamingTokenType::codec ||
         loaded.settings.output_naming.tokens[1].enabled ||
+        !loaded.settings.toshi_mode_enabled ||
         loaded.settings.sequence_counter_value("bdrip|show") != 12) {
-        return fail("Settings JSON did not round-trip encode choices, naming tokens, and counters.");
+        return fail("Settings JSON did not round-trip encode choices, naming tokens, Toshi mode, and counters.");
     }
 
     std::cout << "settings.roundtrip=ok\n";

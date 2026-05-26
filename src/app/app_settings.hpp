@@ -37,6 +37,7 @@ public:
     int version{kCurrentVersion};
     LastUsedEncodeChoices last_used{};
     utsure::core::job::OutputNamingTemplate output_naming{};
+    bool toshi_mode_enabled{false};
     std::map<std::string, int> sequence_counters{};
 };
 

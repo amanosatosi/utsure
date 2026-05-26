@@ -217,6 +217,9 @@ QJsonDocument settings_to_json_document(const AppSettings &settings) {
     root.insert("version", AppSettings::kCurrentVersion);
     root.insert("lastUsed", encode_choices_to_json(settings.last_used));
     root.insert("outputNaming", output_naming_to_json(settings.output_naming));
+    root.insert("toshiMode", QJsonObject{
+        {"enabled", settings.toshi_mode_enabled}
+    });
     root.insert("sequenceCounters", sequence_counters_to_json(settings.sequence_counters));
     return QJsonDocument(root);
 }
@@ -295,6 +298,8 @@ AppSettings::LoadResult AppSettings::load(const QString &config_path) {
     result.settings.last_used = encode_choices_from_json(root.value("lastUsed").toObject(), fallback.last_used);
     result.settings.output_naming =
         output_naming_from_json(root.value("outputNaming").toObject(), fallback.output_naming);
+    result.settings.toshi_mode_enabled =
+        root.value("toshiMode").toObject().value("enabled").toBool(fallback.toshi_mode_enabled);
     result.settings.sequence_counters = sequence_counters_from_json(root.value("sequenceCounters").toObject());
     return result;
 }

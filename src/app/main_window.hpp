@@ -32,6 +32,7 @@ class PreviewAudioController;
 class PreviewFrameRendererController;
 class PreviewSurfaceWidget;
 class QPlainTextEdit;
+class QPoint;
 class QPushButton;
 class QResizeEvent;
 class QSpinBox;
@@ -164,6 +165,8 @@ private:
     void add_source_jobs();
     void add_source_jobs_from_paths(const QStringList &paths);
     void remove_selected_job();
+    void duplicate_job(int source_index);
+    void show_queue_context_menu(const QPoint &position);
     void show_settings_dialog();
     void show_info_dialog();
     void show_parallel_settings_dialog();

@@ -32,6 +32,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [ ] M24 Subtitle-enabled encode-throughput investigation and optimization awaiting external validation.
 - [ ] M25 Thumbnail pre-roll implemented; awaiting CI validation.
 - [x] M27 JSON settings and reliable output naming implemented; awaiting GitHub Actions revalidation after CI follow-up fixes.
+- [x] M28 Toshi mode and duplicate encode entries implemented; awaiting GitHub Actions validation.
 
 ## Active assumptions
 
@@ -1021,6 +1022,26 @@ Completed:
   * Added focused core/app tests for settings JSON behavior, token naming, filename sanitization, stored counters, existing-file collision avoidance, and absence of last-output-directory persistence.
   * Fixed CI follow-ups by building the new app settings test target in the Windows workflow script, avoiding Windows-invalid test fixture directories, rejecting out-of-range numeric settings back to defaults, and aligning the trimmed subtitle burn-in assertion with output-PTS subtitle scheduling.
 
+### M28 Toshi mode and duplicate encode entries
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Add opt-in personal Toshi mode in the existing JSON settings and Settings dialog.
+  * When Toshi mode is enabled, use the selectedText naming value to re-detect matching `.ass` subtitles through reusable core subtitle auto-selection helpers while keeping normal subtitle detection unchanged when disabled.
+  * Keep the previous/current auto-detected subtitle when no Toshi-mode match is found, and never clear manual subtitle selection unexpectedly.
+  * Add a queue/job right-click Duplicate action so one source video can be encoded more than once with different per-entry settings.
+  * Ensure duplicate entries copy the current choices but regenerate automatic output naming through the existing M27 naming/sequence logic so they do not collide with the original output path.
+
+Completed:
+  * Added `toshiMode.enabled` to the existing versioned JSON settings, defaulting off, with round-trip coverage in the app settings tests.
+  * Added an opt-in Toshi mode checkbox to the existing Settings dialog without adding output-directory memory or a second settings system.
+  * Added reusable core selectedText subtitle lookup that searches beside the source like the existing subtitle auto-selector, prefers `.ass`, supports current-subtitle-stem plus selectedText variants, tolerates one/two-space and invalid-character normalization, preserves `.fx` priority, and treats no-match as a no-op.
+  * Wired Toshi mode so selectedText changes can replace an auto subtitle only when a matching `.ass` is found; no match keeps the previous/current detected subtitle, and manual subtitle selections remain untouched.
+  * Added a right-click queue Duplicate action so one source video can be encoded more than once with copied per-entry settings that remain independently editable.
+  * Duplicate entries now regenerate automatic output paths through the existing output naming/sequence reservation logic, persist the advanced counter, and include a fallback copy suffix if a no-sequence template would otherwise collide with the original path.
+  * Added focused tests for selectedText subtitle matching and Toshi mode settings persistence. Local validation remains limited to static checks; GitHub Actions is the compile/test source.
+
 ## Immediate next milestone
 
-Re-run GitHub Actions for the M27 CI follow-up fixes, then resume the pending M24/M25 external validation work.
+Re-run GitHub Actions for M27/M28 validation, then resume pending M24/M25 external validation work.

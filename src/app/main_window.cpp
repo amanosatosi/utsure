@@ -15,6 +15,7 @@
 
 #include <QAbstractButton>
 #include <QAbstractItemView>
+#include <QAction>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCursor>
@@ -47,6 +48,7 @@
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QMimeData>
+#include <QMenu>
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -1419,6 +1421,7 @@ QLabel#PreviewTimeBadge {
     queue_table_->verticalHeader()->setDefaultSectionSize(24);
     queue_table_->setTextElideMode(Qt::ElideMiddle);
     queue_table_->setWordWrap(false);
+    queue_table_->setContextMenuPolicy(Qt::CustomContextMenu);
     queue_frame_layout->addWidget(queue_table_, 1);
 
     auto *details_frame = new QFrame(queue_row);
@@ -1943,6 +1946,7 @@ QLabel#PreviewTimeBadge {
 
     connect(queue_table_, &QTableWidget::itemChanged, this, &MainWindow::handle_queue_item_changed);
     connect(queue_table_, &QTableWidget::itemSelectionChanged, this, &MainWindow::handle_queue_selection_changed);
+    connect(queue_table_, &QTableWidget::customContextMenuRequested, this, &MainWindow::show_queue_context_menu);
 
     const auto bind_editor_change = [this]() {
         sync_selected_job_from_editor();
@@ -2558,6 +2562,121 @@ void MainWindow::remove_selected_job() {
     }
 }
 
+void MainWindow::show_queue_context_menu(const QPoint &position) {
+    if (queue_table_ == nullptr || queue_run_active_ || queue_start_planning_active_) {
+        return;
+    }
+
+    int row = queue_table_->indexAt(position).row();
+    if (!is_valid_job_index(row)) {
+        row = selected_job_index_;
+    }
+    if (!is_valid_job_index(row)) {
+        return;
+    }
+
+    if (row != selected_job_index_) {
+        select_job(row);
+    }
+
+    QMenu menu(this);
+    QAction *duplicate_action = menu.addAction("Duplicate");
+    QAction *selected_action = menu.exec(queue_table_->viewport()->mapToGlobal(position));
+    if (selected_action == duplicate_action) {
+        duplicate_job(row);
+    }
+}
+
+void MainWindow::duplicate_job(const int source_index) {
+    if (queue_run_active_ || queue_start_planning_active_ || !is_valid_job_index(source_index)) {
+        return;
+    }
+
+    if (source_index == selected_job_index_) {
+        sync_selected_job_from_editor();
+    }
+    if (!is_valid_job_index(source_index)) {
+        return;
+    }
+
+    const UiEncodeJob original_job = jobs_[static_cast<std::size_t>(source_index)];
+    UiEncodeJob duplicate_entry = original_job;
+    duplicate_entry.source_name = display_text_or_fallback(original_job.source_name, QFileInfo(original_job.source_path).fileName()) +
+        " Copy";
+    duplicate_entry.output_path_manual_override = false;
+    reset_job_for_rerun(duplicate_entry);
+
+    std::vector<utsure::core::job::OutputNamingReservationRequest> reservation_requests{};
+    reservation_requests.reserve(2);
+    const auto original_request = build_output_naming_request(original_job);
+    const std::string original_counter_key =
+        utsure::core::job::OutputNaming::sequence_counter_key(original_request, app_settings_.output_naming);
+    reservation_requests.push_back(utsure::core::job::OutputNamingReservationRequest{
+        .request = original_request,
+        .naming_template = app_settings_.output_naming,
+        .stored_sequence_number = app_settings_.sequence_counter_value(original_counter_key)
+    });
+
+    const auto duplicate_request = build_output_naming_request(duplicate_entry);
+    const std::string duplicate_counter_key =
+        utsure::core::job::OutputNaming::sequence_counter_key(duplicate_request, app_settings_.output_naming);
+    reservation_requests.push_back(utsure::core::job::OutputNamingReservationRequest{
+        .request = duplicate_request,
+        .naming_template = app_settings_.output_naming,
+        .stored_sequence_number = app_settings_.sequence_counter_value(duplicate_counter_key)
+    });
+
+    const auto reservations = utsure::core::job::OutputNaming::reserve_batch(reservation_requests);
+    if (reservations.size() >= 2U) {
+        duplicate_entry.output_path = path_to_qstring(reservations[1].result.output_path);
+        app_settings_.set_sequence_counter_value(
+            reservations[1].sequence_counter_key,
+            reservations[1].persisted_sequence_number
+        );
+    } else {
+        duplicate_entry.output_path = generate_output_path_for_job(duplicate_entry);
+    }
+
+    const QString original_output_key = normalized_output_path_key(original_job.output_path);
+    if (!original_output_key.isEmpty() &&
+        normalized_output_path_key(duplicate_entry.output_path) == original_output_key) {
+        auto output_path = qstring_to_path(duplicate_entry.output_path);
+        const auto parent_path = output_path.parent_path();
+        const std::string base_stem = output_path.stem().string() + " Copy";
+        const std::string extension = output_path.extension().string();
+        int suffix = 1;
+        do {
+            const std::string file_name = suffix == 1
+                ? base_stem + extension
+                : base_stem + " " + std::to_string(suffix) + extension;
+            output_path = parent_path.empty()
+                ? std::filesystem::path(file_name)
+                : parent_path / file_name;
+            ++suffix;
+        } while (normalized_output_path_key(path_to_qstring(output_path)) == original_output_key ||
+                 QFileInfo(path_to_qstring(output_path)).exists());
+        duplicate_entry.output_path = path_to_qstring(output_path.lexically_normal());
+    }
+
+    QString save_error;
+    if (!app_settings_.save(app_settings_path_, &save_error)) {
+        persist_app_settings_warning("save duplicate sequence counter", save_error);
+    }
+
+    duplicate_entry.last_status_message = job_has_minimum_required_fields(duplicate_entry)
+        ? "Ready to queue."
+        : "Select an output path to make the job runnable.";
+
+    const int insert_index = source_index + 1;
+    jobs_.insert(jobs_.begin() + insert_index, std::move(duplicate_entry));
+    append_session_log(
+        QString("[info] Duplicated '%1' as '%2'.")
+            .arg(queue_source_display_name(original_job))
+            .arg(queue_source_display_name(jobs_[static_cast<std::size_t>(insert_index)]))
+    );
+    select_job(insert_index);
+}
+
 void MainWindow::show_settings_dialog() {
     if (queue_run_active_ || queue_start_planning_active_) {
         return;
@@ -2569,6 +2688,14 @@ void MainWindow::show_settings_dialog() {
     dialog.resize(420, 360);
 
     auto *layout = new QVBoxLayout(&dialog);
+    auto *workflow_group = new QGroupBox("Personal workflow", &dialog);
+    auto *workflow_layout = new QVBoxLayout(workflow_group);
+    auto *toshi_mode_check = new QCheckBox("Enable Toshi mode", workflow_group);
+    toshi_mode_check->setToolTip("Use selected text to help find matching .ass subtitles.");
+    toshi_mode_check->setChecked(app_settings_.toshi_mode_enabled);
+    workflow_layout->addWidget(toshi_mode_check);
+    layout->addWidget(workflow_group);
+
     auto *naming_group = new QGroupBox("Output naming", &dialog);
     auto *naming_layout = new QVBoxLayout(naming_group);
 
@@ -2675,6 +2802,7 @@ void MainWindow::show_settings_dialog() {
     }
 
     app_settings_.output_naming = read_token_settings();
+    app_settings_.toshi_mode_enabled = toshi_mode_check->isChecked();
     QString save_error;
     if (!app_settings_.save(app_settings_path_, &save_error)) {
         persist_app_settings_warning("save naming settings", save_error);
@@ -2682,8 +2810,11 @@ void MainWindow::show_settings_dialog() {
 
     for (int index = 0; index < static_cast<int>(jobs_.size()); ++index) {
         apply_generated_output_path(index, false);
+        if (app_settings_.toshi_mode_enabled) {
+            apply_automatic_subtitle_selection(index, false);
+        }
     }
-    append_session_log("[info] Output naming settings updated.");
+    append_session_log("[info] Settings updated.");
     refresh_all_views();
 }
 
@@ -4281,13 +4412,59 @@ void MainWindow::apply_automatic_subtitle_selection(
         return;
     }
 
+    const auto source_path = qstring_to_path(job.source_path);
+    const auto previous_subtitle_path = job.subtitle_path.trimmed();
+    const bool had_previous_subtitle = job.subtitle_enabled && !previous_subtitle_path.isEmpty();
     const auto selection_result =
-        utsure::core::subtitles::SubtitleAutoSelector::select(qstring_to_path(job.source_path));
+        utsure::core::subtitles::SubtitleAutoSelector::select(source_path);
     if (decision_summary != nullptr) {
         *decision_summary = to_qstring(selection_result.decision_summary);
     }
 
-    if (selection_result.has_selection()) {
+    const QString selected_text = job.output_name_custom_text.trimmed();
+    if (app_settings_.toshi_mode_enabled && !selected_text.isEmpty()) {
+        std::optional<std::filesystem::path> current_subtitle_path{};
+        if (!previous_subtitle_path.isEmpty()) {
+            current_subtitle_path = qstring_to_path(previous_subtitle_path);
+        } else if (selection_result.has_selection()) {
+            current_subtitle_path = selection_result.selected_candidate->subtitle_path;
+        }
+
+        const auto toshi_selection_result =
+            utsure::core::subtitles::SubtitleAutoSelector::select_for_selected_text(
+                utsure::core::subtitles::SubtitleSelectedTextSelectionRequest{
+                    .source_path = source_path,
+                    .current_subtitle_path = current_subtitle_path,
+                    .selected_text = selected_text.toUtf8().toStdString()
+                }
+            );
+        if (toshi_selection_result.has_selection()) {
+            job.subtitle_enabled = true;
+            job.subtitle_path = path_to_qstring(toshi_selection_result.selected_candidate->subtitle_path);
+            if (decision_summary != nullptr) {
+                *decision_summary = to_qstring(toshi_selection_result.decision_summary);
+            }
+        } else if (had_previous_subtitle) {
+            job.subtitle_enabled = true;
+            job.subtitle_path = previous_subtitle_path;
+            if (decision_summary != nullptr) {
+                *decision_summary = to_qstring(toshi_selection_result.decision_summary) +
+                    " Keeping the previous subtitle selection.";
+            }
+        } else if (selection_result.has_selection()) {
+            job.subtitle_enabled = true;
+            job.subtitle_path = path_to_qstring(selection_result.selected_candidate->subtitle_path);
+            if (decision_summary != nullptr) {
+                *decision_summary = to_qstring(selection_result.decision_summary);
+            }
+        } else {
+            job.subtitle_enabled = false;
+            job.subtitle_path.clear();
+            if (decision_summary != nullptr) {
+                *decision_summary = to_qstring(toshi_selection_result.decision_summary);
+            }
+        }
+    } else if (selection_result.has_selection()) {
         job.subtitle_enabled = true;
         job.subtitle_path = path_to_qstring(selection_result.selected_candidate->subtitle_path);
     } else {

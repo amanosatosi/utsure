@@ -34,9 +34,18 @@ struct SubtitleAutoSelectionResult final {
     [[nodiscard]] bool has_selection() const noexcept;
 };
 
+struct SubtitleSelectedTextSelectionRequest final {
+    std::filesystem::path source_path{};
+    std::optional<std::filesystem::path> current_subtitle_path{};
+    std::string selected_text{};
+};
+
 class SubtitleAutoSelector final {
 public:
     [[nodiscard]] static SubtitleAutoSelectionResult select(const std::filesystem::path &source_path);
+    [[nodiscard]] static SubtitleAutoSelectionResult select_for_selected_text(
+        const SubtitleSelectedTextSelectionRequest &request
+    );
 };
 
 [[nodiscard]] const char *to_string(SubtitleAutoSelectionDecisionCode code) noexcept;
