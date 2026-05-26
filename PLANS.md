@@ -1040,7 +1040,9 @@ Completed:
   * Wired Toshi mode so selectedText changes can replace an auto subtitle only when a matching `.ass` is found; no match keeps the previous/current detected subtitle, and manual subtitle selections remain untouched.
   * Added a right-click queue Duplicate action so one source video can be encoded more than once with copied per-entry settings that remain independently editable.
   * Duplicate entries now regenerate automatic output paths through the existing output naming/sequence reservation logic, persist the advanced counter, and include a fallback copy suffix if a no-sequence template would otherwise collide with the original path.
-  * Added focused tests for selectedText subtitle matching and Toshi mode settings persistence. Local validation remains limited to static checks; GitHub Actions is the compile/test source.
+  * Completed a fix-only review pass after commit `a88bc66189f06b1eda01c47caf6481209ae0c931`: duplicate output reservation now reserves only the duplicate path, treats the original path as an exclusion, preserves manual output overrides with a safe copy filename, and persists counters only for newly reserved duplicate outputs.
+  * Tightened manual subtitle safety with an explicit guard so Toshi mode remains auto-only, removed duplicated selectedText candidate generation, and changed selectedText source-directory diagnostics to use selected-text wording.
+  * Added focused tests for selectedText subtitle matching, Toshi mode settings persistence, output naming exclusions, and duplicate copy/manual-output/manual-subtitle/counter behavior. Local validation remains limited to static checks; GitHub Actions is the compile/test source.
 
 ## Immediate next milestone
 

@@ -1,6 +1,7 @@
 add_executable(utsure_app_settings_tests
     app_settings_tests.cpp
     "${CMAKE_SOURCE_DIR}/src/app/app_settings.cpp"
+    "${CMAKE_SOURCE_DIR}/src/app/encode_job_duplicate.cpp"
 )
 
 target_include_directories(utsure_app_settings_tests

@@ -1,5 +1,6 @@
 #include "main_window.hpp"
 
+#include "encode_job_duplicate.hpp"
 #include "encode_job_runner_controller.hpp"
 #include "preview_audio_controller.hpp"
 #include "preview_frame_renderer_controller.hpp"
@@ -2600,66 +2601,46 @@ void MainWindow::duplicate_job(const int source_index) {
     }
 
     const UiEncodeJob original_job = jobs_[static_cast<std::size_t>(source_index)];
-    UiEncodeJob duplicate_entry = original_job;
-    duplicate_entry.source_name = display_text_or_fallback(original_job.source_name, QFileInfo(original_job.source_path).fileName()) +
-        " Copy";
-    duplicate_entry.output_path_manual_override = false;
-    reset_job_for_rerun(duplicate_entry);
-
-    std::vector<utsure::core::job::OutputNamingReservationRequest> reservation_requests{};
-    reservation_requests.reserve(2);
-    const auto original_request = build_output_naming_request(original_job);
-    const std::string original_counter_key =
-        utsure::core::job::OutputNaming::sequence_counter_key(original_request, app_settings_.output_naming);
-    reservation_requests.push_back(utsure::core::job::OutputNamingReservationRequest{
-        .request = original_request,
-        .naming_template = app_settings_.output_naming,
-        .stored_sequence_number = app_settings_.sequence_counter_value(original_counter_key)
-    });
-
-    const auto duplicate_request = build_output_naming_request(duplicate_entry);
+    const auto automatic_output_request = build_output_naming_request(original_job);
     const std::string duplicate_counter_key =
-        utsure::core::job::OutputNaming::sequence_counter_key(duplicate_request, app_settings_.output_naming);
-    reservation_requests.push_back(utsure::core::job::OutputNamingReservationRequest{
-        .request = duplicate_request,
+        utsure::core::job::OutputNaming::sequence_counter_key(automatic_output_request, app_settings_.output_naming);
+    const auto duplicate_result = duplicate_encode_entry(DuplicateEncodeEntryRequest{
+        .original = DuplicateEncodeEntryState{
+            .source_path = original_job.source_path,
+            .source_name = original_job.source_name,
+            .output_name_custom_text = original_job.output_name_custom_text,
+            .output_path = original_job.output_path,
+            .output_path_manual_override = original_job.output_path_manual_override,
+            .same_as_input = original_job.same_as_input,
+            .subtitle_enabled = original_job.subtitle_enabled,
+            .subtitle_path = original_job.subtitle_path,
+            .subtitle_manual_override = original_job.subtitle_manual_override,
+            .video_codec = original_job.video_codec,
+            .video_preset = original_job.video_preset,
+            .video_crf = original_job.video_crf,
+            .audio_mode = original_job.audio_mode,
+            .audio_bitrate_kbps = original_job.audio_bitrate_kbps
+        },
+        .automatic_output_request = automatic_output_request,
         .naming_template = app_settings_.output_naming,
         .stored_sequence_number = app_settings_.sequence_counter_value(duplicate_counter_key)
     });
 
-    const auto reservations = utsure::core::job::OutputNaming::reserve_batch(reservation_requests);
-    if (reservations.size() >= 2U) {
-        duplicate_entry.output_path = path_to_qstring(reservations[1].result.output_path);
-        app_settings_.set_sequence_counter_value(
-            reservations[1].sequence_counter_key,
-            reservations[1].persisted_sequence_number
-        );
-    } else {
-        duplicate_entry.output_path = generate_output_path_for_job(duplicate_entry);
-    }
+    UiEncodeJob duplicate_entry = original_job;
+    duplicate_entry.source_name = duplicate_result.duplicate.source_name;
+    duplicate_entry.output_path = duplicate_result.duplicate.output_path;
+    duplicate_entry.output_path_manual_override = duplicate_result.duplicate.output_path_manual_override;
+    reset_job_for_rerun(duplicate_entry);
 
-    const QString original_output_key = normalized_output_path_key(original_job.output_path);
-    if (!original_output_key.isEmpty() &&
-        normalized_output_path_key(duplicate_entry.output_path) == original_output_key) {
-        auto output_path = qstring_to_path(duplicate_entry.output_path);
-        const auto parent_path = output_path.parent_path();
-        const std::string base_stem = output_path.stem().string() + " Copy";
-        const std::string extension = output_path.extension().string();
-        int suffix = 1;
-        do {
-            const std::string file_name = suffix == 1
-                ? base_stem + extension
-                : base_stem + " " + std::to_string(suffix) + extension;
-            output_path = parent_path.empty()
-                ? std::filesystem::path(file_name)
-                : parent_path / file_name;
-            ++suffix;
-        } while (normalized_output_path_key(path_to_qstring(output_path)) == original_output_key ||
-                 QFileInfo(path_to_qstring(output_path)).exists());
-        duplicate_entry.output_path = path_to_qstring(output_path.lexically_normal());
+    if (duplicate_result.sequence_counter_reserved) {
+        app_settings_.set_sequence_counter_value(
+            duplicate_result.sequence_counter_key,
+            duplicate_result.persisted_sequence_number
+        );
     }
 
     QString save_error;
-    if (!app_settings_.save(app_settings_path_, &save_error)) {
+    if (duplicate_result.sequence_counter_reserved && !app_settings_.save(app_settings_path_, &save_error)) {
         persist_app_settings_warning("save duplicate sequence counter", save_error);
     }
 
@@ -4409,6 +4390,8 @@ void MainWindow::apply_automatic_subtitle_selection(
         job.subtitle_manual_override = false;
     }
     if (job.subtitle_manual_override) {
+        // Manual subtitle selections are per-job user intent. Toshi mode is only
+        // an auto-detection refinement and must not replace them on text edits.
         return;
     }
 

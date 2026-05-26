@@ -1,4 +1,5 @@
 #include "app_settings.hpp"
+#include "encode_job_duplicate.hpp"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -10,6 +11,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string_view>
 #include <system_error>
@@ -51,6 +53,29 @@ QByteArray read_file_bytes(const QString &path) {
         return {};
     }
     return file.readAll();
+}
+
+void touch_file(const std::filesystem::path &path) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream stream(path, std::ios::binary);
+    stream << "test";
+}
+
+utsure::core::job::OutputNamingRequest make_duplicate_naming_request(
+    const std::filesystem::path &source_path,
+    const std::filesystem::path &output_directory,
+    const std::string &selected_text,
+    const std::string &extension = ".mp4"
+) {
+    return utsure::core::job::OutputNamingRequest{
+        .source_path = source_path,
+        .output_directory = output_directory,
+        .custom_text = selected_text,
+        .extension_hint = extension,
+        .video_codec = utsure::core::media::OutputVideoCodec::h265,
+        .output_width = 1920,
+        .output_height = 1080
+    };
 }
 
 int assert_missing_config_loads_defaults(const std::filesystem::path &root) {
@@ -218,6 +243,126 @@ int assert_json_does_not_store_last_output_directory(const std::filesystem::path
     return 0;
 }
 
+int assert_duplicate_copies_job_choices_and_stays_independent(const std::filesystem::path &root) {
+    const auto source_path = root / "Duplicate" / "episode01.mkv";
+    const auto output_directory = root / "DuplicateOut";
+    touch_file(source_path);
+    std::filesystem::create_directories(output_directory);
+
+    DuplicateEncodeEntryState original{
+        .source_path = path_to_qstring(source_path),
+        .source_name = "episode01.mkv",
+        .output_name_custom_text = "OP",
+        .output_path = path_to_qstring(output_directory / "OP Duplicate - 01 x265 1920x1080.mp4"),
+        .output_path_manual_override = false,
+        .same_as_input = false,
+        .subtitle_enabled = true,
+        .subtitle_path = path_to_qstring(source_path.parent_path() / "episode01 OP.ass"),
+        .subtitle_manual_override = true,
+        .video_codec = utsure::core::media::OutputVideoCodec::h264,
+        .video_preset = "slow",
+        .video_crf = 18,
+        .audio_mode = utsure::core::media::AudioOutputMode::copy_source,
+        .audio_bitrate_kbps = 256
+    };
+
+    const auto result = duplicate_encode_entry(DuplicateEncodeEntryRequest{
+        .original = original,
+        .automatic_output_request = make_duplicate_naming_request(source_path, output_directory, "OP"),
+        .naming_template = utsure::core::job::OutputNaming::default_template(),
+        .stored_sequence_number = 1
+    });
+
+    if (result.duplicate.source_path != original.source_path ||
+        result.duplicate.source_name != "episode01.mkv Copy" ||
+        result.duplicate.subtitle_path != original.subtitle_path ||
+        !result.duplicate.subtitle_manual_override ||
+        result.duplicate.video_codec != original.video_codec ||
+        result.duplicate.video_preset != original.video_preset ||
+        result.duplicate.video_crf != original.video_crf ||
+        result.duplicate.audio_mode != original.audio_mode ||
+        result.duplicate.audio_bitrate_kbps != original.audio_bitrate_kbps) {
+        return fail("Duplicate did not copy source, subtitle, and encode settings.");
+    }
+
+    auto edited_duplicate = result.duplicate;
+    edited_duplicate.video_crf = 30;
+    edited_duplicate.subtitle_path = path_to_qstring(source_path.parent_path() / "different.ass");
+    if (original.video_crf != 18 ||
+        original.subtitle_path == edited_duplicate.subtitle_path) {
+        return fail("Duplicate state did not remain independent from the original state.");
+    }
+
+    std::cout << "duplicate.copy=ok\n";
+    return 0;
+}
+
+int assert_duplicate_auto_output_uses_exclusion_without_extra_counter_skip(const std::filesystem::path &root) {
+    const auto source_path = root / "DuplicateCounter" / "episode01.mkv";
+    const auto output_directory = root / "DuplicateCounterOut";
+    touch_file(source_path);
+    std::filesystem::create_directories(output_directory);
+
+    const QString original_output = path_to_qstring(output_directory / "OP DuplicateCounter - 05 x265 1920x1080.mp4");
+    const auto result = duplicate_encode_entry(DuplicateEncodeEntryRequest{
+        .original = DuplicateEncodeEntryState{
+            .source_path = path_to_qstring(source_path),
+            .source_name = "episode01.mkv",
+            .output_name_custom_text = "OP",
+            .output_path = original_output,
+            .output_path_manual_override = false
+        },
+        .automatic_output_request = make_duplicate_naming_request(source_path, output_directory, "OP"),
+        .naming_template = utsure::core::job::OutputNaming::default_template(),
+        .stored_sequence_number = 4
+    });
+
+    if (result.duplicate.output_path == original_output ||
+        !result.sequence_counter_reserved ||
+        result.persisted_sequence_number != 6 ||
+        !result.duplicate.output_path.endsWith("OP DuplicateCounter - 06 x265 1920x1080.mp4")) {
+        return fail("Duplicate auto output did not reserve exactly the next safe sequence number.");
+    }
+
+    std::cout << "duplicate.auto_output=" << result.duplicate.output_path.toStdString() << '\n';
+    return 0;
+}
+
+int assert_duplicate_manual_output_override_is_preserved_safely(const std::filesystem::path &root) {
+    const auto source_path = root / "DuplicateManual" / "episode01.mkv";
+    const auto output_directory = root / "DuplicateManualOut";
+    const auto original_output_path = output_directory / "manual-output.mkv";
+    touch_file(source_path);
+    touch_file(original_output_path);
+
+    const auto result = duplicate_encode_entry(DuplicateEncodeEntryRequest{
+        .original = DuplicateEncodeEntryState{
+            .source_path = path_to_qstring(source_path),
+            .source_name = "episode01.mkv",
+            .output_path = path_to_qstring(original_output_path),
+            .output_path_manual_override = true,
+            .subtitle_enabled = true,
+            .subtitle_path = path_to_qstring(source_path.parent_path() / "manual.ass"),
+            .subtitle_manual_override = true
+        },
+        .automatic_output_request = make_duplicate_naming_request(source_path, output_directory, "Ignored"),
+        .naming_template = utsure::core::job::OutputNaming::default_template(),
+        .stored_sequence_number = 20
+    });
+
+    if (!result.duplicate.output_path_manual_override ||
+        result.duplicate.output_path == path_to_qstring(original_output_path) ||
+        !result.duplicate.output_path.endsWith("manual-output Copy.mkv") ||
+        result.sequence_counter_reserved ||
+        !result.duplicate.subtitle_manual_override ||
+        result.duplicate.subtitle_path != path_to_qstring(source_path.parent_path() / "manual.ass")) {
+        return fail("Duplicate did not preserve manual output/subtitle intent safely.");
+    }
+
+    std::cout << "duplicate.manual_output=" << result.duplicate.output_path.toStdString() << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -243,6 +388,18 @@ int main(int argc, char *argv[]) {
     }
 
     if (assert_json_does_not_store_last_output_directory(root) != 0) {
+        return 1;
+    }
+
+    if (assert_duplicate_copies_job_choices_and_stays_independent(root) != 0) {
+        return 1;
+    }
+
+    if (assert_duplicate_auto_output_uses_exclusion_without_extra_counter_skip(root) != 0) {
+        return 1;
+    }
+
+    if (assert_duplicate_manual_output_override_is_preserved_safely(root) != 0) {
         return 1;
     }
 

@@ -147,7 +147,6 @@ std::vector<std::string> build_selected_text_candidate_stems(
     std::vector<std::string> candidate_stems{};
     for (const auto &base_stem : build_selected_text_base_stems(source_path, current_subtitle_path)) {
         push_unique_text(candidate_stems, base_stem + " " + normalized_selected_text);
-        push_unique_text(candidate_stems, base_stem + "  " + normalized_selected_text);
         push_unique_text(candidate_stems, base_stem + normalized_selected_text);
         push_unique_text(candidate_stems, normalized_selected_text + " " + base_stem);
     }
@@ -244,6 +243,11 @@ std::string build_source_directory_unavailable_summary(const std::filesystem::pa
         "': the source directory was unavailable.";
 }
 
+std::string build_selected_text_source_directory_unavailable_summary(const std::filesystem::path &source_path) {
+    return "Selected-text subtitle selection for '" + format_path_leaf(source_path) +
+        "': the source directory was unavailable.";
+}
+
 std::string build_selected_summary(
     const std::filesystem::path &source_path,
     const RankedCandidate &selected_candidate,
@@ -274,6 +278,7 @@ std::string build_selected_text_selected_summary(
 SubtitleAutoSelectionResult select_from_directory(
     const std::filesystem::path &source_path,
     const std::function<std::optional<RankedCandidate>(const std::filesystem::path &)> &classifier,
+    const std::function<std::string()> &source_directory_unavailable_summary,
     const std::function<std::string()> &no_match_summary,
     const std::function<std::string(const RankedCandidate &, bool)> &selected_summary
 ) {
@@ -286,7 +291,7 @@ SubtitleAutoSelectionResult select_from_directory(
         status_error) {
         return SubtitleAutoSelectionResult{
             .decision = SubtitleAutoSelectionDecisionCode::source_directory_unavailable,
-            .decision_summary = build_source_directory_unavailable_summary(source_path)
+            .decision_summary = source_directory_unavailable_summary()
         };
     }
 
@@ -370,6 +375,9 @@ SubtitleAutoSelectionResult SubtitleAutoSelector::select(const std::filesystem::
             return classify_candidate(source_path, candidate_path);
         },
         [&source_path]() {
+            return build_source_directory_unavailable_summary(source_path);
+        },
+        [&source_path]() {
             return build_no_match_summary(source_path);
         },
         [&source_path](const RankedCandidate &selected_candidate, const bool used_fx_priority_rule) {
@@ -398,6 +406,9 @@ SubtitleAutoSelectionResult SubtitleAutoSelector::select_for_selected_text(
         request.source_path,
         [&candidate_stems](const std::filesystem::path &candidate_path) {
             return classify_selected_text_candidate(candidate_path, candidate_stems);
+        },
+        [&request]() {
+            return build_selected_text_source_directory_unavailable_summary(request.source_path);
         },
         [&request]() {
             return build_selected_text_no_match_summary(request.source_path);

@@ -12,6 +12,7 @@
 #include <string_view>
 #include <system_error>
 #include <tuple>
+#include <vector>
 
 namespace utsure::core::job {
 
@@ -310,6 +311,43 @@ std::set<int> collect_used_sequence_numbers(
     return sequence_numbers;
 }
 
+void add_excluded_sequence_numbers(
+    std::set<int> &sequence_numbers,
+    const std::filesystem::path &output_directory,
+    const std::string_view prefix,
+    const std::string_view suffix,
+    const std::vector<std::filesystem::path> &excluded_output_paths
+) {
+    const std::string output_directory_key = normalize_path_key(output_directory);
+    for (const auto &excluded_path : excluded_output_paths) {
+        if (excluded_path.empty()) {
+            continue;
+        }
+
+        const auto excluded_directory = excluded_path.parent_path();
+        if (!output_directory_key.empty() &&
+            normalize_path_key(excluded_directory) != output_directory_key) {
+            continue;
+        }
+
+        const std::string file_name = excluded_path.filename().string();
+        if (file_name.size() <= prefix.size() + suffix.size() ||
+            !file_name.starts_with(prefix) ||
+            !file_name.ends_with(suffix)) {
+            continue;
+        }
+
+        const std::string_view number_text(
+            file_name.data() + static_cast<std::ptrdiff_t>(prefix.size()),
+            file_name.size() - prefix.size() - suffix.size()
+        );
+        const auto sequence_number = parse_positive_sequence_number(number_text);
+        if (sequence_number.has_value()) {
+            sequence_numbers.insert(*sequence_number);
+        }
+    }
+}
+
 int max_detected_sequence_number(const std::set<int> &used_sequence_numbers) {
     if (used_sequence_numbers.empty()) {
         return 0;
@@ -542,12 +580,73 @@ OutputNamingResult build_output_naming_result(
     };
 }
 
+bool output_path_exists(const std::filesystem::path &path) {
+    std::error_code error{};
+    return std::filesystem::exists(path, error) && !error;
+}
+
+bool output_path_is_excluded(
+    const std::filesystem::path &path,
+    const std::vector<std::filesystem::path> &excluded_output_paths
+) {
+    const std::string path_key = normalize_path_key(path);
+    if (path_key.empty()) {
+        return false;
+    }
+
+    return std::any_of(
+        excluded_output_paths.begin(),
+        excluded_output_paths.end(),
+        [&path_key](const std::filesystem::path &excluded_path) {
+            return normalize_path_key(excluded_path) == path_key;
+        }
+    );
+}
+
+OutputNamingResult make_unique_non_sequence_result(
+    const OutputNamingResult &base_result,
+    const std::filesystem::path &output_directory,
+    const OutputNamingFragments &fragments,
+    const std::vector<std::filesystem::path> &excluded_output_paths
+) {
+    if (!output_path_exists(base_result.output_path) &&
+        !output_path_is_excluded(base_result.output_path, excluded_output_paths)) {
+        return base_result;
+    }
+
+    for (int copy_index = 1; copy_index < 1000; ++copy_index) {
+        const std::string suffix = copy_index == 1
+            ? " Copy"
+            : " Copy " + std::to_string(copy_index);
+        const std::string file_stem = fragments.stem_prefix + suffix;
+        const std::string file_name = file_stem + fragments.extension;
+        const std::filesystem::path output_path = output_directory.empty()
+            ? std::filesystem::path(file_name)
+            : (output_directory / file_name).lexically_normal();
+        if (output_path_exists(output_path) || output_path_is_excluded(output_path, excluded_output_paths)) {
+            continue;
+        }
+
+        auto result = base_result;
+        result.output_path = output_path;
+        result.file_name = file_name;
+        return result;
+    }
+
+    return base_result;
+}
+
 OutputNamingReservationResult build_reservation_result(
     const std::filesystem::path &output_directory,
     const OutputNamingFragments &fragments,
-    const int sequence_number
+    const int sequence_number,
+    const std::vector<std::filesystem::path> &excluded_output_paths = {}
 ) {
-    const auto result = build_output_naming_result(output_directory, fragments, sequence_number);
+    auto result = build_output_naming_result(output_directory, fragments, sequence_number);
+    if (!fragments.has_sequence_number) {
+        result = make_unique_non_sequence_result(result, output_directory, fragments, excluded_output_paths);
+    }
+
     return OutputNamingReservationResult{
         .result = result,
         .sequence_counter_key = result.sequence_counter_key,
@@ -560,7 +659,8 @@ int choose_sequence_number(
     const OutputNamingFragments &fragments,
     const std::filesystem::path &output_directory,
     const int stored_sequence_number,
-    const std::set<int> *additional_used_numbers = nullptr
+    const std::set<int> *additional_used_numbers = nullptr,
+    const std::vector<std::filesystem::path> &excluded_output_paths = {}
 ) {
     if (!fragments.has_sequence_number) {
         return 0;
@@ -568,11 +668,21 @@ int choose_sequence_number(
 
     std::set<int> used_sequence_numbers =
         collect_used_sequence_numbers(output_directory, fragments.stem_prefix, fragments.full_suffix);
+    const int first_candidate = std::max(
+        stored_sequence_number + 1,
+        max_detected_sequence_number(used_sequence_numbers) + 1
+    );
+    add_excluded_sequence_numbers(
+        used_sequence_numbers,
+        output_directory,
+        fragments.stem_prefix,
+        fragments.full_suffix,
+        excluded_output_paths
+    );
     if (additional_used_numbers != nullptr) {
         used_sequence_numbers.insert(additional_used_numbers->begin(), additional_used_numbers->end());
     }
 
-    const int first_candidate = std::max(stored_sequence_number + 1, max_detected_sequence_number(used_sequence_numbers) + 1);
     return next_sequence_at_or_after(first_candidate, used_sequence_numbers);
 }
 
@@ -593,6 +703,7 @@ struct ReservationGroupKey final {
 
 struct ReservationGroupState final {
     std::set<int> used_sequence_numbers{};
+    int existing_next_candidate{1};
 };
 
 struct CounterReservationState final {
@@ -697,7 +808,8 @@ std::vector<OutputNamingResult> OutputNaming::reserve_batch(const std::vector<Ou
         reservation_requests.push_back(OutputNamingReservationRequest{
             .request = request,
             .naming_template = default_template(),
-            .stored_sequence_number = 0
+            .stored_sequence_number = 0,
+            .excluded_output_paths = {}
         });
     }
 
@@ -723,7 +835,12 @@ std::vector<OutputNamingReservationResult> OutputNaming::reserve_batch(
             build_output_naming_fragments(request.request, request.naming_template);
 
         if (!fragments.has_sequence_number) {
-            results.push_back(build_reservation_result(request.request.output_directory, fragments, 0));
+            results.push_back(build_reservation_result(
+                request.request.output_directory,
+                fragments,
+                0,
+                request.excluded_output_paths
+            ));
             continue;
         }
 
@@ -741,7 +858,17 @@ std::vector<OutputNamingReservationResult> OutputNaming::reserve_batch(
                 fragments.stem_prefix,
                 fragments.full_suffix
             );
+            iterator->second.existing_next_candidate =
+                max_detected_sequence_number(iterator->second.used_sequence_numbers) + 1;
         }
+
+        add_excluded_sequence_numbers(
+            iterator->second.used_sequence_numbers,
+            request.request.output_directory,
+            fragments.stem_prefix,
+            fragments.full_suffix,
+            request.excluded_output_paths
+        );
 
         auto [counter_iterator, counter_inserted] =
             counter_groups.try_emplace(fragments.sequence_counter_key);
@@ -754,13 +881,18 @@ std::vector<OutputNamingReservationResult> OutputNaming::reserve_batch(
 
         const int first_candidate = std::max(
             counter_iterator->second.next_candidate,
-            max_detected_sequence_number(iterator->second.used_sequence_numbers) + 1
+            iterator->second.existing_next_candidate
         );
         const int sequence_number =
             next_sequence_at_or_after(first_candidate, iterator->second.used_sequence_numbers);
         iterator->second.used_sequence_numbers.insert(sequence_number);
         counter_iterator->second.next_candidate = sequence_number + 1;
-        results.push_back(build_reservation_result(request.request.output_directory, fragments, sequence_number));
+        results.push_back(build_reservation_result(
+            request.request.output_directory,
+            fragments,
+            sequence_number,
+            request.excluded_output_paths
+        ));
     }
 
     return results;

@@ -62,6 +62,7 @@ struct OutputNamingReservationRequest final {
     OutputNamingRequest request{};
     OutputNamingTemplate naming_template{};
     int stored_sequence_number{0};
+    std::vector<std::filesystem::path> excluded_output_paths{};
 };
 
 struct OutputNamingReservationResult final {

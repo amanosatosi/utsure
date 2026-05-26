@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 namespace {
 
@@ -145,6 +146,37 @@ int assert_selected_text_match_accepts_spacing_variants(const std::filesystem::p
     return 0;
 }
 
+int assert_selected_text_candidate_variants(const std::filesystem::path &root) {
+    const std::vector<std::string> candidate_names{
+        "Episode 07 OP.ass",
+        "Episode 07  OP.ass",
+        "Episode 07OP.ass",
+        "OP Episode 07.ass",
+        "OP.ass"
+    };
+
+    for (std::size_t index = 0; index < candidate_names.size(); ++index) {
+        const auto source_path = root / ("Toshi Variant " + std::to_string(index)) / "Episode 07.mkv";
+        const auto current_subtitle_path = source_path.parent_path() / "Episode 07.ass";
+        touch_file(source_path);
+        touch_file(current_subtitle_path);
+        touch_file(source_path.parent_path() / candidate_names[index]);
+
+        const auto result = SubtitleAutoSelector::select_for_selected_text(SubtitleSelectedTextSelectionRequest{
+            .source_path = source_path,
+            .current_subtitle_path = current_subtitle_path,
+            .selected_text = "OP"
+        });
+        if (!result.has_selection() ||
+            result.selected_candidate->subtitle_path.filename() != candidate_names[index]) {
+            return fail("Selected-text subtitle selection missed a required candidate-stem variant.");
+        }
+    }
+
+    std::cout << "selected_text.variants=ok\n";
+    return 0;
+}
+
 int assert_selected_text_match_handles_invalid_characters(const std::filesystem::path &root) {
     const auto source_path = root / "Toshi Invalid" / "Episode 03.mkv";
     const auto current_subtitle_path = source_path.parent_path() / "Episode 03.ass";
@@ -206,6 +238,22 @@ int assert_selected_text_no_match_is_not_an_error(const std::filesystem::path &r
     return 0;
 }
 
+int assert_selected_text_source_directory_unavailable_uses_selected_text_summary(const std::filesystem::path &root) {
+    const auto missing_source_path = root / "Missing Source" / "Episode 08.mkv";
+    const auto result = SubtitleAutoSelector::select_for_selected_text(SubtitleSelectedTextSelectionRequest{
+        .source_path = missing_source_path,
+        .current_subtitle_path = std::nullopt,
+        .selected_text = "OP"
+    });
+    if (result.decision != SubtitleAutoSelectionDecisionCode::source_directory_unavailable ||
+        result.decision_summary.find("Selected-text subtitle selection") == std::string::npos) {
+        return fail("Selected-text subtitle selection used the generic source-directory-unavailable diagnostic.");
+    }
+
+    std::cout << result.decision_summary << '\n';
+    return 0;
+}
+
 int assert_selected_text_keeps_fx_priority(const std::filesystem::path &root) {
     const auto source_path = root / "Toshi Fx" / "Episode 06.mkv";
     const auto current_subtitle_path = source_path.parent_path() / "Episode 06.ass";
@@ -256,6 +304,10 @@ int main() {
         return 1;
     }
 
+    if (assert_selected_text_candidate_variants(root) != 0) {
+        return 1;
+    }
+
     if (assert_selected_text_match_handles_invalid_characters(root) != 0) {
         return 1;
     }
@@ -265,6 +317,10 @@ int main() {
     }
 
     if (assert_selected_text_no_match_is_not_an_error(root) != 0) {
+        return 1;
+    }
+
+    if (assert_selected_text_source_directory_unavailable_uses_selected_text_summary(root) != 0) {
         return 1;
     }
 

@@ -513,6 +513,129 @@ int assert_batch_counter_key_prevents_reuse_across_filename_patterns(const std::
     return 0;
 }
 
+int assert_duplicate_exclusion_does_not_drive_counter_high_water_mark(const std::filesystem::path &root) {
+    const auto output_directory = root / "duplicate-exclusion";
+    const auto source_path = root / "Excluded" / "episode-01.mkv";
+    std::filesystem::create_directories(output_directory);
+    std::filesystem::create_directories(source_path.parent_path());
+    touch_file(source_path);
+
+    const OutputNamingRequest request{
+        .source_path = source_path,
+        .output_directory = output_directory,
+        .custom_text = "BDRip",
+        .extension_hint = ".mp4",
+        .video_codec = OutputVideoCodec::h265,
+        .output_width = 1920,
+        .output_height = 1080
+    };
+
+    const auto reservations = OutputNaming::reserve_batch(std::vector<OutputNamingReservationRequest>{
+        OutputNamingReservationRequest{
+            .request = request,
+            .naming_template = OutputNaming::default_template(),
+            .stored_sequence_number = 4,
+            .excluded_output_paths = {
+                output_directory / "BDRip Excluded - 99 x265 1920x1080.mp4"
+            }
+        }
+    });
+
+    if (reservations.size() != 1U ||
+        reservations[0].assigned_sequence_number != 5 ||
+        reservations[0].persisted_sequence_number != 5 ||
+        reservations[0].result.file_name != "BDRip Excluded - 05 x265 1920x1080.mp4") {
+        return fail("A duplicate exclusion incorrectly drove the stored counter high-water mark.");
+    }
+
+    std::cout << "duplicate_exclusion.name=" << reservations[0].result.file_name << '\n';
+    return 0;
+}
+
+int assert_duplicate_exclusion_blocks_current_candidate(const std::filesystem::path &root) {
+    const auto output_directory = root / "duplicate-current";
+    const auto source_path = root / "Current" / "episode-01.mkv";
+    std::filesystem::create_directories(output_directory);
+    std::filesystem::create_directories(source_path.parent_path());
+    touch_file(source_path);
+
+    const OutputNamingRequest request{
+        .source_path = source_path,
+        .output_directory = output_directory,
+        .custom_text = "BDRip",
+        .extension_hint = ".mp4",
+        .video_codec = OutputVideoCodec::h265,
+        .output_width = 1920,
+        .output_height = 1080
+    };
+
+    const auto reservations = OutputNaming::reserve_batch(std::vector<OutputNamingReservationRequest>{
+        OutputNamingReservationRequest{
+            .request = request,
+            .naming_template = OutputNaming::default_template(),
+            .stored_sequence_number = 4,
+            .excluded_output_paths = {
+                output_directory / "BDRip Current - 05 x265 1920x1080.mp4"
+            }
+        }
+    });
+
+    if (reservations.size() != 1U ||
+        reservations[0].assigned_sequence_number != 6 ||
+        reservations[0].persisted_sequence_number != 6 ||
+        reservations[0].result.file_name != "BDRip Current - 06 x265 1920x1080.mp4") {
+        return fail("A duplicate exclusion did not block reuse of the original output path.");
+    }
+
+    std::cout << "duplicate_current.name=" << reservations[0].result.file_name << '\n';
+    return 0;
+}
+
+int assert_non_sequence_template_uses_copy_suffix_for_excluded_path(const std::filesystem::path &root) {
+    const auto output_directory = root / "duplicate-no-sequence";
+    const auto source_path = root / "NoSequence" / "episode-01.mkv";
+    std::filesystem::create_directories(output_directory);
+    std::filesystem::create_directories(source_path.parent_path());
+    touch_file(source_path);
+
+    const OutputNamingTemplate no_sequence_template{
+        .enabled = true,
+        .separator = " - ",
+        .tokens = {
+            OutputNamingToken{.type = OutputNamingTokenType::selected_text, .enabled = true},
+            OutputNamingToken{.type = OutputNamingTokenType::source_folder_name, .enabled = true}
+        }
+    };
+    const OutputNamingRequest request{
+        .source_path = source_path,
+        .output_directory = output_directory,
+        .custom_text = "BDRip",
+        .extension_hint = ".mp4",
+        .video_codec = OutputVideoCodec::h265
+    };
+
+    const auto reservations = OutputNaming::reserve_batch(std::vector<OutputNamingReservationRequest>{
+        OutputNamingReservationRequest{
+            .request = request,
+            .naming_template = no_sequence_template,
+            .stored_sequence_number = 12,
+            .excluded_output_paths = {
+                output_directory / "BDRip NoSequence.mp4"
+            }
+        }
+    });
+
+    if (reservations.size() != 1U ||
+        reservations[0].assigned_sequence_number != 0 ||
+        reservations[0].persisted_sequence_number != 0 ||
+        reservations[0].result.file_name != "BDRip NoSequence Copy.mp4") {
+        return fail("A no-sequence duplicate did not use a copy suffix to avoid path reuse.");
+    }
+
+    std::cout << "duplicate_no_sequence.name=" << reservations[0].result.file_name << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -556,6 +679,18 @@ int main() {
     }
 
     if (assert_batch_counter_key_prevents_reuse_across_filename_patterns(root) != 0) {
+        return 1;
+    }
+
+    if (assert_duplicate_exclusion_does_not_drive_counter_high_water_mark(root) != 0) {
+        return 1;
+    }
+
+    if (assert_duplicate_exclusion_blocks_current_candidate(root) != 0) {
+        return 1;
+    }
+
+    if (assert_non_sequence_template_uses_copy_suffix_for_excluded_path(root) != 0) {
         return 1;
     }
 
