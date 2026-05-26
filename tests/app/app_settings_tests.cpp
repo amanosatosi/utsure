@@ -151,6 +151,7 @@ int assert_invalid_values_fall_back(const std::filesystem::path &root) {
     last_used.insert("codec", "future-codec");
     last_used.insert("preset", "not-a-preset");
     last_used.insert("crf", 999);
+    last_used.insert("audioBitrateKbps", 999);
 
     QJsonArray tokens;
     QJsonObject unknown_token;
@@ -181,6 +182,7 @@ int assert_invalid_values_fall_back(const std::filesystem::path &root) {
     if (loaded.settings.last_used.codec != utsure::core::media::OutputVideoCodec::h265 ||
         loaded.settings.last_used.preset != "fast" ||
         loaded.settings.last_used.crf != 22 ||
+        loaded.settings.last_used.audio_bitrate_kbps != 192 ||
         loaded.settings.output_naming.tokens.size() != 1U ||
         loaded.settings.output_naming.tokens[0].type != utsure::core::job::OutputNamingTokenType::source_folder_name) {
         return fail("Invalid saved settings did not fall back to valid defaults safely.");

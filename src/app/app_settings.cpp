@@ -92,7 +92,12 @@ int bounded_int_from_json(const QJsonValue &value, const int fallback, const int
         return fallback;
     }
 
-    return std::clamp(value.toInt(fallback), minimum, maximum);
+    const int parsed_value = value.toInt(fallback);
+    if (parsed_value < minimum || parsed_value > maximum) {
+        return fallback;
+    }
+
+    return parsed_value;
 }
 
 QJsonObject encode_choices_to_json(const AppSettings::LastUsedEncodeChoices &choices) {

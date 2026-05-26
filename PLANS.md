@@ -1019,7 +1019,7 @@ Completed:
   * Added persisted sequence counters that reserve from the max of stored counters and matching existing files, so deleted old outputs do not reset numbering and batch reservations do not reuse a counter value.
   * Added a small settings dialog for output naming token order, enable/disable, and reset-to-default behavior while keeping existing automatic output-directory behavior and manual output path selection.
   * Added focused core/app tests for settings JSON behavior, token naming, filename sanitization, stored counters, existing-file collision avoidance, and absence of last-output-directory persistence.
-  * Fixed CI follow-ups by building the new app settings test target in the Windows workflow script, avoiding Windows-invalid test fixture directories, and aligning the trimmed subtitle burn-in assertion with output-PTS subtitle scheduling.
+  * Fixed CI follow-ups by building the new app settings test target in the Windows workflow script, avoiding Windows-invalid test fixture directories, rejecting out-of-range numeric settings back to defaults, and aligning the trimmed subtitle burn-in assertion with output-PTS subtitle scheduling.
 
 ## Immediate next milestone
 
