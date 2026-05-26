@@ -445,6 +445,21 @@ void emit_runtime_log(
     }
 }
 
+void emit_runtime_warning(
+    const std::function<void(const std::string &)> &warning_callback,
+    const std::function<void(const std::string &)> &fallback_log_callback,
+    std::string message
+) {
+    if (warning_callback) {
+        warning_callback(std::move(message));
+        return;
+    }
+
+    if (fallback_log_callback) {
+        fallback_log_callback(std::move(message));
+    }
+}
+
 std::string format_audio_shape(const int sample_rate, const int channel_count) {
     if (sample_rate <= 0 || channel_count <= 0) {
         return "unknown";
@@ -1721,6 +1736,7 @@ public:
         bool log_frame_details{false};
         bool log_bitmap_details{false};
         std::function<void(const std::string &)> log_callback{};
+        std::function<void(const std::string &)> warning_callback{};
     };
 
     struct WorkerSubtitleSession final {
@@ -1941,6 +1957,9 @@ private:
                             subtitle_diagnostics_->log_bitmap_details,
                         .log_callback = subtitle_diagnostics_.has_value()
                             ? subtitle_diagnostics_->log_callback
+                            : std::function<void(const std::string &)>{},
+                        .warning_callback = subtitle_diagnostics_.has_value()
+                            ? subtitle_diagnostics_->warning_callback
                             : std::function<void(const std::string &)>{}
                     };
 
@@ -2496,7 +2515,8 @@ public:
           video_plan_(video_plan),
           resolved_audio_output_(resolved_audio_output),
           audio_plan_(audio_plan),
-          audio_copy_template_(std::move(audio_copy_template)) {
+          audio_copy_template_(std::move(audio_copy_template)),
+          partial_output_cleanup_(request.output_path.lexically_normal()) {
         const auto output_path = request.output_path.lexically_normal();
         const auto output_path_string = output_path.string();
         if (output_path_string.empty()) {
@@ -2544,6 +2564,7 @@ public:
         }
 
         open_output_file(*output_context_, output_path);
+        partial_output_cleanup_.mark_write_started();
 
         const auto header_result = avformat_write_header(output_context_.get(), nullptr);
         if (header_result < 0) {
@@ -2557,6 +2578,10 @@ public:
         if (audio_codec_context_) {
             reusable_audio_receive_packet_ = allocate_packet();
         }
+    }
+
+    ~StreamingOutputSession() {
+        close_output_io_noexcept();
     }
 
     [[nodiscard]] bool audio_enabled() const noexcept {
@@ -2667,11 +2692,7 @@ public:
                 );
             }
 
-            if (output_context_->pb != nullptr && (output_context_->oformat->flags & AVFMT_NOFILE) == 0) {
-                avio_closep(&output_context_->pb);
-            }
-
-            finalized_ = true;
+            close_output_io_noexcept();
         }
 
         const auto inspection_result = MediaInspector::inspect(request_.output_path);
@@ -2682,16 +2703,65 @@ public:
             );
         }
 
-        return EncodedMediaSummary{
+        EncodedMediaSummary summary{
             .output_path = request_.output_path.lexically_normal(),
             .video_settings = request_.video_settings,
             .resolved_audio_output = resolved_audio_output_,
             .output_info = *inspection_result.media_source_info,
             .encoded_video_frame_count = encoded_video_frame_count_
         };
+        partial_output_cleanup_.mark_finalized();
+        finalized_ = true;
+        return summary;
     }
 
 private:
+    class PartialOutputCleanupGuard final {
+    public:
+        explicit PartialOutputCleanupGuard(std::filesystem::path output_path)
+            : output_path_(std::move(output_path)) {
+        }
+
+        PartialOutputCleanupGuard(const PartialOutputCleanupGuard &) = delete;
+        PartialOutputCleanupGuard &operator=(const PartialOutputCleanupGuard &) = delete;
+
+        ~PartialOutputCleanupGuard() {
+            cleanup_now();
+        }
+
+        void mark_write_started() noexcept {
+            write_started_ = true;
+        }
+
+        void mark_finalized() noexcept {
+            finalized_ = true;
+        }
+
+        void cleanup_now() noexcept {
+            if (!write_started_ || finalized_ || output_path_.empty()) {
+                return;
+            }
+
+            std::error_code remove_error{};
+            std::filesystem::remove(output_path_, remove_error);
+            write_started_ = false;
+        }
+
+    private:
+        std::filesystem::path output_path_{};
+        bool write_started_{false};
+        bool finalized_{false};
+    };
+
+    void close_output_io_noexcept() noexcept {
+        if (output_context_ != nullptr &&
+            output_context_->pb != nullptr &&
+            output_context_->oformat != nullptr &&
+            (output_context_->oformat->flags & AVFMT_NOFILE) == 0) {
+            avio_closep(&output_context_->pb);
+        }
+    }
+
     [[nodiscard]] bool can_encode_native_frame_directly(const AVFrame &source_frame) const noexcept {
         return source_frame.width == video_codec_context_->width &&
             source_frame.height == video_codec_context_->height &&
@@ -3144,6 +3214,7 @@ private:
     ResolvedAudioOutputPlan resolved_audio_output_{};
     std::optional<AudioOutputPlan> audio_plan_{};
     std::optional<AudioCopyTemplate> audio_copy_template_{};
+    PartialOutputCleanupGuard partial_output_cleanup_;
     OutputFormatContextHandle output_context_{};
     CodecContextHandle video_codec_context_{};
     CodecContextHandle audio_codec_context_{};
@@ -3473,6 +3544,7 @@ SegmentProcessResult process_segment(
     StreamingRuntimeBehavior &runtime_behavior,
     StreamingPerformanceMetrics &performance_metrics,
     const std::function<void(const std::string &)> &log_callback,
+    const std::function<void(const std::string &)> &warning_callback,
     std::int64_t &next_output_frame_index,
     std::int64_t &next_output_video_pts,
     std::int64_t &next_output_audio_pts
@@ -3545,7 +3617,7 @@ SegmentProcessResult process_segment(
             video_output_plan,
             encode_audio ? resolved_audio_plan : nullptr
         ); normalization_log.has_value()) {
-        emit_runtime_log(log_callback, *normalization_log);
+        emit_runtime_warning(warning_callback, log_callback, *normalization_log);
     }
 
     std::unique_ptr<ParallelVideoFrameProcessor> video_frame_processor{};
@@ -3564,7 +3636,8 @@ SegmentProcessResult process_segment(
             ParallelVideoFrameProcessor::SubtitleDiagnosticSettings{
                 .log_frame_details = runtime_behavior.subtitle_diagnostics_mode != "off",
                 .log_bitmap_details = runtime_behavior.subtitle_diagnostics_mode == "verbose",
-                .log_callback = log_callback
+                .log_callback = log_callback,
+                .warning_callback = warning_callback
             }
         );
     }
@@ -4905,7 +4978,8 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
             .main_source_audio_stream = main_source_audio_stream
         });
         if (resolved_audio_output.requested_mode_adjustment.has_value()) {
-            emit_runtime_log(
+            emit_runtime_warning(
+                request.warning_callback,
                 request.log_callback,
                 runtime_policy::format_operation_message(
                     runtime_policy::RuntimeAnomalyClass::reduced_fidelity,
@@ -5046,6 +5120,7 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
                 runtime_behavior,
                 performance_metrics,
                 request.log_callback,
+                request.warning_callback,
                 next_output_frame_index,
                 next_output_video_pts,
                 next_output_audio_pts
@@ -5100,18 +5175,35 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
                 .encoded_media_summary = std::move(encoded_media_summary)
             }
         };
+    } catch (const runtime_policy::RuntimeAnomalyError &exception) {
+        return make_error(
+            exception.what(),
+            "classification=" + std::string(runtime_policy::to_string(exception.classification())) +
+                ". Partial output cleanup: any output file opened by this failed encode was removed automatically.",
+            false,
+            exception.classification()
+        );
     } catch (const std::exception &exception) {
         if (std::string_view(exception.what()) == job::kEncodeJobCanceledException) {
             return make_error(
                 std::string(job::kEncodeJobCanceledMessage),
-                "The active encode was canceled by the user. Any partial output may need to be deleted manually.",
+                "The active encode was canceled by the user. Any partial output opened by this encode was removed automatically.",
                 true
             );
         }
 
         return make_error(
             "Streaming transcode raised an unclassified runtime failure.",
-            exception.what(),
+            std::string(exception.what()) +
+                " Partial output cleanup: any output file opened by this failed encode was removed automatically.",
+            false,
+            runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt
+        );
+    } catch (...) {
+        return make_error(
+            "Streaming transcode raised a non-standard runtime failure.",
+            "An unknown exception escaped the streaming pipeline. Partial output cleanup: any output file opened by "
+            "this failed encode was removed automatically.",
             false,
             runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt
         );

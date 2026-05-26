@@ -7,6 +7,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace utsure::core::subtitles::detail {
 
@@ -20,6 +21,12 @@ inline bool should_log_subtitle_bitmap_diagnostics(const SubtitleRenderRequest &
     return request.debug_context != nullptr &&
         request.debug_context->log_bitmap_details &&
         static_cast<bool>(request.debug_context->log_callback);
+}
+
+inline bool can_log_subtitle_warning(const SubtitleRenderRequest &request) {
+    return request.debug_context != nullptr &&
+        (static_cast<bool>(request.debug_context->warning_callback) ||
+         static_cast<bool>(request.debug_context->log_callback));
 }
 
 inline std::string format_subtitle_frame_diagnostics(
@@ -188,6 +195,22 @@ inline void maybe_log_subtitle_renderer_quirk_diagnostic(
     }
 
     request.debug_context->log_callback(std::string(message));
+}
+
+inline void maybe_log_subtitle_warning(
+    const SubtitleRenderRequest &request,
+    std::string message
+) {
+    if (!can_log_subtitle_warning(request)) {
+        return;
+    }
+
+    if (request.debug_context->warning_callback) {
+        request.debug_context->warning_callback(std::move(message));
+        return;
+    }
+
+    request.debug_context->log_callback(std::move(message));
 }
 
 }  // namespace utsure::core::subtitles::detail

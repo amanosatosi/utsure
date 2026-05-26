@@ -62,28 +62,47 @@ void throw_if_canceled(const bool cancel_requested) {
 EncodeJobRunnerWorker::EncodeJobRunnerWorker(QObject *parent) : QObject(parent) {}
 
 void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
-    const auto result = utsure::core::job::EncodeJobRunner::run(job, utsure::core::job::EncodeJobRunOptions{
-        .decode_normalization_policy = {},
-        .observer = this
-    });
+    try {
+        const auto result = utsure::core::job::EncodeJobRunner::run(job, utsure::core::job::EncodeJobRunOptions{
+            .decode_normalization_policy = {},
+            .observer = this
+        });
 
-    if (result.succeeded()) {
+        if (result.succeeded()) {
+            emit job_finished(
+                true,
+                false,
+                "Encode completed successfully.",
+                format_success_details(*result.encode_job_summary)
+            );
+            return;
+        }
+
+        const bool canceled = result.error->canceled;
         emit job_finished(
-            true,
             false,
-            "Encode completed successfully.",
-            format_success_details(*result.encode_job_summary)
+            canceled,
+            canceled ? "Encode canceled." : QString("Encode failed: %1").arg(to_qstring(result.error->message)),
+            format_error_details(*result.error)
         );
-        return;
+    } catch (const std::exception &exception) {
+        const auto main_source_path = job.input.main_source_path.lexically_normal().string();
+        const auto output_path = job.output.output_path.lexically_normal().string();
+        const QString problem = QString("Encode failed: The encode worker caught an unexpected runtime failure.");
+        const QString details = QString("Main source: %1\nOutput: %2\nProblem: %3")
+            .arg(to_qstring(main_source_path))
+            .arg(to_qstring(output_path))
+            .arg(to_qstring(exception.what()));
+        emit job_finished(false, false, problem, details);
+    } catch (...) {
+        const auto main_source_path = job.input.main_source_path.lexically_normal().string();
+        const auto output_path = job.output.output_path.lexically_normal().string();
+        const QString problem = QString("Encode failed: The encode worker caught an unknown runtime failure.");
+        const QString details = QString("Main source: %1\nOutput: %2\nProblem: Unknown non-standard exception.")
+            .arg(to_qstring(main_source_path))
+            .arg(to_qstring(output_path));
+        emit job_finished(false, false, problem, details);
     }
-
-    const bool canceled = result.error->canceled;
-    emit job_finished(
-        false,
-        canceled,
-        canceled ? "Encode canceled." : QString("Encode failed: %1").arg(to_qstring(result.error->message)),
-        format_error_details(*result.error)
-    );
 }
 
 void EncodeJobRunnerWorker::request_cancel() noexcept {

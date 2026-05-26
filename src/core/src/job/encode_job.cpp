@@ -152,6 +152,17 @@ void notify_log(
     });
 }
 
+void notify_log_safely(
+    EncodeJobTelemetry &telemetry,
+    const EncodeJobLogLevel level,
+    std::string message
+) noexcept {
+    try {
+        notify_log(telemetry, level, std::move(message));
+    } catch (...) {
+    }
+}
+
 EncodeJobResult make_error(
     const EncodeJob &job,
     const std::string &message,
@@ -160,9 +171,9 @@ EncodeJobResult make_error(
     const bool canceled = false
 ) {
     if (telemetry != nullptr) {
-        notify_log(*telemetry, EncodeJobLogLevel::error, message);
+        notify_log_safely(*telemetry, EncodeJobLogLevel::error, message);
         if (!actionable_hint.empty()) {
-            notify_log(*telemetry, EncodeJobLogLevel::error, "Hint: " + actionable_hint);
+            notify_log_safely(*telemetry, EncodeJobLogLevel::error, "Hint: " + actionable_hint);
         }
     }
 
@@ -267,6 +278,8 @@ const char *to_string(const EncodeJobLogLevel level) noexcept {
     switch (level) {
     case EncodeJobLogLevel::info:
         return "info";
+    case EncodeJobLogLevel::warning:
+        return "warning";
     case EncodeJobLogLevel::error:
         return "error";
     default:
@@ -457,6 +470,9 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                 },
                 .log_callback = [&telemetry](const std::string &message) {
                     notify_log(telemetry, EncodeJobLogLevel::info, message);
+                },
+                .warning_callback = [&telemetry](const std::string &message) {
+                    notify_log(telemetry, EncodeJobLogLevel::warning, message);
                 }
             }
         );
@@ -531,12 +547,19 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             },
             .error = std::nullopt
         };
+    } catch (const runtime_policy::RuntimeAnomalyError &exception) {
+        return make_error(
+            job,
+            exception.what(),
+            "classification=" + std::string(runtime_policy::to_string(exception.classification())),
+            &telemetry
+        );
     } catch (const std::exception &exception) {
         if (std::string_view(exception.what()) == kEncodeJobCanceledException) {
             return make_error(
                 job,
                 std::string(kEncodeJobCanceledMessage),
-                "The active encode was canceled by the user. Any partial output may need to be deleted manually.",
+                "The active encode was canceled by the user. Any partial output opened by this encode was removed automatically.",
                 &telemetry,
                 true
             );
@@ -550,6 +573,17 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                 "Encode job raised an unclassified runtime failure."
             ),
             exception.what(),
+            &telemetry
+        );
+    } catch (...) {
+        return make_error(
+            job,
+            runtime_policy::format_operation_message(
+                runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
+                "encode",
+                "Encode job raised a non-standard runtime failure."
+            ),
+            "An unknown exception escaped the encode core boundary.",
             &telemetry
         );
     }

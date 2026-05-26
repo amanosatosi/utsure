@@ -85,6 +85,12 @@ struct ScriptFeatureScan final {
     bool references_tag_images{false};
 };
 
+enum class SubtitleBitmapFrameVisibility : std::uint8_t {
+    visible = 0,
+    clipped,
+    off_frame
+};
+
 std::vector<std::string> build_script_feature_quirk_messages(const ScriptFeatureScan &scan) {
     std::vector<std::string> messages{};
     if (scan.references_tag_images) {
@@ -173,6 +179,110 @@ SubtitleFrameComposeResult make_compose_error(
 
 bool is_supported_format_hint(const std::string &format_hint) {
     return format_hint == "auto" || format_hint == "ass" || format_hint == "ssa";
+}
+
+SubtitleBitmapFrameVisibility classify_subtitle_bitmap_frame_visibility(
+    const media::DecodedVideoFrame &video_frame,
+    const int origin_x,
+    const int origin_y,
+    const int width,
+    const int height
+) noexcept {
+    if (width <= 0 || height <= 0) {
+        return SubtitleBitmapFrameVisibility::off_frame;
+    }
+
+    const std::int64_t left = static_cast<std::int64_t>(origin_x);
+    const std::int64_t top = static_cast<std::int64_t>(origin_y);
+    const std::int64_t right = left + static_cast<std::int64_t>(width);
+    const std::int64_t bottom = top + static_cast<std::int64_t>(height);
+    const std::int64_t clipped_left = std::max<std::int64_t>(0, left);
+    const std::int64_t clipped_top = std::max<std::int64_t>(0, top);
+    const std::int64_t clipped_right = std::min<std::int64_t>(video_frame.width, right);
+    const std::int64_t clipped_bottom = std::min<std::int64_t>(video_frame.height, bottom);
+
+    if (clipped_left >= clipped_right || clipped_top >= clipped_bottom) {
+        return SubtitleBitmapFrameVisibility::off_frame;
+    }
+
+    if (left != clipped_left || top != clipped_top || right != clipped_right || bottom != clipped_bottom) {
+        return SubtitleBitmapFrameVisibility::clipped;
+    }
+
+    return SubtitleBitmapFrameVisibility::visible;
+}
+
+std::string format_recoverable_subtitle_bitmap_visibility_warning(
+    const media::DecodedVideoFrame &video_frame,
+    const std::size_t bitmap_index,
+    const int origin_x,
+    const int origin_y,
+    const int width,
+    const int height,
+    const int stride,
+    const std::string_view bitmap_mode,
+    const SubtitleBitmapFrameVisibility visibility
+) {
+    const auto classification = visibility == SubtitleBitmapFrameVisibility::clipped
+        ? runtime_policy::RuntimeAnomalyClass::recoverable_normalization
+        : runtime_policy::RuntimeAnomalyClass::harmless_noop;
+    const std::string action = visibility == SubtitleBitmapFrameVisibility::clipped
+        ? "clipped to the output frame"
+        : "skipped because it is fully outside the output frame";
+
+    std::ostringstream message;
+    message << runtime_policy::format_operation_message(
+        classification,
+        "subtitle composition",
+        "libassmod subtitle bitmap[" + std::to_string(bitmap_index) + "] " + action
+    ) << " mode=" << bitmap_mode
+        << ", origin=" << origin_x << ',' << origin_y
+        << ", size=" << width << 'x' << height
+        << ", stride=" << stride
+        << ", destination=" << video_frame.width << 'x' << video_frame.height << '.';
+    return message.str();
+}
+
+void maybe_log_recoverable_subtitle_bitmap_visibility_warning(
+    const SubtitleRenderRequest &request,
+    const media::DecodedVideoFrame &video_frame,
+    const std::size_t bitmap_index,
+    const int origin_x,
+    const int origin_y,
+    const int width,
+    const int height,
+    const int stride,
+    const std::string_view bitmap_mode,
+    const SubtitleBitmapFrameVisibility visibility,
+    bool &off_frame_warning_logged,
+    bool &clipped_warning_logged
+) {
+    if (visibility == SubtitleBitmapFrameVisibility::visible) {
+        return;
+    }
+
+    bool &already_logged = visibility == SubtitleBitmapFrameVisibility::clipped
+        ? clipped_warning_logged
+        : off_frame_warning_logged;
+    if (already_logged) {
+        return;
+    }
+
+    detail::maybe_log_subtitle_warning(
+        request,
+        format_recoverable_subtitle_bitmap_visibility_warning(
+            video_frame,
+            bitmap_index,
+            origin_x,
+            origin_y,
+            width,
+            height,
+            stride,
+            bitmap_mode,
+            visibility
+        )
+    );
+    already_logged = true;
 }
 
 double choose_pixel_aspect_ratio(const media::Rational &sample_aspect_ratio) {
@@ -699,6 +809,31 @@ public:
                     }
 
                     const ASS_ImageRGBA &image = *drawable_image.image;
+                    const auto visibility = classify_subtitle_bitmap_frame_visibility(
+                        video_frame,
+                        image.dst_x,
+                        image.dst_y,
+                        image.w,
+                        image.h
+                    );
+                    maybe_log_recoverable_subtitle_bitmap_visibility_warning(
+                        request,
+                        video_frame,
+                        drawable_image.bitmap_index,
+                        image.dst_x,
+                        image.dst_y,
+                        image.w,
+                        image.h,
+                        image.stride,
+                        runtime::to_string(runtime_options_.bitmap_transfer_mode),
+                        visibility,
+                        off_frame_bitmap_warning_logged_,
+                        clipped_bitmap_warning_logged_
+                    );
+                    if (visibility == SubtitleBitmapFrameVisibility::off_frame) {
+                        continue;
+                    }
+
                     detail::maybe_log_subtitle_bitmap_diagnostics(
                         request,
                         drawable_image.bitmap_index,
@@ -733,6 +868,31 @@ public:
                 for (std::size_t bitmap_index = 0; bitmap_index < drawable_image_nodes.size(); ++bitmap_index) {
                     const ASS_Image *image = drawable_image_nodes[bitmap_index];
                     if (image == nullptr) {
+                        continue;
+                    }
+
+                    const auto visibility = classify_subtitle_bitmap_frame_visibility(
+                        video_frame,
+                        image->dst_x,
+                        image->dst_y,
+                        image->w,
+                        image->h
+                    );
+                    maybe_log_recoverable_subtitle_bitmap_visibility_warning(
+                        request,
+                        video_frame,
+                        bitmap_index,
+                        image->dst_x,
+                        image->dst_y,
+                        image->w,
+                        image->h,
+                        image->stride,
+                        "legacy",
+                        visibility,
+                        off_frame_bitmap_warning_logged_,
+                        clipped_bitmap_warning_logged_
+                    );
+                    if (visibility == SubtitleBitmapFrameVisibility::off_frame) {
                         continue;
                     }
 
@@ -901,6 +1061,8 @@ private:
     std::atomic<bool> destroyed_{false};
     bool renderer_setup_diagnostics_logged_{false};
     bool quirk_diagnostics_logged_{false};
+    bool off_frame_bitmap_warning_logged_{false};
+    bool clipped_bitmap_warning_logged_{false};
 };
 
 class LibassmodSubtitleRenderer final : public SubtitleRenderer {

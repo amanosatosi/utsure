@@ -36,6 +36,7 @@ struct SubtitleCompositionDebugContext final {
     bool log_frame_details{false};
     bool log_bitmap_details{false};
     std::function<void(const std::string &)> log_callback{};
+    std::function<void(const std::string &)> warning_callback{};
 };
 
 struct SubtitleRenderRequest final {

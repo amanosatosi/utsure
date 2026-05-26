@@ -153,6 +153,40 @@ int run_offscreen_direct_view_assertion() {
     return 0;
 }
 
+int run_zero_visible_direct_view_assertion() {
+    DecodedVideoFrame frame{
+        .width = 2,
+        .height = 1,
+        .pixel_format = NormalizedVideoPixelFormat::rgba8,
+        .planes = {VideoPlane{
+            .line_stride_bytes = 8,
+            .visible_width = 2,
+            .visible_height = 1,
+            .bytes = {11U, 12U, 13U, 255U, 21U, 22U, 23U, 255U}
+        }}
+    };
+    const auto expected_bytes = frame.planes.front().bytes;
+
+    composite_premultiplied_rgba_bitmap_into_frame(
+        frame,
+        PremultipliedRgbaBitmapView{
+            .origin_x = 2,
+            .origin_y = 0,
+            .width = 3,
+            .height = 1,
+            .line_stride_bytes = 0,
+            .bytes = nullptr
+        }
+    );
+
+    if (frame.planes.front().bytes != expected_bytes) {
+        return fail("Zero-visible-area direct premultiplied RGBA bitmap unexpectedly changed the frame.");
+    }
+
+    std::cout << "direct_zero_visible=skipped\n";
+    return 0;
+}
+
 int run_invalid_bitmap_assertion() {
     DecodedVideoFrame frame{
         .width = 2,
@@ -191,13 +225,52 @@ int run_invalid_bitmap_assertion() {
     return fail("Invalid-bitmap assertion unexpectedly succeeded.");
 }
 
+int run_null_visible_bitmap_assertion() {
+    DecodedVideoFrame frame{
+        .width = 2,
+        .height = 1,
+        .pixel_format = NormalizedVideoPixelFormat::rgba8,
+        .planes = {VideoPlane{
+            .line_stride_bytes = 8,
+            .visible_width = 2,
+            .visible_height = 1,
+            .bytes = {0U, 0U, 0U, 255U, 0U, 0U, 0U, 255U}
+        }}
+    };
+
+    try {
+        composite_premultiplied_rgba_bitmap_into_frame(
+            frame,
+            PremultipliedRgbaBitmapView{
+                .origin_x = 0,
+                .origin_y = 0,
+                .width = 1,
+                .height = 1,
+                .line_stride_bytes = 4,
+                .bytes = nullptr
+            }
+        );
+    } catch (const std::exception &exception) {
+        const std::string message(exception.what());
+        if (message.find("truncated frame or bitmap buffer") == std::string::npos) {
+            return fail("Null-visible-bitmap assertion threw the wrong diagnostic message.");
+        }
+
+        std::cout << message << '\n';
+        return 0;
+    }
+
+    return fail("Null-visible-bitmap assertion unexpectedly succeeded.");
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         return fail(
             "Usage: utsure_core_subtitle_bitmap_compositor_tests "
-            "[--premultiplied|--direct-clipped|--direct-offscreen|--invalid-bitmap]"
+            "[--premultiplied|--direct-clipped|--direct-offscreen|--direct-zero-visible|"
+            "--invalid-bitmap|--null-visible-bitmap]"
         );
     }
 
@@ -214,9 +287,20 @@ int main(int argc, char *argv[]) {
         return run_offscreen_direct_view_assertion();
     }
 
+    if (mode == "--direct-zero-visible") {
+        return run_zero_visible_direct_view_assertion();
+    }
+
     if (mode == "--invalid-bitmap") {
         return run_invalid_bitmap_assertion();
     }
 
-    return fail("Unknown mode. Use --premultiplied, --direct-clipped, --direct-offscreen, or --invalid-bitmap.");
+    if (mode == "--null-visible-bitmap") {
+        return run_null_visible_bitmap_assertion();
+    }
+
+    return fail(
+        "Unknown mode. Use --premultiplied, --direct-clipped, --direct-offscreen, --direct-zero-visible, "
+        "--invalid-bitmap, or --null-visible-bitmap."
+    );
 }

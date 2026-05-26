@@ -15,8 +15,10 @@ extern "C" {
 #include <filesystem>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -63,6 +65,22 @@ struct CollectingObserver final : EncodeJobObserver {
 
     void on_progress(const EncodeJobProgress &progress) override {
         progress_updates.push_back(progress);
+    }
+
+    void on_log(const EncodeJobLogMessage &message) override {
+        log_messages.push_back(message);
+    }
+};
+
+struct CancelAfterFirstEncodedFrameObserver final : EncodeJobObserver {
+    std::vector<EncodeJobProgress> progress_updates{};
+    std::vector<EncodeJobLogMessage> log_messages{};
+
+    void on_progress(const EncodeJobProgress &progress) override {
+        progress_updates.push_back(progress);
+        if (progress.encoded_video_frames.has_value() && *progress.encoded_video_frames > 0U) {
+            throw std::runtime_error(std::string(utsure::core::job::kEncodeJobCanceledException));
+        }
     }
 
     void on_log(const EncodeJobLogMessage &message) override {
@@ -603,6 +621,20 @@ bool observer_logs_contain_text(const CollectingObserver &observer, std::string_
     return false;
 }
 
+bool observer_logs_contain_level_and_text(
+    const CollectingObserver &observer,
+    const EncodeJobLogLevel level,
+    std::string_view needle
+) {
+    for (const auto &message : observer.log_messages) {
+        if (message.level == level && contains_text(message.message, needle)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 int assert_runtime_visibility(
     const CollectingObserver &observer,
     const EncodeJobSummary &summary
@@ -930,6 +962,60 @@ int run_main_only_job_assertion(
         *job_result.encode_job_summary,
         *output_decode_result.decoded_media_source
     ) << '\n';
+    return 0;
+}
+
+int run_partial_output_cleanup_cancel_assertion(
+    const std::filesystem::path &input_path,
+    const std::filesystem::path &output_path
+) {
+    std::error_code remove_error{};
+    std::filesystem::remove(output_path, remove_error);
+
+    CancelAfterFirstEncodedFrameObserver observer{};
+    const EncodeJob job{
+        .input = {
+            .main_source_path = input_path
+        },
+        .output = {
+            .output_path = output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "fast",
+                .crf = 22
+            }
+        }
+    };
+
+    const EncodeJobResult job_result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (job_result.succeeded() || !job_result.error.has_value() || !job_result.error->canceled) {
+        return fail("The partial-output cleanup job was not reported as canceled.");
+    }
+
+    std::error_code exists_error{};
+    if (std::filesystem::exists(output_path, exists_error) && !exists_error) {
+        return fail("The canceled encode left a partial output file behind.");
+    }
+
+    if (!contains_text(job_result.error->actionable_hint, "removed automatically")) {
+        return fail("The canceled encode did not report deterministic partial-output cleanup.");
+    }
+
+    bool observed_encoded_frame_progress = false;
+    for (const auto &progress : observer.progress_updates) {
+        if (progress.encoded_video_frames.has_value() && *progress.encoded_video_frames > 0U) {
+            observed_encoded_frame_progress = true;
+            break;
+        }
+    }
+    if (!observed_encoded_frame_progress) {
+        return fail("The cancellation test did not reach frame-level streaming progress.");
+    }
+
+    std::cout << "partial_output_cleanup=canceled_removed\n";
     return 0;
 }
 
@@ -1363,16 +1449,18 @@ int run_timeline_normalized_common_assertion(
         return fail("The normalized common-mismatch output did not normalize intro/outro audio onto the main output.");
     }
 
-    if (!observer_logs_contain_text(
+    if (!observer_logs_contain_level_and_text(
             observer,
+            EncodeJobLogLevel::warning,
             "Recoverable input normalized; encode continues: intro segment normalized toward the main output: cadence 30/1 -> 24000/1001"
         ) ||
         !observer_logs_contain_text(observer, "audio 2ch 44100 Hz -> 1ch 48000 Hz") ||
-        !observer_logs_contain_text(
+        !observer_logs_contain_level_and_text(
             observer,
+            EncodeJobLogLevel::warning,
             "Recoverable input normalized; encode continues: outro segment normalized toward the main output:"
         )) {
-        return fail("The normalized common-mismatch encode job did not log the expected best-effort normalization details.");
+        return fail("The normalized common-mismatch encode job did not log the expected warning-level normalization details.");
     }
 
     if (assert_observer_flow(observer, 3, false) != 0) {
@@ -1693,12 +1781,13 @@ int run_copy_audio_fallback_assertion(
         return fail("The copy-audio fallback encode job did not preserve the expected report diagnostics.");
     }
 
-    if (!observer_logs_contain_text(
+    if (!observer_logs_contain_level_and_text(
             observer,
+            EncodeJobLogLevel::warning,
             "Reduced-fidelity fallback applied; encode continues: Requested source-audio copy is not safe"
         ) ||
         !observer_logs_contain_text(observer, "Falling back to AAC instead.")) {
-        return fail("The copy-audio fallback encode job did not log the expected runtime warning.");
+        return fail("The copy-audio fallback encode job did not log the expected warning-level runtime fallback.");
     }
 
     if (assert_fine_encode_progress(observer, summary) != 0) {
@@ -2151,6 +2240,7 @@ int main(int argc, char *argv[]) {
             "Usage: utsure_core_encode_job_tests "
             "[--threading-modes] | "
             "[--h264|--h265] <input> <output> | "
+            "[--partial-cleanup-cancel] <input> <output> | "
             "[--timeline-h264] <intro> <main> <outro> <output> | "
             "[--timeline-normalized-common] <intro> <main> <outro> <output> | "
             "[--trim-main] <input> <output> | "
@@ -2188,6 +2278,13 @@ int main(int argc, char *argv[]) {
             std::filesystem::path(argv[3]),
             OutputVideoCodec::h265,
             "hevc"
+        );
+    }
+
+    if (mode == "--partial-cleanup-cancel" && argc == 4) {
+        return run_partial_output_cleanup_cancel_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3])
         );
     }
 

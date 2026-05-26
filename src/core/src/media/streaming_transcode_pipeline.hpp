@@ -104,6 +104,7 @@ struct StreamingTranscodeRequest final {
     PipelineQueueLimits queue_limits{kDefaultPipelineQueueLimits};
     std::function<void(const StreamingEncodeProgress &progress)> progress_callback{};
     std::function<void(const std::string &message)> log_callback{};
+    std::function<void(const std::string &message)> warning_callback{};
 };
 
 [[nodiscard]] std::optional<PipelineMemoryBudget> build_memory_budget(

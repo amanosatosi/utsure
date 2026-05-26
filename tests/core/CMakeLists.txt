@@ -690,6 +690,13 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.job.encode.partial_cleanup_cancel
+    COMMAND utsure_core_encode_job_tests --partial-cleanup-cancel
+        "${UTSURE_SAMPLE_MEDIA_FILE}"
+        "${UTSURE_TEST_MEDIA_DIR}/job-partial-cleanup-cancel.mp4"
+)
+
+add_test(
     NAME utsure.core.job.encode.ntsc_coarse_timebase
     COMMAND utsure_core_encode_job_tests --coarse-timebase-ntsc
         "${UTSURE_NTSC_COARSE_TIMEBASE_FILE}"
@@ -1148,8 +1155,18 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.subtitles.compositor.direct_zero_visible_rgba
+    COMMAND utsure_core_subtitle_bitmap_compositor_tests --direct-zero-visible
+)
+
+add_test(
     NAME utsure.core.subtitles.compositor.invalid_bitmap
     COMMAND utsure_core_subtitle_bitmap_compositor_tests --invalid-bitmap
+)
+
+add_test(
+    NAME utsure.core.subtitles.compositor.null_visible_bitmap
+    COMMAND utsure_core_subtitle_bitmap_compositor_tests --null-visible-bitmap
 )
 
 add_executable(utsure_core_subtitle_burn_in_tests

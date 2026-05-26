@@ -24,6 +24,7 @@ enum class EncodeJobStage : std::uint8_t {
 
 enum class EncodeJobLogLevel : std::uint8_t {
     info = 0,
+    warning,
     error
 };
 
