@@ -41,6 +41,8 @@
 #include <QIcon>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
+#include <QListWidgetItem>
 #include <QLoggingCategory>
 #include <QMessageBox>
 #include <QMetaObject>
@@ -388,6 +390,27 @@ QString basename_from_path(const QString &path_text) {
 QString display_text_or_fallback(const QString &text, const QString &fallback_text) {
     const QString normalized_text = text.trimmed();
     return normalized_text.isEmpty() ? fallback_text : normalized_text;
+}
+
+QString output_naming_token_label(const utsure::core::job::OutputNamingTokenType type) {
+    switch (type) {
+    case utsure::core::job::OutputNamingTokenType::selected_text:
+        return "Selected text";
+    case utsure::core::job::OutputNamingTokenType::source_folder_name:
+        return "Source folder name";
+    case utsure::core::job::OutputNamingTokenType::sequence_number:
+        return "Sequence number";
+    case utsure::core::job::OutputNamingTokenType::codec:
+        return "Codec";
+    case utsure::core::job::OutputNamingTokenType::resolution:
+        return "Resolution";
+    default:
+        return "Unknown";
+    }
+}
+
+QString output_naming_token_type_text(const utsure::core::job::OutputNamingTokenType type) {
+    return QString::fromUtf8(utsure::core::job::OutputNaming::to_string(type));
 }
 
 QString queue_source_display_name(const MainWindow::UiEncodeJob &job) {
@@ -808,6 +831,10 @@ qint64 clamp_preview_time_to_job_duration(const MainWindow::UiEncodeJob &job, co
 }  // namespace
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
+    const auto settings_load_result = AppSettings::load_default_location();
+    app_settings_ = settings_load_result.settings;
+    app_settings_path_ = settings_load_result.config_path;
+
     setWindowTitle(QString("%1 %2")
                        .arg(to_qstring(utsure::core::BuildInfo::project_name()))
                        .arg(to_qstring(utsure::core::BuildInfo::project_version())));
@@ -1894,7 +1921,7 @@ QLabel#PreviewTimeBadge {
 
     connect(add_button_, &QToolButton::clicked, this, &MainWindow::add_source_jobs);
     connect(remove_button_, &QToolButton::clicked, this, &MainWindow::remove_selected_job);
-    connect(settings_button_, &QToolButton::clicked, this, &MainWindow::show_settings_placeholder);
+    connect(settings_button_, &QToolButton::clicked, this, &MainWindow::show_settings_dialog);
     connect(info_button_, &QToolButton::clicked, this, &MainWindow::show_info_dialog);
     connect(parallel_button_, &QToolButton::clicked, this, &MainWindow::show_parallel_settings_dialog);
     connect(start_button_, &QToolButton::clicked, this, &MainWindow::start_encode_queue);
@@ -1996,6 +2023,10 @@ QLabel#PreviewTimeBadge {
     connect(trim_timeline_widget_, &TrimTimelineWidget::seek_requested, this, &MainWindow::handle_timeline_seek);
 
     append_session_log("[info] Window ready.");
+    append_session_log(QString("[info] Settings file: %1").arg(QDir::toNativeSeparators(app_settings_path_)));
+    if (!settings_load_result.warning.trimmed().isEmpty()) {
+        append_session_log("[warning] " + settings_load_result.warning);
+    }
     refresh_all_views();
 }
 
@@ -2211,6 +2242,12 @@ utsure::core::job::OutputNamingRequest MainWindow::build_output_naming_request(c
     const bool source_audio_known = job.inspected_source_info.has_value();
     const std::optional<utsure::core::media::AudioStreamInfo> source_audio_stream =
         source_audio_known ? job.inspected_source_info->primary_audio_stream : std::nullopt;
+    std::optional<int> output_width{};
+    std::optional<int> output_height{};
+    if (job.inspected_source_info.has_value() && job.inspected_source_info->primary_video_stream.has_value()) {
+        output_width = job.inspected_source_info->primary_video_stream->width;
+        output_height = job.inspected_source_info->primary_video_stream->height;
+    }
 
     return utsure::core::job::OutputNamingRequest{
         .source_path = source_path,
@@ -2224,7 +2261,9 @@ utsure::core::job::OutputNamingRequest MainWindow::build_output_naming_request(c
             .bitrate_kbps = job.audio_bitrate_kbps
         },
         .source_audio_known = source_audio_known,
-        .source_audio_stream = source_audio_stream
+        .source_audio_stream = source_audio_stream,
+        .output_width = output_width,
+        .output_height = output_height
     };
 }
 
@@ -2476,6 +2515,7 @@ void MainWindow::add_source_jobs_from_paths(const QStringList &paths) {
     for (const QString &path : paths) {
         QFileInfo info(path);
         UiEncodeJob job{};
+        apply_last_used_settings_to_job(job);
         job.source_path = QDir::toNativeSeparators(path);
         job.source_name = info.fileName();
         job.type_label = info.suffix().isEmpty() ? "-" : "." + info.suffix().toLower();
@@ -2518,12 +2558,133 @@ void MainWindow::remove_selected_job() {
     }
 }
 
-void MainWindow::show_settings_placeholder() {
-    QMessageBox::information(
-        this,
-        "Settings",
-        "Settings is a placeholder in this slice.\n\nThe current UI exposes global parallel batch and worker priority controls in the toolbar, plus per-job encode settings in the selected-job editor."
-    );
+void MainWindow::show_settings_dialog() {
+    if (queue_run_active_ || queue_start_planning_active_) {
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle("Settings");
+    dialog.setModal(true);
+    dialog.resize(420, 360);
+
+    auto *layout = new QVBoxLayout(&dialog);
+    auto *naming_group = new QGroupBox("Output naming", &dialog);
+    auto *naming_layout = new QVBoxLayout(naming_group);
+
+    auto *token_list = new QListWidget(naming_group);
+    token_list->setSelectionMode(QAbstractItemView::SingleSelection);
+    token_list->setDragDropMode(QAbstractItemView::NoDragDrop);
+    token_list->setAlternatingRowColors(true);
+    naming_layout->addWidget(token_list, 1);
+
+    auto *token_buttons = new QWidget(naming_group);
+    auto *token_buttons_layout = new QHBoxLayout(token_buttons);
+    token_buttons_layout->setContentsMargins(0, 0, 0, 0);
+    token_buttons_layout->setSpacing(6);
+    auto *move_up_button = new QPushButton(token_buttons);
+    move_up_button->setToolTip("Move selected token up");
+    move_up_button->setCursor(Qt::PointingHandCursor);
+    apply_icon_or_text(move_up_button, ":/icons/chevron-up.svg", "Up", QSize(14, 14), 30, 30, true);
+    auto *move_down_button = new QPushButton(token_buttons);
+    move_down_button->setToolTip("Move selected token down");
+    move_down_button->setCursor(Qt::PointingHandCursor);
+    apply_icon_or_text(move_down_button, ":/icons/chevron-down.svg", "Down", QSize(14, 14), 30, 30, true);
+    auto *reset_button = new QPushButton("Reset", token_buttons);
+    reset_button->setCursor(Qt::PointingHandCursor);
+    token_buttons_layout->addWidget(move_up_button);
+    token_buttons_layout->addWidget(move_down_button);
+    token_buttons_layout->addStretch(1);
+    token_buttons_layout->addWidget(reset_button);
+    naming_layout->addWidget(token_buttons);
+
+    layout->addWidget(naming_group, 1);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+
+    const auto populate_token_list = [token_list](const utsure::core::job::OutputNamingTemplate &settings) {
+        token_list->clear();
+        const auto tokens = settings.tokens.empty()
+            ? utsure::core::job::OutputNaming::default_template().tokens
+            : settings.tokens;
+        for (const auto &token : tokens) {
+            auto *item = new QListWidgetItem(output_naming_token_label(token.type));
+            item->setData(Qt::UserRole, output_naming_token_type_text(token.type));
+            item->setFlags(item->flags() | Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+            item->setCheckState(token.enabled ? Qt::Checked : Qt::Unchecked);
+            token_list->addItem(item);
+        }
+        if (token_list->count() > 0) {
+            token_list->setCurrentRow(0);
+        }
+    };
+
+    const auto move_current_row = [token_list](const int direction) {
+        const int current_row = token_list->currentRow();
+        const int target_row = current_row + direction;
+        if (current_row < 0 || target_row < 0 || target_row >= token_list->count()) {
+            return;
+        }
+
+        auto *item = token_list->takeItem(current_row);
+        token_list->insertItem(target_row, item);
+        token_list->setCurrentRow(target_row);
+    };
+
+    const auto read_token_settings = [token_list, this]() {
+        auto settings = app_settings_.output_naming;
+        settings.tokens.clear();
+        for (int row = 0; row < token_list->count(); ++row) {
+            const auto *item = token_list->item(row);
+            if (item == nullptr) {
+                continue;
+            }
+
+            const auto token_type = utsure::core::job::OutputNaming::token_type_from_string(
+                item->data(Qt::UserRole).toString().toStdString()
+            );
+            if (!token_type.has_value()) {
+                continue;
+            }
+
+            settings.tokens.push_back(utsure::core::job::OutputNamingToken{
+                .type = *token_type,
+                .enabled = item->checkState() == Qt::Checked,
+                .sequence_padding = 2
+            });
+        }
+        if (settings.tokens.empty()) {
+            settings = utsure::core::job::OutputNaming::default_template();
+        }
+        return settings;
+    };
+
+    connect(move_up_button, &QPushButton::clicked, &dialog, [move_current_row]() { move_current_row(-1); });
+    connect(move_down_button, &QPushButton::clicked, &dialog, [move_current_row]() { move_current_row(1); });
+    connect(reset_button, &QPushButton::clicked, &dialog, [populate_token_list]() {
+        populate_token_list(utsure::core::job::OutputNaming::default_template());
+    });
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    populate_token_list(app_settings_.output_naming);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    app_settings_.output_naming = read_token_settings();
+    QString save_error;
+    if (!app_settings_.save(app_settings_path_, &save_error)) {
+        persist_app_settings_warning("save naming settings", save_error);
+    }
+
+    for (int index = 0; index < static_cast<int>(jobs_.size()); ++index) {
+        apply_generated_output_path(index, false);
+    }
+    append_session_log("[info] Output naming settings updated.");
+    refresh_all_views();
 }
 
 void MainWindow::show_info_dialog() {
@@ -3726,6 +3887,7 @@ void MainWindow::sync_selected_job_from_editor() {
     job.audio_mode = static_cast<utsure::core::media::AudioOutputMode>(audio_format_combo_->currentData().toInt());
     job.audio_bitrate_kbps = audio_quality_combo_->currentData().toInt();
     job.audio_track_display = audio_track_combo_->currentText().trimmed();
+    persist_last_used_encode_choices_from_job(job);
 
     if (!job.output_path_manual_override) {
         apply_generated_output_path(selected_job_index_, false);
@@ -3764,11 +3926,14 @@ void MainWindow::load_selected_job_into_editor() {
         endcard_music_check_->setChecked(false);
         endcard_music_path_edit_->clear();
         thumbnail_enable_check_->setChecked(false);
-        video_codec_combo_->setCurrentIndex(0);
-        preset_combo_->setCurrentText("fast");
-        crf_spin_box_->setValue(22);
-        audio_format_combo_->setCurrentIndex(0);
-        audio_quality_combo_->setCurrentIndex(audio_quality_combo_->findData(192));
+        int codec_index = video_codec_combo_->findData(static_cast<int>(app_settings_.last_used.codec));
+        video_codec_combo_->setCurrentIndex(codec_index >= 0 ? codec_index : 0);
+        preset_combo_->setCurrentText(app_settings_.last_used.preset);
+        crf_spin_box_->setValue(app_settings_.last_used.crf);
+        int audio_mode_index = audio_format_combo_->findData(static_cast<int>(app_settings_.last_used.audio_mode));
+        audio_format_combo_->setCurrentIndex(audio_mode_index >= 0 ? audio_mode_index : 0);
+        int audio_quality_index = audio_quality_combo_->findData(app_settings_.last_used.audio_bitrate_kbps);
+        audio_quality_combo_->setCurrentIndex(audio_quality_index >= 0 ? audio_quality_index : audio_quality_combo_->findData(192));
         audio_track_combo_->clear();
         thumbnail_image_path_edit_->clear();
         thumbnail_title_edit_->clear();
@@ -3788,11 +3953,14 @@ void MainWindow::load_selected_job_into_editor() {
         endcard_music_check_->setChecked(job.endcard_music_enabled);
         endcard_music_path_edit_->setText(job.endcard_music_path);
         thumbnail_enable_check_->setChecked(job.thumbnail_enabled);
-        video_codec_combo_->setCurrentIndex(video_codec_combo_->findData(static_cast<int>(job.video_codec)));
+        int codec_index = video_codec_combo_->findData(static_cast<int>(job.video_codec));
+        video_codec_combo_->setCurrentIndex(codec_index >= 0 ? codec_index : 0);
         preset_combo_->setCurrentText(job.video_preset);
         crf_spin_box_->setValue(job.video_crf);
-        audio_format_combo_->setCurrentIndex(audio_format_combo_->findData(static_cast<int>(job.audio_mode)));
-        audio_quality_combo_->setCurrentIndex(audio_quality_combo_->findData(job.audio_bitrate_kbps));
+        int audio_mode_index = audio_format_combo_->findData(static_cast<int>(job.audio_mode));
+        audio_format_combo_->setCurrentIndex(audio_mode_index >= 0 ? audio_mode_index : 0);
+        int audio_quality_index = audio_quality_combo_->findData(job.audio_bitrate_kbps);
+        audio_quality_combo_->setCurrentIndex(audio_quality_index >= 0 ? audio_quality_index : audio_quality_combo_->findData(192));
         thumbnail_image_path_edit_->setText(job.thumbnail_image_path);
         thumbnail_title_edit_->setText(job.thumbnail_title);
         refresh_audio_track_combo();
@@ -3926,6 +4094,33 @@ void MainWindow::ensure_job_inspection(const int job_index) {
     apply_automatic_thumbnail_selection(job_index, false);
 }
 
+void MainWindow::apply_last_used_settings_to_job(UiEncodeJob &job) const {
+    job.video_codec = app_settings_.last_used.codec;
+    job.video_preset = app_settings_.last_used.preset;
+    job.video_crf = app_settings_.last_used.crf;
+    job.audio_mode = app_settings_.last_used.audio_mode;
+    job.audio_bitrate_kbps = app_settings_.last_used.audio_bitrate_kbps;
+}
+
+void MainWindow::persist_last_used_encode_choices_from_job(const UiEncodeJob &job) {
+    app_settings_.remember_encode_choices(AppSettings::LastUsedEncodeChoices{
+        .codec = job.video_codec,
+        .preset = job.video_preset,
+        .crf = job.video_crf,
+        .audio_mode = job.audio_mode,
+        .audio_bitrate_kbps = job.audio_bitrate_kbps
+    });
+
+    QString save_error;
+    if (!app_settings_.save(app_settings_path_, &save_error)) {
+        persist_app_settings_warning("save encode choices", save_error);
+    }
+}
+
+void MainWindow::persist_app_settings_warning(const QString &context, const QString &detail) {
+    append_session_log(QString("[warning] Could not %1: %2").arg(context, detail));
+}
+
 void MainWindow::reset_job_for_rerun(UiEncodeJob &job) {
     job.state = UiJobState::pending;
     job.checked = true;
@@ -3968,6 +4163,7 @@ void MainWindow::reserve_batch_output_paths_for_jobs(const std::vector<int> &job
     struct BatchOutputReservation final {
         int job_index{-1};
         utsure::core::job::OutputNamingRequest request{};
+        int stored_sequence_number{0};
     };
 
     std::vector<BatchOutputReservation> reservations{};
@@ -3983,32 +4179,58 @@ void MainWindow::reserve_batch_output_paths_for_jobs(const std::vector<int> &job
             continue;
         }
 
+        const auto naming_request = build_output_naming_request(job);
+        const std::string counter_key =
+            utsure::core::job::OutputNaming::sequence_counter_key(naming_request, app_settings_.output_naming);
         reservations.push_back(BatchOutputReservation{
             .job_index = job_index,
-            .request = build_output_naming_request(job)
+            .request = naming_request,
+            .stored_sequence_number = app_settings_.sequence_counter_value(counter_key)
         });
     }
 
-    std::vector<utsure::core::job::OutputNamingRequest> requests{};
+    std::vector<utsure::core::job::OutputNamingReservationRequest> requests{};
     requests.reserve(reservations.size());
     for (const auto &reservation : reservations) {
-        requests.push_back(reservation.request);
+        requests.push_back(utsure::core::job::OutputNamingReservationRequest{
+            .request = reservation.request,
+            .naming_template = app_settings_.output_naming,
+            .stored_sequence_number = reservation.stored_sequence_number
+        });
     }
 
     const auto reserved_results = utsure::core::job::OutputNaming::reserve_batch(requests);
     for (std::size_t index = 0; index < reservations.size() && index < reserved_results.size(); ++index) {
         auto &job = jobs_[static_cast<std::size_t>(reservations[index].job_index)];
-        job.output_path = path_to_qstring(reserved_results[index].output_path);
+        job.output_path = path_to_qstring(reserved_results[index].result.output_path);
+        app_settings_.set_sequence_counter_value(
+            reserved_results[index].sequence_counter_key,
+            reserved_results[index].persisted_sequence_number
+        );
 
         if (reservations[index].job_index == selected_job_index_ && output_path_edit_ != nullptr) {
             const QSignalBlocker blocker(output_path_edit_);
             output_path_edit_->setText(job.output_path);
         }
     }
+
+    if (!reserved_results.empty()) {
+        QString save_error;
+        if (!app_settings_.save(app_settings_path_, &save_error)) {
+            persist_app_settings_warning("save sequence counters", save_error);
+        }
+    }
 }
 
 QString MainWindow::generate_output_path_for_job(const UiEncodeJob &job) const {
-    const auto result = utsure::core::job::OutputNaming::suggest(build_output_naming_request(job));
+    const auto request = build_output_naming_request(job);
+    const std::string counter_key =
+        utsure::core::job::OutputNaming::sequence_counter_key(request, app_settings_.output_naming);
+    const auto result = utsure::core::job::OutputNaming::suggest(
+        request,
+        app_settings_.output_naming,
+        app_settings_.sequence_counter_value(counter_key)
+    );
 
     return path_to_qstring(result.output_path);
 }

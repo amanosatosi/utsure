@@ -7,6 +7,8 @@ set_source_files_properties(
 )
 
 qt_add_executable(utsure_encoder_app WIN32
+    app_settings.cpp
+    app_settings.hpp
     encode_job_runner_controller.cpp
     encode_job_runner_controller.hpp
     encode_job_runner_worker.cpp

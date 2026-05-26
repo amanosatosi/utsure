@@ -31,6 +31,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M23 Encode-throughput investigation and subtitle-free fast path completed.
 - [ ] M24 Subtitle-enabled encode-throughput investigation and optimization awaiting external validation.
 - [ ] M25 Thumbnail pre-roll implemented; awaiting CI validation.
+- [ ] M27 JSON settings and reliable output naming in progress.
 
 ## Active assumptions
 
@@ -996,6 +997,20 @@ Current slice status:
 Validation:
   * Added focused core tests for asset discovery, `utsure_data` ASS text parsing/replacement, preflight validation, and pre-roll output frame-count behavior.
   * Local compile/test execution remains reserved for GitHub Actions; local validation for this slice was limited to focused code inspection, stale-symbol searches, and `git diff --check`.
+
+### M27 JSON settings and reliable output naming
+
+Status: In progress
+
+Scope:
+  * Add a small versioned JSON settings file in the Qt app using the platform app-config location, with defaults for missing config and safe fallback for invalid JSON.
+  * Remember small encode choices such as codec, preset, and CRF; do not remember source, subtitle, intro/outro, temporary paths, toolchain paths, or last-used output directory.
+  * Replace hardcoded output base-name assembly with reusable token-based naming for selected text, source folder name, sequence number, codec, and resolution.
+  * Persist sequence counters and reserve numbers from the max of stored counters and matching files in the target output folder, so deleted old outputs do not reset numbering.
+  * Add a minimal settings dialog for naming token order, enable/disable controls, and reset-to-default behavior.
+
+Out of scope:
+  * Last-used output directory persistence is intentionally not implemented because the app already auto-derives the output directory; existing automatic directory behavior and manual output directory selection must remain unchanged.
 
 ## Immediate next milestone
 

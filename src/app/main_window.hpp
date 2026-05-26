@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app_settings.hpp"
 #include "utsure/core/job/batch_parallelism.hpp"
 #include "utsure/core/job/encode_job.hpp"
 #include "utsure/core/job/encode_job_preflight.hpp"
@@ -163,7 +164,7 @@ private:
     void add_source_jobs();
     void add_source_jobs_from_paths(const QStringList &paths);
     void remove_selected_job();
-    void show_settings_placeholder();
+    void show_settings_dialog();
     void show_info_dialog();
     void show_parallel_settings_dialog();
 
@@ -194,6 +195,9 @@ private:
     void sync_selected_job_from_editor();
     void load_selected_job_into_editor();
     void select_job(int index);
+    void apply_last_used_settings_to_job(UiEncodeJob &job) const;
+    void persist_last_used_encode_choices_from_job(const UiEncodeJob &job);
+    void persist_app_settings_warning(const QString &context, const QString &detail);
     void ensure_runner_slot_count(int slot_count);
     void ensure_job_inspection(int job_index);
     void reset_job_for_rerun(UiEncodeJob &job);
@@ -379,4 +383,6 @@ private:
     PreviewFrameRendererController *preview_renderer_controller_{nullptr};
     utsure::core::job::ParallelBatchSettings parallel_batch_settings_{};
     utsure::core::job::ParallelBatchSummary parallel_batch_summary_{};
+    AppSettings app_settings_{};
+    QString app_settings_path_{};
 };

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
 #include <iomanip>
 #include <map>
 #include <sstream>
@@ -13,6 +14,8 @@
 namespace utsure::core::job {
 
 namespace {
+
+constexpr std::string_view kSequenceMarker = "\x1FUTSURE_SEQUENCE\x1F";
 
 std::string lowercase_ascii(std::string value) {
     std::transform(
@@ -57,6 +60,27 @@ std::string trim_ascii_whitespace(std::string value) {
     return std::string(begin, end);
 }
 
+std::string collapse_ascii_spaces(std::string value) {
+    std::string collapsed{};
+    collapsed.reserve(value.size());
+
+    bool previous_was_space = false;
+    for (const unsigned char character : value) {
+        if (std::isspace(character)) {
+            if (!collapsed.empty() && !previous_was_space) {
+                collapsed.push_back(' ');
+                previous_was_space = true;
+            }
+            continue;
+        }
+
+        collapsed.push_back(static_cast<char>(character));
+        previous_was_space = false;
+    }
+
+    return trim_ascii_whitespace(std::move(collapsed));
+}
+
 std::string sanitize_filename_fragment(const std::string_view text) {
     std::string sanitized{};
     sanitized.reserve(text.size());
@@ -86,6 +110,30 @@ std::string sanitize_filename_fragment(const std::string_view text) {
     return trim_ascii_whitespace(std::move(sanitized));
 }
 
+std::string sanitize_separator(std::string separator) {
+    separator = collapse_ascii_spaces(std::move(separator));
+    if (separator.empty()) {
+        return " - ";
+    }
+
+    std::string sanitized{};
+    sanitized.reserve(separator.size() + 2U);
+    for (const unsigned char character : separator) {
+        if (is_invalid_filename_character(character) || std::iscntrl(character)) {
+            sanitized.push_back(' ');
+            continue;
+        }
+        sanitized.push_back(static_cast<char>(character));
+    }
+
+    sanitized = collapse_ascii_spaces(std::move(sanitized));
+    if (sanitized.empty()) {
+        return " - ";
+    }
+
+    return " " + sanitized + " ";
+}
+
 std::string normalize_extension(std::string extension) {
     extension = trim_ascii_whitespace(lowercase_ascii(std::move(extension)));
     if (extension.empty()) {
@@ -96,7 +144,15 @@ std::string normalize_extension(std::string extension) {
         extension.insert(extension.begin(), '.');
     }
 
-    return extension;
+    std::string normalized{"."};
+    for (std::size_t index = 1; index < extension.size(); ++index) {
+        const unsigned char character = static_cast<unsigned char>(extension[index]);
+        if (std::isalnum(character)) {
+            normalized.push_back(static_cast<char>(character));
+        }
+    }
+
+    return normalized.size() > 1U ? normalized : ".mp4";
 }
 
 std::string normalize_path_key(const std::filesystem::path &path) {
@@ -169,6 +225,15 @@ std::string resolve_audio_codec_tag(const OutputNamingRequest &request) {
     return encoded_codec.empty() ? "AAC" : uppercase_ascii(encoded_codec);
 }
 
+std::string resolve_resolution_tag(const OutputNamingRequest &request) {
+    if (!request.output_width.has_value() || !request.output_height.has_value() ||
+        *request.output_width <= 0 || *request.output_height <= 0) {
+        return {};
+    }
+
+    return std::to_string(*request.output_width) + "x" + std::to_string(*request.output_height);
+}
+
 bool is_positive_integer(const std::string_view text) {
     return !text.empty() &&
         std::all_of(text.begin(), text.end(), [](const unsigned char character) { return std::isdigit(character); });
@@ -191,7 +256,8 @@ std::set<int> collect_used_sequence_numbers(
     }
 
     std::error_code iteration_error{};
-    for (std::filesystem::directory_iterator iterator(directory, iteration_error), end; iterator != end; iterator.increment(iteration_error)) {
+    for (std::filesystem::directory_iterator iterator(directory, iteration_error), end; iterator != end;
+         iterator.increment(iteration_error)) {
         if (iteration_error) {
             break;
         }
@@ -225,8 +291,16 @@ std::set<int> collect_used_sequence_numbers(
     return sequence_numbers;
 }
 
-int next_available_sequence_number(const std::set<int> &used_sequence_numbers) {
-    int sequence_number = 1;
+int max_detected_sequence_number(const std::set<int> &used_sequence_numbers) {
+    if (used_sequence_numbers.empty()) {
+        return 0;
+    }
+
+    return *used_sequence_numbers.rbegin();
+}
+
+int next_sequence_at_or_after(const int first_candidate, const std::set<int> &used_sequence_numbers) {
+    int sequence_number = std::max(first_candidate, 1);
     while (used_sequence_numbers.contains(sequence_number)) {
         ++sequence_number;
     }
@@ -234,10 +308,47 @@ int next_available_sequence_number(const std::set<int> &used_sequence_numbers) {
     return sequence_number;
 }
 
-std::string format_sequence_number(const int sequence_number) {
+int normalize_sequence_padding(const int padding) noexcept {
+    return std::clamp(padding, 1, 8);
+}
+
+std::string format_sequence_number(const int sequence_number, const int padding) {
     std::ostringstream stream;
-    stream << std::setw(2) << std::setfill('0') << sequence_number;
+    stream << std::setw(normalize_sequence_padding(padding)) << std::setfill('0') << sequence_number;
     return stream.str();
+}
+
+std::string normalize_counter_key_fragment(std::string value) {
+    value = lowercase_ascii(sanitize_filename_fragment(value));
+    std::string normalized{};
+    normalized.reserve(value.size());
+
+    bool previous_was_dash = false;
+    for (const unsigned char character : value) {
+        if (std::isalnum(character)) {
+            normalized.push_back(static_cast<char>(character));
+            previous_was_dash = false;
+            continue;
+        }
+
+        if (!normalized.empty() && !previous_was_dash) {
+            normalized.push_back('-');
+            previous_was_dash = true;
+        }
+    }
+
+    while (!normalized.empty() && normalized.back() == '-') {
+        normalized.pop_back();
+    }
+
+    if (normalized.size() > 96U) {
+        normalized.resize(96U);
+        while (!normalized.empty() && normalized.back() == '-') {
+            normalized.pop_back();
+        }
+    }
+
+    return normalized;
 }
 
 struct OutputNamingFragments final {
@@ -245,43 +356,139 @@ struct OutputNamingFragments final {
     std::string custom_text{};
     std::string video_codec_tag{};
     std::string audio_codec_tag{};
+    std::string resolution_tag{};
     std::string extension{};
     std::string stem_prefix{};
     std::string stem_suffix{};
     std::string full_suffix{};
+    std::string sequence_counter_key{"default"};
+    int sequence_padding{2};
+    bool has_sequence_number{false};
 };
 
-struct ReservationGroupKey final {
-    std::string directory_key{};
-    std::string stem_prefix{};
-    std::string full_suffix{};
+std::string token_value(
+    const OutputNamingTokenType token_type,
+    const OutputNamingFragments &fragments,
+    const std::string_view rendered_sequence
+) {
+    switch (token_type) {
+    case OutputNamingTokenType::selected_text:
+        return fragments.custom_text;
+    case OutputNamingTokenType::source_folder_name:
+        return fragments.source_folder_name;
+    case OutputNamingTokenType::sequence_number:
+        return std::string(rendered_sequence);
+    case OutputNamingTokenType::codec:
+        return fragments.video_codec_tag;
+    case OutputNamingTokenType::resolution:
+        return fragments.resolution_tag;
+    default:
+        return {};
+    }
+}
 
-    [[nodiscard]] auto tie() const noexcept {
-        return std::tie(directory_key, stem_prefix, full_suffix);
+std::string render_template_stem(
+    const OutputNamingTemplate &naming_template,
+    const OutputNamingFragments &fragments,
+    const std::string_view rendered_sequence
+) {
+    if (!naming_template.enabled) {
+        const auto source_stem = sanitize_filename_fragment(fragments.source_folder_name);
+        return source_stem.empty() ? "Output" : source_stem;
     }
 
-    [[nodiscard]] bool operator<(const ReservationGroupKey &other) const noexcept {
-        return tie() < other.tie();
-    }
-};
+    const auto tokens = naming_template.tokens.empty()
+        ? OutputNaming::default_template().tokens
+        : naming_template.tokens;
+    const std::string separator = sanitize_separator(naming_template.separator);
+    std::string stem{};
+    stem.reserve(96U);
 
-OutputNamingFragments build_output_naming_fragments(const OutputNamingRequest &request) {
+    for (const auto &token : tokens) {
+        if (!token.enabled) {
+            continue;
+        }
+
+        const std::string value = token_value(token.type, fragments, rendered_sequence);
+        if (value.empty()) {
+            continue;
+        }
+
+        if (stem.empty()) {
+            stem = value;
+            continue;
+        }
+
+        stem += token.type == OutputNamingTokenType::sequence_number ? separator : " ";
+        stem += value;
+    }
+
+    stem = collapse_ascii_spaces(std::move(stem));
+    return stem.empty() ? "Output" : stem;
+}
+
+std::string build_sequence_counter_key(
+    const std::string_view custom_text,
+    const std::string_view source_folder_name
+) {
+    const std::string custom_key = normalize_counter_key_fragment(std::string(custom_text));
+    const std::string folder_key = normalize_counter_key_fragment(std::string(source_folder_name));
+
+    if (!custom_key.empty() && !folder_key.empty()) {
+        return custom_key + "|" + folder_key;
+    }
+
+    if (!folder_key.empty()) {
+        return folder_key;
+    }
+
+    if (!custom_key.empty()) {
+        return custom_key;
+    }
+
+    return "default";
+}
+
+OutputNamingFragments build_output_naming_fragments(
+    const OutputNamingRequest &request,
+    const OutputNamingTemplate &naming_template
+) {
     OutputNamingFragments fragments{
         .source_folder_name = resolve_source_folder_name(request.source_path),
         .custom_text = sanitize_filename_fragment(request.custom_text),
         .video_codec_tag = resolve_video_codec_tag(request.video_codec),
         .audio_codec_tag = resolve_audio_codec_tag(request),
+        .resolution_tag = resolve_resolution_tag(request),
         .extension = normalize_extension(request.extension_hint)
     };
+    fragments.sequence_counter_key =
+        build_sequence_counter_key(fragments.custom_text, fragments.source_folder_name);
 
-    if (!fragments.custom_text.empty()) {
-        fragments.stem_prefix += '[';
-        fragments.stem_prefix += fragments.custom_text;
-        fragments.stem_prefix += "] ";
+    const auto tokens = naming_template.tokens.empty()
+        ? OutputNaming::default_template().tokens
+        : naming_template.tokens;
+    for (const auto &token : tokens) {
+        if (token.enabled && token.type == OutputNamingTokenType::sequence_number) {
+            fragments.has_sequence_number = true;
+            fragments.sequence_padding = normalize_sequence_padding(token.sequence_padding);
+            break;
+        }
     }
-    fragments.stem_prefix += fragments.source_folder_name + " - ";
 
-    fragments.stem_suffix = " [" + fragments.video_codec_tag + "] [" + fragments.audio_codec_tag + "]";
+    if (fragments.has_sequence_number) {
+        const std::string marked_stem = render_template_stem(naming_template, fragments, kSequenceMarker);
+        const auto marker_position = marked_stem.find(kSequenceMarker);
+        if (marker_position != std::string::npos) {
+            fragments.stem_prefix = marked_stem.substr(0, marker_position);
+            fragments.stem_suffix = marked_stem.substr(marker_position + kSequenceMarker.size());
+        } else {
+            fragments.has_sequence_number = false;
+            fragments.stem_prefix = marked_stem;
+        }
+    } else {
+        fragments.stem_prefix = render_template_stem(naming_template, fragments, {});
+    }
+
     fragments.full_suffix = fragments.stem_suffix + fragments.extension;
     return fragments;
 }
@@ -291,9 +498,13 @@ OutputNamingResult build_output_naming_result(
     const OutputNamingFragments &fragments,
     const int sequence_number
 ) {
-    const std::string rendered_sequence_number = format_sequence_number(sequence_number);
-    const std::string file_name =
-        fragments.stem_prefix + rendered_sequence_number + fragments.stem_suffix + fragments.extension;
+    const std::string rendered_sequence_number = fragments.has_sequence_number
+        ? format_sequence_number(sequence_number, fragments.sequence_padding)
+        : std::string{};
+    const std::string file_stem = fragments.has_sequence_number
+        ? fragments.stem_prefix + rendered_sequence_number + fragments.stem_suffix
+        : fragments.stem_prefix;
+    const std::string file_name = file_stem + fragments.extension;
     const std::filesystem::path output_path = output_directory.empty()
         ? std::filesystem::path(file_name)
         : (output_directory / file_name).lexically_normal();
@@ -305,44 +516,222 @@ OutputNamingResult build_output_naming_result(
         .custom_text = fragments.custom_text,
         .video_codec_tag = fragments.video_codec_tag,
         .audio_codec_tag = fragments.audio_codec_tag,
+        .resolution_tag = fragments.resolution_tag,
         .extension = fragments.extension,
-        .sequence_number = sequence_number
+        .sequence_number = fragments.has_sequence_number ? sequence_number : 0,
+        .sequence_counter_key = fragments.sequence_counter_key
     };
 }
 
+OutputNamingReservationResult build_reservation_result(
+    const std::filesystem::path &output_directory,
+    const OutputNamingFragments &fragments,
+    const int sequence_number
+) {
+    const auto result = build_output_naming_result(output_directory, fragments, sequence_number);
+    return OutputNamingReservationResult{
+        .result = result,
+        .sequence_counter_key = result.sequence_counter_key,
+        .assigned_sequence_number = result.sequence_number,
+        .persisted_sequence_number = result.sequence_number
+    };
+}
+
+int choose_sequence_number(
+    const OutputNamingFragments &fragments,
+    const std::filesystem::path &output_directory,
+    const int stored_sequence_number,
+    const std::set<int> *additional_used_numbers = nullptr
+) {
+    if (!fragments.has_sequence_number) {
+        return 0;
+    }
+
+    std::set<int> used_sequence_numbers =
+        collect_used_sequence_numbers(output_directory, fragments.stem_prefix, fragments.full_suffix);
+    if (additional_used_numbers != nullptr) {
+        used_sequence_numbers.insert(additional_used_numbers->begin(), additional_used_numbers->end());
+    }
+
+    const int first_candidate = std::max(stored_sequence_number + 1, max_detected_sequence_number(used_sequence_numbers) + 1);
+    return next_sequence_at_or_after(first_candidate, used_sequence_numbers);
+}
+
+struct ReservationGroupKey final {
+    std::string directory_key{};
+    std::string stem_prefix{};
+    std::string full_suffix{};
+    std::string counter_key{};
+
+    [[nodiscard]] auto tie() const noexcept {
+        return std::tie(directory_key, stem_prefix, full_suffix, counter_key);
+    }
+
+    [[nodiscard]] bool operator<(const ReservationGroupKey &other) const noexcept {
+        return tie() < other.tie();
+    }
+};
+
+struct ReservationGroupState final {
+    std::set<int> used_sequence_numbers{};
+    int first_candidate{1};
+};
+
 }  // namespace
 
-OutputNamingResult OutputNaming::suggest(const OutputNamingRequest &request) {
-    const OutputNamingFragments fragments = build_output_naming_fragments(request);
+OutputNamingTemplate OutputNaming::default_template() {
+    return OutputNamingTemplate{
+        .enabled = true,
+        .separator = " - ",
+        .tokens = {
+            OutputNamingToken{.type = OutputNamingTokenType::selected_text, .enabled = true},
+            OutputNamingToken{.type = OutputNamingTokenType::source_folder_name, .enabled = true},
+            OutputNamingToken{.type = OutputNamingTokenType::sequence_number, .enabled = true, .sequence_padding = 2},
+            OutputNamingToken{.type = OutputNamingTokenType::codec, .enabled = true},
+            OutputNamingToken{.type = OutputNamingTokenType::resolution, .enabled = true}
+        }
+    };
+}
 
-    const auto used_sequence_numbers =
-        collect_used_sequence_numbers(request.output_directory, fragments.stem_prefix, fragments.full_suffix);
-    const int sequence_number = next_available_sequence_number(used_sequence_numbers);
+const char *OutputNaming::to_string(const OutputNamingTokenType type) noexcept {
+    switch (type) {
+    case OutputNamingTokenType::selected_text:
+        return "selectedText";
+    case OutputNamingTokenType::source_folder_name:
+        return "sourceFolderName";
+    case OutputNamingTokenType::sequence_number:
+        return "sequenceNumber";
+    case OutputNamingTokenType::codec:
+        return "codec";
+    case OutputNamingTokenType::resolution:
+        return "resolution";
+    default:
+        return "unknown";
+    }
+}
+
+std::optional<OutputNamingTokenType> OutputNaming::token_type_from_string(const std::string_view text) {
+    if (text == "selectedText") {
+        return OutputNamingTokenType::selected_text;
+    }
+    if (text == "sourceFolderName") {
+        return OutputNamingTokenType::source_folder_name;
+    }
+    if (text == "sequenceNumber") {
+        return OutputNamingTokenType::sequence_number;
+    }
+    if (text == "codec") {
+        return OutputNamingTokenType::codec;
+    }
+    if (text == "resolution") {
+        return OutputNamingTokenType::resolution;
+    }
+
+    return std::nullopt;
+}
+
+std::string OutputNaming::sequence_counter_key(
+    const OutputNamingRequest &request,
+    const OutputNamingTemplate &naming_template
+) {
+    return build_output_naming_fragments(request, naming_template).sequence_counter_key;
+}
+
+OutputNamingResult OutputNaming::suggest(const OutputNamingRequest &request) {
+    return suggest(request, default_template(), 0);
+}
+
+OutputNamingResult OutputNaming::suggest(
+    const OutputNamingRequest &request,
+    const OutputNamingTemplate &naming_template
+) {
+    return suggest(request, naming_template, 0);
+}
+
+OutputNamingResult OutputNaming::suggest(
+    const OutputNamingRequest &request,
+    const OutputNamingTemplate &naming_template,
+    const int stored_sequence_number
+) {
+    const OutputNamingFragments fragments = build_output_naming_fragments(request, naming_template);
+    const int sequence_number = choose_sequence_number(fragments, request.output_directory, stored_sequence_number);
     return build_output_naming_result(request.output_directory, fragments, sequence_number);
 }
 
+OutputNamingReservationResult OutputNaming::reserve_next(
+    const OutputNamingRequest &request,
+    const OutputNamingTemplate &naming_template,
+    const int stored_sequence_number
+) {
+    const OutputNamingFragments fragments = build_output_naming_fragments(request, naming_template);
+    const int sequence_number = choose_sequence_number(fragments, request.output_directory, stored_sequence_number);
+    return build_reservation_result(request.output_directory, fragments, sequence_number);
+}
+
 std::vector<OutputNamingResult> OutputNaming::reserve_batch(const std::vector<OutputNamingRequest> &requests) {
+    std::vector<OutputNamingReservationRequest> reservation_requests{};
+    reservation_requests.reserve(requests.size());
+    for (const auto &request : requests) {
+        reservation_requests.push_back(OutputNamingReservationRequest{
+            .request = request,
+            .naming_template = default_template(),
+            .stored_sequence_number = 0
+        });
+    }
+
+    const auto reservations = reserve_batch(reservation_requests);
     std::vector<OutputNamingResult> results{};
+    results.reserve(reservations.size());
+    for (const auto &reservation : reservations) {
+        results.push_back(reservation.result);
+    }
+    return results;
+}
+
+std::vector<OutputNamingReservationResult> OutputNaming::reserve_batch(
+    const std::vector<OutputNamingReservationRequest> &requests
+) {
+    std::vector<OutputNamingReservationResult> results{};
     results.reserve(requests.size());
 
-    std::map<ReservationGroupKey, std::set<int>> reserved_sequence_numbers{};
+    std::map<ReservationGroupKey, ReservationGroupState> reservation_groups{};
     for (const auto &request : requests) {
-        const OutputNamingFragments fragments = build_output_naming_fragments(request);
-        const ReservationGroupKey key{
-            .directory_key = normalize_path_key(request.output_directory),
-            .stem_prefix = fragments.stem_prefix,
-            .full_suffix = fragments.full_suffix
-        };
+        const OutputNamingFragments fragments =
+            build_output_naming_fragments(request.request, request.naming_template);
 
-        auto [iterator, inserted] = reserved_sequence_numbers.try_emplace(key);
-        if (inserted) {
-            iterator->second =
-                collect_used_sequence_numbers(request.output_directory, fragments.stem_prefix, fragments.full_suffix);
+        if (!fragments.has_sequence_number) {
+            results.push_back(build_reservation_result(request.request.output_directory, fragments, 0));
+            continue;
         }
 
-        const int sequence_number = next_available_sequence_number(iterator->second);
-        iterator->second.insert(sequence_number);
-        results.push_back(build_output_naming_result(request.output_directory, fragments, sequence_number));
+        const ReservationGroupKey key{
+            .directory_key = normalize_path_key(request.request.output_directory),
+            .stem_prefix = fragments.stem_prefix,
+            .full_suffix = fragments.full_suffix,
+            .counter_key = fragments.sequence_counter_key
+        };
+
+        auto [iterator, inserted] = reservation_groups.try_emplace(key);
+        if (inserted) {
+            iterator->second.used_sequence_numbers = collect_used_sequence_numbers(
+                request.request.output_directory,
+                fragments.stem_prefix,
+                fragments.full_suffix
+            );
+            iterator->second.first_candidate = std::max(
+                request.stored_sequence_number + 1,
+                max_detected_sequence_number(iterator->second.used_sequence_numbers) + 1
+            );
+        } else {
+            iterator->second.first_candidate =
+                std::max(iterator->second.first_candidate, request.stored_sequence_number + 1);
+        }
+
+        const int sequence_number =
+            next_sequence_at_or_after(iterator->second.first_candidate, iterator->second.used_sequence_numbers);
+        iterator->second.used_sequence_numbers.insert(sequence_number);
+        iterator->second.first_candidate = sequence_number + 1;
+        results.push_back(build_reservation_result(request.request.output_directory, fragments, sequence_number));
     }
 
     return results;
