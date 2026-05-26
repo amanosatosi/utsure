@@ -1181,7 +1181,7 @@ int run_trimmed_main_burn_in_assertion(
         summary.job.input.main_source_trim_out_us != std::optional<std::int64_t>(1250000) ||
         summary.timeline_summary.output_duration_microseconds != 1000000 ||
         summary.timeline_summary.output_video_frame_count != 24 ||
-        summary.subtitled_video_frame_count != 5 ||
+        summary.subtitled_video_frame_count != 11 ||
         summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
         return fail("Unexpected trimmed subtitle burn-in summary state.");
     }

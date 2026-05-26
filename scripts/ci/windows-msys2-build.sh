@@ -51,6 +51,7 @@ cmake -S . -B "${build_dir}" -G Ninja \
 cmake --build "${build_dir}" --target utsure_encoder_core --parallel
 if [[ "${build_app}" == "ON" ]]; then
   cmake --build "${build_dir}" --target utsure_encoder_app --parallel
+  cmake --build "${build_dir}" --target utsure_app_settings_tests --parallel
 fi
 cmake --build "${build_dir}" --target utsure_core_media_inspection_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_media_decode_tests --parallel

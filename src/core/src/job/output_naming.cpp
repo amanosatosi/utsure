@@ -4,7 +4,9 @@
 #include <cctype>
 #include <cstddef>
 #include <iomanip>
+#include <limits>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <set>
 #include <string_view>
@@ -239,6 +241,23 @@ bool is_positive_integer(const std::string_view text) {
         std::all_of(text.begin(), text.end(), [](const unsigned char character) { return std::isdigit(character); });
 }
 
+std::optional<int> parse_positive_sequence_number(const std::string_view text) {
+    if (!is_positive_integer(text)) {
+        return std::nullopt;
+    }
+
+    int value = 0;
+    for (const unsigned char character : text) {
+        const int digit = static_cast<int>(character - '0');
+        if (value > (std::numeric_limits<int>::max() - digit) / 10) {
+            return std::nullopt;
+        }
+        value = (value * 10) + digit;
+    }
+
+    return value > 0 ? std::optional<int>{value} : std::nullopt;
+}
+
 std::set<int> collect_used_sequence_numbers(
     const std::filesystem::path &directory,
     const std::string_view prefix,
@@ -282,9 +301,9 @@ std::set<int> collect_used_sequence_numbers(
             continue;
         }
 
-        const int sequence_number = std::stoi(std::string(number_text));
-        if (sequence_number > 0) {
-            sequence_numbers.insert(sequence_number);
+        const auto sequence_number = parse_positive_sequence_number(number_text);
+        if (sequence_number.has_value()) {
+            sequence_numbers.insert(*sequence_number);
         }
     }
 
@@ -574,7 +593,10 @@ struct ReservationGroupKey final {
 
 struct ReservationGroupState final {
     std::set<int> used_sequence_numbers{};
-    int first_candidate{1};
+};
+
+struct CounterReservationState final {
+    int next_candidate{1};
 };
 
 }  // namespace
@@ -695,6 +717,7 @@ std::vector<OutputNamingReservationResult> OutputNaming::reserve_batch(
     results.reserve(requests.size());
 
     std::map<ReservationGroupKey, ReservationGroupState> reservation_groups{};
+    std::map<std::string, CounterReservationState> counter_groups{};
     for (const auto &request : requests) {
         const OutputNamingFragments fragments =
             build_output_naming_fragments(request.request, request.naming_template);
@@ -718,19 +741,25 @@ std::vector<OutputNamingReservationResult> OutputNaming::reserve_batch(
                 fragments.stem_prefix,
                 fragments.full_suffix
             );
-            iterator->second.first_candidate = std::max(
-                request.stored_sequence_number + 1,
-                max_detected_sequence_number(iterator->second.used_sequence_numbers) + 1
-            );
-        } else {
-            iterator->second.first_candidate =
-                std::max(iterator->second.first_candidate, request.stored_sequence_number + 1);
         }
 
+        auto [counter_iterator, counter_inserted] =
+            counter_groups.try_emplace(fragments.sequence_counter_key);
+        if (counter_inserted) {
+            counter_iterator->second.next_candidate = request.stored_sequence_number + 1;
+        } else {
+            counter_iterator->second.next_candidate =
+                std::max(counter_iterator->second.next_candidate, request.stored_sequence_number + 1);
+        }
+
+        const int first_candidate = std::max(
+            counter_iterator->second.next_candidate,
+            max_detected_sequence_number(iterator->second.used_sequence_numbers) + 1
+        );
         const int sequence_number =
-            next_sequence_at_or_after(iterator->second.first_candidate, iterator->second.used_sequence_numbers);
+            next_sequence_at_or_after(first_candidate, iterator->second.used_sequence_numbers);
         iterator->second.used_sequence_numbers.insert(sequence_number);
-        iterator->second.first_candidate = sequence_number + 1;
+        counter_iterator->second.next_candidate = sequence_number + 1;
         results.push_back(build_reservation_result(request.request.output_directory, fragments, sequence_number));
     }
 

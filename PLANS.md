@@ -31,7 +31,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M23 Encode-throughput investigation and subtitle-free fast path completed.
 - [ ] M24 Subtitle-enabled encode-throughput investigation and optimization awaiting external validation.
 - [ ] M25 Thumbnail pre-roll implemented; awaiting CI validation.
-- [ ] M27 JSON settings and reliable output naming in progress.
+- [x] M27 JSON settings and reliable output naming implemented; awaiting GitHub Actions revalidation after CI follow-up fixes.
 
 ## Active assumptions
 
@@ -1000,7 +1000,7 @@ Validation:
 
 ### M27 JSON settings and reliable output naming
 
-Status: In progress
+Status: Implemented; awaiting GitHub Actions revalidation after CI follow-up fixes
 
 Scope:
   * Add a small versioned JSON settings file in the Qt app using the platform app-config location, with defaults for missing config and safe fallback for invalid JSON.
@@ -1012,6 +1012,15 @@ Scope:
 Out of scope:
   * Last-used output directory persistence is intentionally not implemented because the app already auto-derives the output directory; existing automatic directory behavior and manual output directory selection must remain unchanged.
 
+Completed:
+  * Added Qt-owned versioned JSON settings at the platform app-config location with default creation, invalid-JSON fallback, and invalid-file preservation.
+  * Persisted and restored last-used codec, preset, CRF, and small audio encode choices without storing source paths, subtitle paths, toolchain paths, temporary paths, or last-used output directory.
+  * Moved automatic base-name generation to reusable core token naming for selected text, source folder name, sequence number, codec, and resolution, with Windows filename sanitization.
+  * Added persisted sequence counters that reserve from the max of stored counters and matching existing files, so deleted old outputs do not reset numbering and batch reservations do not reuse a counter value.
+  * Added a small settings dialog for output naming token order, enable/disable, and reset-to-default behavior while keeping existing automatic output-directory behavior and manual output path selection.
+  * Added focused core/app tests for settings JSON behavior, token naming, filename sanitization, stored counters, existing-file collision avoidance, and absence of last-output-directory persistence.
+  * Fixed CI follow-ups by building the new app settings test target in the Windows workflow script, avoiding Windows-invalid test fixture directories, and aligning the trimmed subtitle burn-in assertion with output-PTS subtitle scheduling.
+
 ## Immediate next milestone
 
-Finish M25 thumbnail pre-roll implementation, then run M24/M25 validation in GitHub Actions or another approved runtime environment.
+Re-run GitHub Actions for the M27 CI follow-up fixes, then resume the pending M24/M25 external validation work.

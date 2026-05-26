@@ -322,11 +322,8 @@ int assert_token_order_and_disabled_tokens(const std::filesystem::path &root) {
 
 int assert_filename_sanitization(const std::filesystem::path &root) {
     const auto output_directory = root / "sanitize";
-    const auto source_directory = root / "Bad<Folder>:Name?";
-    const auto source_path = source_directory / "episode-01.mkv";
+    const auto source_path = root / "Bad<Folder>:Name?" / "episode-01.mkv";
     std::filesystem::create_directories(output_directory);
-    std::filesystem::create_directories(source_directory);
-    touch_file(source_path);
 
     const auto result = OutputNaming::suggest(OutputNamingRequest{
         .source_path = source_path,
@@ -466,6 +463,56 @@ int assert_batch_reservation_advances_persisted_counters(const std::filesystem::
     return 0;
 }
 
+int assert_batch_counter_key_prevents_reuse_across_filename_patterns(const std::filesystem::path &root) {
+    const auto output_directory = root / "mixed-patterns";
+    const auto source_directory = root / "Mixed";
+    std::filesystem::create_directories(output_directory);
+    std::filesystem::create_directories(source_directory);
+    touch_file(source_directory / "episode-01.mkv");
+    touch_file(source_directory / "episode-02.mkv");
+
+    const OutputNamingRequest first_request{
+        .source_path = source_directory / "episode-01.mkv",
+        .output_directory = output_directory,
+        .custom_text = "BDRip",
+        .extension_hint = ".mp4",
+        .video_codec = OutputVideoCodec::h265,
+        .output_width = 1920,
+        .output_height = 1080
+    };
+    auto second_request = first_request;
+    second_request.source_path = source_directory / "episode-02.mkv";
+    second_request.output_width = 1280;
+    second_request.output_height = 720;
+
+    const auto reservations = OutputNaming::reserve_batch(std::vector<OutputNamingReservationRequest>{
+        OutputNamingReservationRequest{
+            .request = first_request,
+            .naming_template = OutputNaming::default_template(),
+            .stored_sequence_number = 4
+        },
+        OutputNamingReservationRequest{
+            .request = second_request,
+            .naming_template = OutputNaming::default_template(),
+            .stored_sequence_number = 4
+        }
+    });
+
+    if (reservations.size() != 2U ||
+        reservations[0].assigned_sequence_number != 5 ||
+        reservations[1].assigned_sequence_number != 6 ||
+        reservations[1].persisted_sequence_number != 6 ||
+        reservations[0].sequence_counter_key != reservations[1].sequence_counter_key ||
+        reservations[0].result.file_name != "BDRip Mixed - 05 x265 1920x1080.mp4" ||
+        reservations[1].result.file_name != "BDRip Mixed - 06 x265 1280x720.mp4") {
+        return fail("A single persisted counter key reused a number across different filename patterns.");
+    }
+
+    std::cout << "mixed_pattern_batch.0=" << reservations[0].result.file_name << '\n';
+    std::cout << "mixed_pattern_batch.1=" << reservations[1].result.file_name << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -505,6 +552,10 @@ int main() {
     }
 
     if (assert_batch_reservation_advances_persisted_counters(root) != 0) {
+        return 1;
+    }
+
+    if (assert_batch_counter_key_prevents_reuse_across_filename_patterns(root) != 0) {
         return 1;
     }
 
