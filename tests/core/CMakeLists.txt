@@ -24,6 +24,9 @@ set(UTSURE_SUBTITLE_BS4_FORCED_RGBA_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtit
 set(UTSURE_SUBTITLE_EMPTY_BITMAP_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-empty-bitmap-sample.ass")
 set(UTSURE_SUBTITLE_IMG_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-img-sample.ass")
 set(UTSURE_SUBTITLE_STRESS_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-stress-sample.ass")
+set(UTSURE_SUBTITLE_OUTPUT_TIMELINE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-output-timeline-sample.ass")
+set(UTSURE_SUBTITLE_TRANSFORM_SCHEDULE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-transform-schedule-sample.ass")
+set(UTSURE_SUBTITLE_MOVE_SCHEDULE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-move-schedule-sample.ass")
 set(UTSURE_SUBTITLE_STRESS_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-main.mp4")
 set(UTSURE_THUMBNAIL_PREROLL_IMAGE_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail.png")
 set(UTSURE_THUMBNAIL_PREROLL_SUBTITLE_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail-source.ass")
@@ -121,6 +124,21 @@ configure_file(
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-stress-sample.ass"
     "${UTSURE_SUBTITLE_STRESS_SAMPLE_FILE}"
+    COPYONLY
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-output-timeline-sample.ass"
+    "${UTSURE_SUBTITLE_OUTPUT_TIMELINE_SAMPLE_FILE}"
+    COPYONLY
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-transform-schedule-sample.ass"
+    "${UTSURE_SUBTITLE_TRANSFORM_SCHEDULE_SAMPLE_FILE}"
+    COPYONLY
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-move-schedule-sample.ass"
+    "${UTSURE_SUBTITLE_MOVE_SCHEDULE_SAMPLE_FILE}"
     COPYONLY
 )
 
@@ -1264,6 +1282,30 @@ add_test(
 utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.img_best_effort.h264)
 
 add_test(
+    NAME utsure.core.subtitles.burn_in.schedule.transform.h264
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_DIAGNOSTICS=frame
+        UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
+        utsure_core_subtitle_burn_in_tests --schedule-h264
+            "${UTSURE_SAMPLE_MEDIA_FILE}"
+            "${UTSURE_SUBTITLE_TRANSFORM_SCHEDULE_SAMPLE_FILE}"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-schedule-transform-burn-h264.mp4"
+)
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.schedule.transform.h264)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.schedule.move.h264
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_DIAGNOSTICS=frame
+        UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
+        utsure_core_subtitle_burn_in_tests --schedule-h264
+            "${UTSURE_SAMPLE_MEDIA_FILE}"
+            "${UTSURE_SUBTITLE_MOVE_SCHEDULE_SAMPLE_FILE}"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-schedule-move-burn-h264.mp4"
+)
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.schedule.move.h264)
+
+add_test(
     NAME utsure.core.subtitles.burn_in.h265
     COMMAND utsure_core_subtitle_burn_in_tests --h265
         "${UTSURE_SAMPLE_MEDIA_FILE}"
@@ -1285,13 +1327,16 @@ utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.trimmed.
 
 add_test(
     NAME utsure.core.subtitles.burn_in.timeline.h264
-    COMMAND utsure_core_subtitle_burn_in_tests --timeline-h264
-        "${UTSURE_TIMELINE_INTRO_FILE}"
-        "${UTSURE_SAMPLE_MEDIA_FILE}"
-        "${UTSURE_TIMELINE_OUTRO_FILE}"
-        "${UTSURE_SUBTITLE_SAMPLE_FILE}"
-        "${UTSURE_TEST_MEDIA_DIR}/timeline-subtitle-plain-h264.mp4"
-        "${UTSURE_TEST_MEDIA_DIR}/timeline-subtitle-burn-h264.mp4"
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_DIAGNOSTICS=frame
+        UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
+        utsure_core_subtitle_burn_in_tests --timeline-h264
+            "${UTSURE_TIMELINE_INTRO_FILE}"
+            "${UTSURE_SAMPLE_MEDIA_FILE}"
+            "${UTSURE_TIMELINE_OUTRO_FILE}"
+            "${UTSURE_SUBTITLE_OUTPUT_TIMELINE_SAMPLE_FILE}"
+            "${UTSURE_TEST_MEDIA_DIR}/timeline-subtitle-plain-h264.mp4"
+            "${UTSURE_TEST_MEDIA_DIR}/timeline-subtitle-burn-h264.mp4"
 )
 utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.timeline.h264)
 

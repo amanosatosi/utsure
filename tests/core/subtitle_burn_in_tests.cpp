@@ -83,6 +83,78 @@ bool string_messages_contain_text(const std::vector<std::string> &messages, std:
     return false;
 }
 
+struct SubtitleScheduleDiagnostic final {
+    std::int64_t output_pts{0};
+    std::int64_t subtitle_timestamp_microseconds{0};
+};
+
+std::optional<std::int64_t> parse_diagnostic_int64(
+    const std::string &message,
+    const std::string_view key
+) {
+    const auto key_position = message.find(key);
+    if (key_position == std::string::npos) {
+        return std::nullopt;
+    }
+
+    std::size_t value_begin = key_position + key.size();
+    if (value_begin >= message.size()) {
+        return std::nullopt;
+    }
+
+    std::size_t value_end = value_begin;
+    if (message[value_end] == '-') {
+        ++value_end;
+    }
+
+    const auto digit_begin = value_end;
+    while (value_end < message.size() &&
+           std::isdigit(static_cast<unsigned char>(message[value_end])) != 0) {
+        ++value_end;
+    }
+
+    if (digit_begin == value_end) {
+        return std::nullopt;
+    }
+
+    try {
+        return std::stoll(message.substr(value_begin, value_end - value_begin));
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+std::vector<SubtitleScheduleDiagnostic> collect_subtitle_schedule_diagnostics(
+    const CollectingObserver &observer
+) {
+    std::vector<SubtitleScheduleDiagnostic> diagnostics{};
+    for (const auto &message : observer.log_messages) {
+        if (!contains_text(message.message, "Subtitle composition diagnostics:")) {
+            continue;
+        }
+
+        const auto output_pts = parse_diagnostic_int64(message.message, "output_pts=");
+        const auto subtitle_timestamp_us = parse_diagnostic_int64(message.message, "subtitle_timestamp_us=");
+        if (!output_pts.has_value() || !subtitle_timestamp_us.has_value()) {
+            continue;
+        }
+
+        diagnostics.push_back(SubtitleScheduleDiagnostic{
+            .output_pts = *output_pts,
+            .subtitle_timestamp_microseconds = *subtitle_timestamp_us
+        });
+    }
+
+    std::stable_sort(
+        diagnostics.begin(),
+        diagnostics.end(),
+        [](const SubtitleScheduleDiagnostic &left, const SubtitleScheduleDiagnostic &right) {
+            return left.output_pts < right.output_pts;
+        }
+    );
+    return diagnostics;
+}
+
 std::string lowercase_ascii(std::string value) {
     std::transform(
         value.begin(),
@@ -379,6 +451,45 @@ int assert_subtitle_runtime_visibility(
         report.find("streaming.subtitle.bitmap_mode=" + std::string(expected_bitmap_mode)) == std::string::npos ||
         report.find("streaming.subtitle.composition_mode=" + std::string(expected_composition_mode)) == std::string::npos) {
         return fail("The subtitle runtime logs/report did not expose the active isolation mode.");
+    }
+
+    return 0;
+}
+
+int assert_subtitle_render_schedule_diagnostics(
+    const CollectingObserver &observer,
+    const EncodeJobSummary &summary,
+    const DecodedMediaSource &decoded_output,
+    const std::size_t output_frame_offset,
+    const std::size_t expected_frame_count,
+    const std::string_view context
+) {
+    if (summary.streaming_runtime.subtitle_diagnostics_mode == "off") {
+        return fail(std::string(context) + " did not run with subtitle frame diagnostics enabled.");
+    }
+
+    const auto diagnostics = collect_subtitle_schedule_diagnostics(observer);
+    if (diagnostics.size() != expected_frame_count) {
+        return fail(
+            std::string(context) +
+            " did not log exactly one subtitle render diagnostic per subtitle-enabled output frame."
+        );
+    }
+
+    if (output_frame_offset + expected_frame_count > decoded_output.video_frames.size()) {
+        return fail(std::string(context) + " expected more decoded output frames than the output contains.");
+    }
+
+    for (std::size_t index = 0; index < expected_frame_count; ++index) {
+        const auto expected_timestamp =
+            decoded_output.video_frames[output_frame_offset + index].timestamp.start_microseconds;
+        const auto actual_timestamp = diagnostics[index].subtitle_timestamp_microseconds;
+        if (std::llabs(actual_timestamp - expected_timestamp) > 1) {
+            return fail(
+                std::string(context) +
+                " used a subtitle render timestamp that did not match the encoded output frame timestamp."
+            );
+        }
     }
 
     return 0;
@@ -927,6 +1038,88 @@ int run_best_effort_img_burn_in_assertion(
     return 0;
 }
 
+int run_render_schedule_assertion(
+    const std::filesystem::path &sample_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &burned_output_path
+) {
+    CollectingObserver observer{};
+    const EncodeJob burned_job{
+        .input = {
+            .main_source_path = sample_path
+        },
+        .subtitles = utsure::core::job::EncodeJobSubtitleSettings{
+            .subtitle_path = subtitle_path,
+            .format_hint = "ass"
+        },
+        .output = {
+            .output_path = burned_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
+    const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!burned_job_result.succeeded()) {
+        return fail("Subtitle render scheduling encode failed unexpectedly.");
+    }
+
+    const auto &summary = *burned_job_result.encode_job_summary;
+    const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
+    if (!burned_output_decode.succeeded()) {
+        return fail("Subtitle render scheduling output decode failed unexpectedly.");
+    }
+
+    const auto expected_frame_count = static_cast<std::size_t>(summary.timeline_summary.output_video_frame_count);
+    if (assert_decoded_output(*burned_output_decode.decoded_media_source, expected_frame_count, true) != 0) {
+        return 1;
+    }
+
+    if (summary.subtitled_video_frame_count != summary.timeline_summary.output_video_frame_count ||
+        summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
+        return fail("Subtitle render scheduling did not apply subtitles to every output frame.");
+    }
+
+    const auto observer_result = assert_observer_flow(observer, 1);
+    if (observer_result != 0) {
+        return observer_result;
+    }
+
+    const auto runtime_result = assert_subtitle_runtime_visibility(
+        observer,
+        summary,
+        current_subtitle_bitmap_mode(),
+        current_subtitle_composition_mode()
+    );
+    if (runtime_result != 0) {
+        return runtime_result;
+    }
+
+    const auto schedule_result = assert_subtitle_render_schedule_diagnostics(
+        observer,
+        summary,
+        *burned_output_decode.decoded_media_source,
+        0U,
+        expected_frame_count,
+        "Subtitle render scheduling"
+    );
+    if (schedule_result != 0) {
+        return schedule_result;
+    }
+
+    std::cout << "schedule.subtitle_path=" << format_path_leaf(subtitle_path) << '\n';
+    std::cout << "schedule.output_frames=" << summary.timeline_summary.output_video_frame_count << '\n';
+    std::cout << "schedule.render_calls=" << expected_frame_count << '\n';
+    std::cout << "schedule.timestamps=output_pts\n";
+    return 0;
+}
+
 int run_trimmed_main_burn_in_assertion(
     const std::filesystem::path &sample_path,
     const std::filesystem::path &subtitle_path,
@@ -1135,6 +1328,24 @@ int run_timeline_burn_in_assertion(
         return 1;
     }
 
+    if (summary.streaming_runtime.subtitle_diagnostics_mode != "off") {
+        const auto main_frame_offset =
+            static_cast<std::size_t>(summary.timeline_summary.segments[0].video_frame_count);
+        const auto main_frame_count =
+            static_cast<std::size_t>(summary.timeline_summary.segments[1].video_frame_count);
+        const auto schedule_result = assert_subtitle_render_schedule_diagnostics(
+            observer,
+            summary,
+            *burned_output_decode.decoded_media_source,
+            main_frame_offset,
+            main_frame_count,
+            "Timeline main-segment subtitle render scheduling"
+        );
+        if (schedule_result != 0) {
+            return schedule_result;
+        }
+    }
+
     // Encoder prediction can let changed main-segment frames influence later compressed frames.
     // Keep this assertion anchored to the first intro frame, which should remain outside subtitle scope.
     if (frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U)) {
@@ -1168,6 +1379,9 @@ int run_timeline_burn_in_assertion(
     std::cout << "timeline.main.changed=yes\n";
     std::cout << "timeline.outro.scope=not_asserted_after_encode\n";
     std::cout << "timeline.subtitled_frames=" << summary.subtitled_video_frame_count << '\n';
+    if (summary.streaming_runtime.subtitle_diagnostics_mode != "off") {
+        std::cout << "timeline.render_schedule=output_pts\n";
+    }
     return 0;
 }
 
@@ -1397,6 +1611,7 @@ int main(int argc, char *argv[]) {
             "--h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--empty-bitmap-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--best-effort-img-h264 <input> <subtitle> <plain-output> <burned-output>|"
+            "--schedule-h264 <input> <subtitle> <burned-output>|"
             "--h265 <input> <subtitle> <plain-output> <burned-output>|"
             "--trimmed-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--stress-h264 <input> <subtitle> <plain-output> <burned-output>|"
@@ -1466,6 +1681,14 @@ int main(int argc, char *argv[]) {
             std::filesystem::path(argv[3]),
             std::filesystem::path(argv[4]),
             std::filesystem::path(argv[5])
+        );
+    }
+
+    if (mode == "--schedule-h264" && argc == 5) {
+        return run_render_schedule_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4])
         );
     }
 

@@ -4090,10 +4090,10 @@ SegmentProcessResult process_segment(
         if (video_frame_processor) {
             std::optional<std::int64_t> subtitle_timestamp_microseconds{};
             if (segment_uses_subtitle_path) {
+                // ASS effects are time-dependent even when the active event set is unchanged.
+                // Always advance the renderer with the encoded frame's output timestamp.
                 subtitle_timestamp_microseconds =
-                    subtitle_settings->timing_mode == timeline::SubtitleTimingMode::full_output_timeline
-                        ? rescale_to_microseconds(timing.output_pts, timeline_plan.output_video_time_base)
-                        : video_frame.metadata.timestamp.start_microseconds;
+                    rescale_to_microseconds(timing.output_pts, timeline_plan.output_video_time_base);
             }
 
             while (video_frame_processor->outstanding_count() >= video_frame_processor->max_in_flight()) {
