@@ -67,7 +67,45 @@ struct PathAvailability final {
     QString diagnostic{};
 };
 
+#ifdef _WIN32
+bool is_windows_invalid_path_component_character(const wchar_t character) noexcept {
+    return character < 32 || character == L'<' || character == L'>' || character == L':' ||
+        character == L'"' || character == L'/' || character == L'\\' || character == L'|' ||
+        character == L'?' || character == L'*';
+}
+
+bool path_has_windows_invalid_component(const std::filesystem::path &path) {
+    const auto root_name = path.root_name();
+    const auto root_directory = path.root_directory();
+    for (const auto &component : path) {
+        if ((!root_name.empty() && component == root_name) ||
+            (!root_directory.empty() && component == root_directory)) {
+            continue;
+        }
+
+        const auto native_component = component.native();
+        for (const wchar_t character : native_component) {
+            if (is_windows_invalid_path_component_character(character)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+#endif
+
 PathAvailability check_path_availability(const std::filesystem::path &path) {
+#ifdef _WIN32
+    if (path_has_windows_invalid_component(path)) {
+        return PathAvailability{
+            .occupied = true,
+            .diagnostic = QString("Could not verify duplicate output path '%1': path contains Windows-invalid characters.")
+                .arg(path_to_qstring(path))
+        };
+    }
+#endif
+
     std::error_code error{};
     const bool exists = std::filesystem::exists(path, error);
     if (error) {
