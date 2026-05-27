@@ -613,6 +613,7 @@ int assert_non_sequence_template_uses_copy_suffix_for_excluded_path(const std::f
         .extension_hint = ".mp4",
         .video_codec = OutputVideoCodec::h265
     };
+    touch_file(output_directory / "BDRip NoSequence Copy.mp4");
 
     const auto reservations = OutputNaming::reserve_batch(std::vector<OutputNamingReservationRequest>{
         OutputNamingReservationRequest{
@@ -628,8 +629,8 @@ int assert_non_sequence_template_uses_copy_suffix_for_excluded_path(const std::f
     if (reservations.size() != 1U ||
         reservations[0].assigned_sequence_number != 0 ||
         reservations[0].persisted_sequence_number != 0 ||
-        reservations[0].result.file_name != "BDRip NoSequence Copy.mp4") {
-        return fail("A no-sequence duplicate did not use a copy suffix to avoid path reuse.");
+        reservations[0].result.file_name != "BDRip NoSequence Copy 2.mp4") {
+        return fail("A no-sequence duplicate did not use a copy suffix to avoid path reuse and existing files.");
     }
 
     std::cout << "duplicate_no_sequence.name=" << reservations[0].result.file_name << '\n';

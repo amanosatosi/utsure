@@ -2627,10 +2627,33 @@ void MainWindow::duplicate_job(const int source_index) {
     });
 
     UiEncodeJob duplicate_entry = original_job;
-    duplicate_entry.source_name = duplicate_result.duplicate.source_name;
-    duplicate_entry.output_path = duplicate_result.duplicate.output_path;
-    duplicate_entry.output_path_manual_override = duplicate_result.duplicate.output_path_manual_override;
     reset_job_for_rerun(duplicate_entry);
+    const DuplicateEncodeEntryState &duplicate_state = duplicate_result.duplicate;
+    duplicate_entry.source_path = duplicate_state.source_path;
+    duplicate_entry.source_name = duplicate_state.source_name;
+    duplicate_entry.output_name_custom_text = duplicate_state.output_name_custom_text;
+    duplicate_entry.output_path = duplicate_state.output_path;
+    duplicate_entry.output_path_manual_override = duplicate_state.output_path_manual_override;
+    duplicate_entry.same_as_input = duplicate_state.same_as_input;
+    duplicate_entry.subtitle_enabled = duplicate_state.subtitle_enabled;
+    duplicate_entry.subtitle_path = duplicate_state.subtitle_path;
+    duplicate_entry.subtitle_manual_override = duplicate_state.subtitle_manual_override;
+    duplicate_entry.video_codec = duplicate_state.video_codec;
+    duplicate_entry.video_preset = duplicate_state.video_preset;
+    duplicate_entry.video_crf = duplicate_state.video_crf;
+    duplicate_entry.audio_mode = duplicate_state.audio_mode;
+    duplicate_entry.audio_bitrate_kbps = duplicate_state.audio_bitrate_kbps;
+
+    if (!duplicate_result.diagnostic.trimmed().isEmpty()) {
+        append_session_log(QString("[warning] %1").arg(duplicate_result.diagnostic.trimmed()));
+    }
+    if (duplicate_result.output_path_generation_failed) {
+        append_session_log(
+            QString("[error] Could not duplicate '%1' because no safe output path could be reserved.")
+                .arg(queue_source_display_name(original_job))
+        );
+        return;
+    }
 
     if (duplicate_result.sequence_counter_reserved) {
         app_settings_.set_sequence_counter_value(

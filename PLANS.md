@@ -1043,6 +1043,7 @@ Completed:
   * Completed a fix-only review pass after commit `a88bc66189f06b1eda01c47caf6481209ae0c931`: duplicate output reservation now reserves only the duplicate path, treats the original path as an exclusion, preserves manual output overrides with a safe copy filename, and persists counters only for newly reserved duplicate outputs.
   * Tightened manual subtitle safety with an explicit guard so Toshi mode remains auto-only, removed duplicated selectedText candidate generation, and changed selectedText source-directory diagnostics to use selected-text wording.
   * Added focused tests for selectedText subtitle matching, Toshi mode settings persistence, output naming exclusions, and duplicate copy/manual-output/manual-subtitle/counter behavior. Local validation remains limited to static checks; GitHub Actions is the compile/test source.
+  * Completed a fix-only review pass after commit `7292a9acd2c4f3c87be73a0268652be91c83d6b9`: duplicate runtime reset now happens before applying the helper's full copied state, manual duplicate output generation no longer falls back to the original path, unverifiable duplicate paths are treated as unsafe, and no-sequence templates document and test Copy/Copy N collision avoidance without promising persisted no-reuse.
 
 ## Immediate next milestone
 

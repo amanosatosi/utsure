@@ -37,6 +37,8 @@ struct DuplicateEncodeEntryResult final {
     std::string sequence_counter_key{};
     int persisted_sequence_number{0};
     bool sequence_counter_reserved{false};
+    bool output_path_generation_failed{false};
+    QString diagnostic{};
 };
 
 [[nodiscard]] DuplicateEncodeEntryResult duplicate_encode_entry(const DuplicateEncodeEntryRequest &request);

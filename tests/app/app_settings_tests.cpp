@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <string>
 #include <string_view>
 #include <system_error>
 
@@ -273,8 +274,12 @@ int assert_duplicate_copies_job_choices_and_stays_independent(const std::filesys
         .stored_sequence_number = 1
     });
 
-    if (result.duplicate.source_path != original.source_path ||
+    if (result.output_path_generation_failed ||
+        result.duplicate.source_path != original.source_path ||
         result.duplicate.source_name != "episode01.mkv Copy" ||
+        result.duplicate.output_name_custom_text != original.output_name_custom_text ||
+        result.duplicate.same_as_input != original.same_as_input ||
+        result.duplicate.subtitle_enabled != original.subtitle_enabled ||
         result.duplicate.subtitle_path != original.subtitle_path ||
         !result.duplicate.subtitle_manual_override ||
         result.duplicate.video_codec != original.video_codec ||
@@ -317,7 +322,8 @@ int assert_duplicate_auto_output_uses_exclusion_without_extra_counter_skip(const
         .stored_sequence_number = 4
     });
 
-    if (result.duplicate.output_path == original_output ||
+    if (result.output_path_generation_failed ||
+        result.duplicate.output_path == original_output ||
         !result.sequence_counter_reserved ||
         result.persisted_sequence_number != 6 ||
         !result.duplicate.output_path.endsWith("OP DuplicateCounter - 06 x265 1920x1080.mp4")) {
@@ -350,7 +356,8 @@ int assert_duplicate_manual_output_override_is_preserved_safely(const std::files
         .stored_sequence_number = 20
     });
 
-    if (!result.duplicate.output_path_manual_override ||
+    if (result.output_path_generation_failed ||
+        !result.duplicate.output_path_manual_override ||
         result.duplicate.output_path == path_to_qstring(original_output_path) ||
         !result.duplicate.output_path.endsWith("manual-output Copy.mkv") ||
         result.sequence_counter_reserved ||
@@ -360,6 +367,70 @@ int assert_duplicate_manual_output_override_is_preserved_safely(const std::files
     }
 
     std::cout << "duplicate.manual_output=" << result.duplicate.output_path.toStdString() << '\n';
+    return 0;
+}
+
+int assert_duplicate_manual_output_never_falls_back_to_original(const std::filesystem::path &root) {
+    const auto source_path = root / "DuplicateManualExhausted" / "episode01.mkv";
+    const auto output_directory = root / "DuplicateManualExhaustedOut";
+    const auto original_output_path = output_directory / "manual-output.mkv";
+    touch_file(source_path);
+    touch_file(original_output_path);
+    for (int copy_index = 1; copy_index < 1000; ++copy_index) {
+        const std::string suffix = copy_index == 1
+            ? " Copy"
+            : " Copy " + std::to_string(copy_index);
+        touch_file(output_directory / ("manual-output" + suffix + ".mkv"));
+    }
+
+    const auto result = duplicate_encode_entry(DuplicateEncodeEntryRequest{
+        .original = DuplicateEncodeEntryState{
+            .source_path = path_to_qstring(source_path),
+            .source_name = "episode01.mkv",
+            .output_path = path_to_qstring(original_output_path),
+            .output_path_manual_override = true
+        },
+        .automatic_output_request = make_duplicate_naming_request(source_path, output_directory, "Ignored"),
+        .naming_template = utsure::core::job::OutputNaming::default_template(),
+        .stored_sequence_number = 20
+    });
+
+    if (result.output_path_generation_failed ||
+        result.duplicate.output_path.isEmpty() ||
+        result.duplicate.output_path == path_to_qstring(original_output_path)) {
+        return fail("Manual duplicate fallback returned the original path or failed instead of choosing a unique fallback.");
+    }
+
+    std::cout << "duplicate.manual_output_exhausted=" << result.duplicate.output_path.toStdString() << '\n';
+    return 0;
+}
+
+int assert_duplicate_manual_output_uncertain_filesystem_is_not_used(const std::filesystem::path &root) {
+#ifdef _WIN32
+    const auto source_path = root / "DuplicateManualInvalid" / "episode01.mkv";
+    touch_file(source_path);
+    const auto invalid_original_output = root / "Bad<Folder>:Name?" / "manual-output.mkv";
+
+    const auto result = duplicate_encode_entry(DuplicateEncodeEntryRequest{
+        .original = DuplicateEncodeEntryState{
+            .source_path = path_to_qstring(source_path),
+            .source_name = "episode01.mkv",
+            .output_path = path_to_qstring(invalid_original_output),
+            .output_path_manual_override = true
+        },
+        .automatic_output_request = make_duplicate_naming_request(source_path, root / "Unused", "Ignored"),
+        .naming_template = utsure::core::job::OutputNaming::default_template(),
+        .stored_sequence_number = 20
+    });
+
+    if (!result.output_path_generation_failed || result.diagnostic.isEmpty()) {
+        return fail("Manual duplicate output treated an unverifiable filesystem path as available.");
+    }
+#else
+    (void)root;
+#endif
+
+    std::cout << "duplicate.manual_output_uncertain=conservative\n";
     return 0;
 }
 
@@ -400,6 +471,14 @@ int main(int argc, char *argv[]) {
     }
 
     if (assert_duplicate_manual_output_override_is_preserved_safely(root) != 0) {
+        return 1;
+    }
+
+    if (assert_duplicate_manual_output_never_falls_back_to_original(root) != 0) {
+        return 1;
+    }
+
+    if (assert_duplicate_manual_output_uncertain_filesystem_is_not_used(root) != 0) {
         return 1;
     }
 

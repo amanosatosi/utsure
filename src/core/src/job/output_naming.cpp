@@ -1,6 +1,7 @@
 #include "utsure/core/job/output_naming.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cstddef>
 #include <iomanip>
@@ -582,7 +583,8 @@ OutputNamingResult build_output_naming_result(
 
 bool output_path_exists(const std::filesystem::path &path) {
     std::error_code error{};
-    return std::filesystem::exists(path, error) && !error;
+    const bool exists = std::filesystem::exists(path, error);
+    return error || exists;
 }
 
 bool output_path_is_excluded(
@@ -614,10 +616,32 @@ OutputNamingResult make_unique_non_sequence_result(
         return base_result;
     }
 
+    // No-sequence templates have no persisted no-reuse counter; avoid only
+    // the paths visible in the filesystem and the caller-provided exclusions.
     for (int copy_index = 1; copy_index < 1000; ++copy_index) {
         const std::string suffix = copy_index == 1
             ? " Copy"
             : " Copy " + std::to_string(copy_index);
+        const std::string file_stem = fragments.stem_prefix + suffix;
+        const std::string file_name = file_stem + fragments.extension;
+        const std::filesystem::path output_path = output_directory.empty()
+            ? std::filesystem::path(file_name)
+            : (output_directory / file_name).lexically_normal();
+        if (output_path_exists(output_path) || output_path_is_excluded(output_path, excluded_output_paths)) {
+            continue;
+        }
+
+        auto result = base_result;
+        result.output_path = output_path;
+        result.file_name = file_name;
+        return result;
+    }
+
+    const auto fallback_seed = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    for (int attempt = 0; attempt < 1000; ++attempt) {
+        const std::string suffix = attempt == 0
+            ? " Copy " + fallback_seed
+            : " Copy " + fallback_seed + "-" + std::to_string(attempt);
         const std::string file_stem = fragments.stem_prefix + suffix;
         const std::string file_name = file_stem + fragments.extension;
         const std::filesystem::path output_path = output_directory.empty()
