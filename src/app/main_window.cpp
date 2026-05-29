@@ -6,6 +6,7 @@
 #include "preview_frame_renderer_controller.hpp"
 #include "preview_surface_widget.hpp"
 #include "trim_timeline_widget.hpp"
+#include "ui_font.hpp"
 #include "utsure/core/build_info.hpp"
 #include "utsure/core/job/batch_parallelism.hpp"
 #include "utsure/core/job/encode_job_preflight.hpp"
@@ -17,6 +18,7 @@
 #include <QAbstractButton>
 #include <QAbstractItemView>
 #include <QAction>
+#include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCursor>
@@ -32,7 +34,6 @@
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QFontDatabase>
 #include <QFormLayout>
 #include <QFrame>
 #include <QGridLayout>
@@ -849,8 +850,6 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
 QWidget {
     background: #0b0b0e;
     color: #e2e2e4;
-    font-family: "Segoe UI";
-    font-size: 12px;
 }
 QWidget[chromeTransparent="true"] {
     background: transparent;
@@ -1721,7 +1720,6 @@ QLabel#PreviewTimeBadge {
     session_log_view_ = new QPlainTextEdit(logs_tab);
     session_log_view_->setReadOnly(true);
     session_log_view_->setLineWrapMode(QPlainTextEdit::NoWrap);
-    session_log_view_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     logs_tab_layout->addWidget(session_log_view_);
     editor_tabs_->addTab(logs_tab, "Logs");
 
@@ -1861,7 +1859,6 @@ QLabel#PreviewTimeBadge {
     task_log_view_ = new QPlainTextEdit(task_log_tab);
     task_log_view_->setReadOnly(true);
     task_log_view_->setLineWrapMode(QPlainTextEdit::NoWrap);
-    task_log_view_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     task_log_layout->addWidget(task_log_summary_label_);
     task_log_layout->addWidget(task_log_view_, 1);
     right_tabs->addTab(task_log_tab, "Task Log");
@@ -2689,7 +2686,7 @@ void MainWindow::show_settings_dialog() {
     QDialog dialog(this);
     dialog.setWindowTitle("Settings");
     dialog.setModal(true);
-    dialog.resize(420, 360);
+    dialog.resize(460, 520);
 
     auto *layout = new QVBoxLayout(&dialog);
     auto *workflow_group = new QGroupBox("Personal workflow", &dialog);
@@ -2699,6 +2696,31 @@ void MainWindow::show_settings_dialog() {
     toshi_mode_check->setChecked(app_settings_.toshi_mode_enabled);
     workflow_layout->addWidget(toshi_mode_check);
     layout->addWidget(workflow_group);
+
+    auto *font_group = new QGroupBox("UI font", &dialog);
+    auto *font_layout = new QFormLayout(font_group);
+    auto *font_family_combo = new QComboBox(font_group);
+    font_family_combo->addItems(UiFontManager::available_font_families());
+    const QString saved_font_family = app_settings_.ui_font.family.trimmed();
+    if (!saved_font_family.isEmpty() && font_family_combo->findText(saved_font_family, Qt::MatchFixedString) < 0) {
+        font_family_combo->addItem(saved_font_family);
+    }
+    int saved_font_index = font_family_combo->findText(saved_font_family, Qt::MatchFixedString);
+    if (saved_font_index < 0) {
+        saved_font_index = font_family_combo->findText("Pyidaungsu", Qt::MatchFixedString);
+    }
+    if (saved_font_index >= 0) {
+        font_family_combo->setCurrentIndex(saved_font_index);
+    }
+    auto *font_size_spin = new QSpinBox(font_group);
+    font_size_spin->setRange(6, 24);
+    font_size_spin->setValue(std::clamp(app_settings_.ui_font.point_size, 6, 24));
+    auto *reset_font_button = new QPushButton("Reset to Pyidaungsu", font_group);
+    reset_font_button->setCursor(Qt::PointingHandCursor);
+    font_layout->addRow("Family", font_family_combo);
+    font_layout->addRow("Size", font_size_spin);
+    font_layout->addRow(QString{}, reset_font_button);
+    layout->addWidget(font_group);
 
     auto *naming_group = new QGroupBox("Output naming", &dialog);
     auto *naming_layout = new QVBoxLayout(naming_group);
@@ -2809,6 +2831,18 @@ void MainWindow::show_settings_dialog() {
     connect(reset_button, &QPushButton::clicked, &dialog, [populate_token_list]() {
         populate_token_list(utsure::core::job::OutputNaming::default_template());
     });
+    connect(reset_font_button, &QPushButton::clicked, &dialog, [font_family_combo, font_size_spin]() {
+        const auto defaults = UiFontManager::default_settings();
+        int font_index = font_family_combo->findText(defaults.family, Qt::MatchFixedString);
+        if (font_index < 0) {
+            font_family_combo->addItem(defaults.family);
+            font_index = font_family_combo->findText(defaults.family, Qt::MatchFixedString);
+        }
+        if (font_index >= 0) {
+            font_family_combo->setCurrentIndex(font_index);
+        }
+        font_size_spin->setValue(defaults.point_size);
+    });
     connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
 
@@ -2820,9 +2854,20 @@ void MainWindow::show_settings_dialog() {
 
     app_settings_.output_naming = read_token_settings();
     app_settings_.toshi_mode_enabled = toshi_mode_check->isChecked();
+    app_settings_.ui_font = AppSettings::UiFontSettings{
+        .family = font_family_combo->currentText().trimmed(),
+        .point_size = font_size_spin->value(),
+        .use_bundled_myanmar_fallback = true
+    };
+    if (auto *application = qobject_cast<QApplication *>(QApplication::instance())) {
+        const auto font_resolution = UiFontManager::apply(*application, app_settings_.ui_font);
+        if (!font_resolution.diagnostic.trimmed().isEmpty()) {
+            append_session_log("[info] " + font_resolution.diagnostic);
+        }
+    }
     QString save_error;
     if (!app_settings_.save(app_settings_path_, &save_error)) {
-        persist_app_settings_warning("save naming settings", save_error);
+        persist_app_settings_warning("save settings", save_error);
     }
 
     for (int index = 0; index < static_cast<int>(jobs_.size()); ++index) {

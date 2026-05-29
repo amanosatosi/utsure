@@ -146,6 +146,11 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
         }
     };
     settings.toshi_mode_enabled = true;
+    settings.ui_font = AppSettings::UiFontSettings{
+        .family = "Pyidaungsu",
+        .point_size = 12,
+        .use_bundled_myanmar_fallback = true
+    };
     settings.set_sequence_counter_value("bdrip|show", 12);
 
     QString save_error;
@@ -163,9 +168,12 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
         loaded.settings.output_naming.tokens.size() != 2U ||
         loaded.settings.output_naming.tokens[0].type != utsure::core::job::OutputNamingTokenType::codec ||
         loaded.settings.output_naming.tokens[1].enabled ||
+        loaded.settings.ui_font.family != "Pyidaungsu" ||
+        loaded.settings.ui_font.point_size != 12 ||
+        !loaded.settings.ui_font.use_bundled_myanmar_fallback ||
         !loaded.settings.toshi_mode_enabled ||
         loaded.settings.sequence_counter_value("bdrip|show") != 12) {
-        return fail("Settings JSON did not round-trip encode choices, naming tokens, Toshi mode, and counters.");
+        return fail("Settings JSON did not round-trip encode choices, naming tokens, UI font, Toshi mode, and counters.");
     }
 
     std::cout << "settings.roundtrip=ok\n";
@@ -199,6 +207,11 @@ int assert_invalid_values_fall_back(const std::filesystem::path &root) {
     root_object.insert("version", 1);
     root_object.insert("lastUsed", last_used);
     root_object.insert("outputNaming", output_naming);
+    root_object.insert("uiFont", QJsonObject{
+        {"family", ""},
+        {"pointSize", 999},
+        {"useBundledMyanmarFallback", true}
+    });
 
     QFile file(config_path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -213,7 +226,10 @@ int assert_invalid_values_fall_back(const std::filesystem::path &root) {
         loaded.settings.last_used.crf != 22 ||
         loaded.settings.last_used.audio_bitrate_kbps != 192 ||
         loaded.settings.output_naming.tokens.size() != 1U ||
-        loaded.settings.output_naming.tokens[0].type != utsure::core::job::OutputNamingTokenType::source_folder_name) {
+        loaded.settings.output_naming.tokens[0].type != utsure::core::job::OutputNamingTokenType::source_folder_name ||
+        loaded.settings.ui_font.family != "Pyidaungsu" ||
+        loaded.settings.ui_font.point_size != 10 ||
+        !loaded.settings.ui_font.use_bundled_myanmar_fallback) {
         return fail("Invalid saved settings did not fall back to valid defaults safely.");
     }
 

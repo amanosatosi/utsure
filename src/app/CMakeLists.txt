@@ -31,6 +31,8 @@ qt_add_executable(utsure_encoder_app WIN32
     resources/app_resources.qrc
     trim_timeline_widget.cpp
     trim_timeline_widget.hpp
+    ui_font.cpp
+    ui_font.hpp
 )
 
 set_target_properties(utsure_encoder_app PROPERTIES AUTORCC ON)

@@ -19,4 +19,8 @@
     <file alias="chevron-up.svg">icons/chevron-up.svg</file>
     <file alias="chevron-down.svg">icons/chevron-down.svg</file>
   </qresource>
+  <qresource prefix="/fonts">
+    <file alias="Pyidaungsu-2.5.3_Regular.ttf">fonts/Pyidaungsu-2.5.3_Regular.ttf</file>
+    <file alias="Pyidaungsu-2.5.3_Bold.ttf">fonts/Pyidaungsu-2.5.3_Bold.ttf</file>
+  </qresource>
 </RCC>

@@ -156,6 +156,10 @@ mkdir -p "${bundle_dir}" "${artifact_root}"
 
 cp "${app_executable}" "${bundle_dir}/"
 cp "${project_root}/LICENSE" "${bundle_dir}/"
+mkdir -p "${bundle_dir}/fonts" "${bundle_dir}/licenses"
+cp "${project_root}/src/app/resources/fonts/Pyidaungsu-2.5.3_Regular.ttf" "${bundle_dir}/fonts/"
+cp "${project_root}/src/app/resources/fonts/Pyidaungsu-2.5.3_Bold.ttf" "${bundle_dir}/fonts/"
+cp "${project_root}/third_party/licenses/Pyidaungsu-OFL-1.1.txt" "${bundle_dir}/licenses/"
 
 "${windeployqt}" --no-translations "${bundle_dir}/utsure.exe"
 
@@ -245,6 +249,9 @@ Expand-Archive -Path '${bundle_zip_windows}' -DestinationPath '${validation_root
 \$env:QT_QPA_PLATFORM='offscreen'; \
 \$env:QT_PLUGIN_PATH=''; \
 \$env:QML2_IMPORT_PATH=''; \
+if (!(Test-Path \"\$portablePath/fonts/Pyidaungsu-2.5.3_Regular.ttf\")) { throw \"Portable bundle is missing bundled Pyidaungsu Regular font\" }; \
+if (!(Test-Path \"\$portablePath/fonts/Pyidaungsu-2.5.3_Bold.ttf\")) { throw \"Portable bundle is missing bundled Pyidaungsu Bold font\" }; \
+if (!(Test-Path \"\$portablePath/licenses/Pyidaungsu-OFL-1.1.txt\")) { throw \"Portable bundle is missing Pyidaungsu OFL license notice\" }; \
 if ('${package_fontcollector}' -eq 'ON') { \
   \$fontCollectorPath=\"\$portablePath/tools/fontcollector/fontcollector.exe\"; \
   if (!(Test-Path \$fontCollectorPath)) { throw \"Portable bundle is missing tools/fontcollector/fontcollector.exe\" }; \

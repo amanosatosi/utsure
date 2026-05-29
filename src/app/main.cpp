@@ -1,5 +1,7 @@
 #include "main_window.hpp"
 
+#include "app_settings.hpp"
+#include "ui_font.hpp"
 #include "utsure/core/build_info.hpp"
 
 #include <QApplication>
@@ -76,6 +78,15 @@ int main(int argc, char *argv[]) {
     const QIcon application_icon = load_svg_icon(":/icons/icon.svg", QSize(256, 256));
     if (!application_icon.isNull()) {
         app.setWindowIcon(application_icon);
+    }
+
+    const auto settings_load_result = AppSettings::load_default_location();
+    const UiFontResolution ui_font_resolution = UiFontManager::apply(app, settings_load_result.settings.ui_font);
+    if (!ui_font_resolution.diagnostic.trimmed().isEmpty()) {
+        qInfo().noquote() << ui_font_resolution.diagnostic;
+    }
+    if (!settings_load_result.warning.trimmed().isEmpty()) {
+        qWarning().noquote() << settings_load_result.warning;
     }
 
     QCommandLineParser parser;

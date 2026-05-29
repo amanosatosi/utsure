@@ -33,6 +33,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [ ] M25 Thumbnail pre-roll implemented; awaiting CI validation.
 - [x] M27 JSON settings and reliable output naming implemented; awaiting GitHub Actions revalidation after CI follow-up fixes.
 - [x] M28 Toshi mode and duplicate encode entries implemented; awaiting GitHub Actions validation.
+- [x] M29 Bundled Pyidaungsu UI font fallback and configurable app UI font implemented; awaiting GitHub Actions validation.
 
 ## Active assumptions
 
@@ -1048,6 +1049,24 @@ Completed:
   * Fixed the Settings dialog output naming order UI so token rows are now drag-and-drop reorderable, while the existing up/down buttons, reset behavior, checkbox state, and JSON serialization continue to use the actual list order.
   * Fixed completed-job metrics so successful encodes finish with average EFPS and average speed computed from total frames/duration over actual encode elapsed time, plus a final summary log line with frames, elapsed time, average EFPS, and average speed when available.
 
+### M29 Bundled Pyidaungsu UI font fallback and configurable app UI font
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Add Pyidaungsu as the Qt app UI Myanmar-capable base font path, without changing subtitle burn-in, ASS style handling, libassmod, or encoder output.
+  * Resolve the UI font by checking system Pyidaungsu first, then loading bundled Pyidaungsu Regular/Bold through Qt resources, and falling back safely to the system UI font if loading fails.
+  * Add small JSON-backed UI font settings for family, point size, and bundled Myanmar fallback enablement, without storing absolute font paths.
+  * Add a minimal Settings dialog UI for font family, size, and reset-to-Pyidaungsu behavior.
+  * Include bundled Pyidaungsu font files and the SIL Open Font License/Pyidaungsu notice in Windows portable artifacts.
+
+Completed:
+  * Added bundled Pyidaungsu Regular/Bold app resources and package artifact copies, with the Pyidaungsu OFL license notice included under third-party licenses.
+  * Added Qt-owned UI font resolution/application that uses system Pyidaungsu when available, otherwise loads bundled Pyidaungsu, applies the resolved font through `QApplication::setFont`, and logs the selected source.
+  * Added JSON UI font settings with safe defaults, invalid value fallback, and Settings dialog controls for family, size, and reset while preserving the existing app theme.
+  * Added focused app tests for settings round-trip/fallback and a headless UI font smoke path that assigns the Myanmar sample text to basic Qt widgets using the resolved font path.
+  * Subtitle rendering fonts remain out of scope for this task.
+
 ## Immediate next milestone
 
-Re-run GitHub Actions for M27/M28 validation, then resume pending M24/M25 external validation work.
+Re-run GitHub Actions for M27/M28/M29 validation, then resume pending M24/M25 external validation work.

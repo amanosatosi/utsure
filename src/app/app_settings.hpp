@@ -21,6 +21,12 @@ public:
         int audio_bitrate_kbps{192};
     };
 
+    struct UiFontSettings final {
+        QString family{"Pyidaungsu"};
+        int point_size{10};
+        bool use_bundled_myanmar_fallback{true};
+    };
+
     [[nodiscard]] static QString default_config_file_path();
     [[nodiscard]] static AppSettings defaults();
     struct LoadResult;
@@ -37,6 +43,7 @@ public:
     int version{kCurrentVersion};
     LastUsedEncodeChoices last_used{};
     utsure::core::job::OutputNamingTemplate output_naming{};
+    UiFontSettings ui_font{};
     bool toshi_mode_enabled{false};
     std::map<std::string, int> sequence_counters{};
 };

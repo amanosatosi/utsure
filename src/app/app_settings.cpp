@@ -123,6 +123,31 @@ AppSettings::LastUsedEncodeChoices encode_choices_from_json(
     return choices;
 }
 
+QJsonObject ui_font_to_json(const AppSettings::UiFontSettings &settings) {
+    QJsonObject object;
+    object.insert("family", settings.family);
+    object.insert("pointSize", settings.point_size);
+    object.insert("useBundledMyanmarFallback", settings.use_bundled_myanmar_fallback);
+    return object;
+}
+
+AppSettings::UiFontSettings ui_font_from_json(
+    const QJsonObject &object,
+    const AppSettings::UiFontSettings &fallback
+) {
+    AppSettings::UiFontSettings settings = fallback;
+    if (object.contains("family") && object.value("family").isString()) {
+        const QString family = object.value("family").toString().trimmed();
+        settings.family = family.isEmpty() ? fallback.family : family;
+    }
+    settings.point_size = bounded_int_from_json(object.value("pointSize"), fallback.point_size, 6, 24);
+    if (object.contains("useBundledMyanmarFallback")) {
+        settings.use_bundled_myanmar_fallback =
+            object.value("useBundledMyanmarFallback").toBool(fallback.use_bundled_myanmar_fallback);
+    }
+    return settings;
+}
+
 QJsonObject output_naming_to_json(const utsure::core::job::OutputNamingTemplate &settings) {
     QJsonObject object;
     object.insert("enabled", settings.enabled);
@@ -217,6 +242,7 @@ QJsonDocument settings_to_json_document(const AppSettings &settings) {
     root.insert("version", AppSettings::kCurrentVersion);
     root.insert("lastUsed", encode_choices_to_json(settings.last_used));
     root.insert("outputNaming", output_naming_to_json(settings.output_naming));
+    root.insert("uiFont", ui_font_to_json(settings.ui_font));
     root.insert("toshiMode", QJsonObject{
         {"enabled", settings.toshi_mode_enabled}
     });
@@ -298,6 +324,7 @@ AppSettings::LoadResult AppSettings::load(const QString &config_path) {
     result.settings.last_used = encode_choices_from_json(root.value("lastUsed").toObject(), fallback.last_used);
     result.settings.output_naming =
         output_naming_from_json(root.value("outputNaming").toObject(), fallback.output_naming);
+    result.settings.ui_font = ui_font_from_json(root.value("uiFont").toObject(), fallback.ui_font);
     result.settings.toshi_mode_enabled =
         root.value("toshiMode").toObject().value("enabled").toBool(fallback.toshi_mode_enabled);
     result.settings.sequence_counters = sequence_counters_from_json(root.value("sequenceCounters").toObject());
