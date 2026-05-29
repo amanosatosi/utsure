@@ -2705,8 +2705,14 @@ void MainWindow::show_settings_dialog() {
 
     auto *token_list = new QListWidget(naming_group);
     token_list->setSelectionMode(QAbstractItemView::SingleSelection);
-    token_list->setDragDropMode(QAbstractItemView::NoDragDrop);
+    token_list->setDragEnabled(true);
+    token_list->setAcceptDrops(true);
+    token_list->setDropIndicatorShown(true);
+    token_list->setDragDropMode(QAbstractItemView::InternalMove);
+    token_list->setDefaultDropAction(Qt::MoveAction);
+    token_list->setDragDropOverwriteMode(false);
     token_list->setAlternatingRowColors(true);
+    token_list->setToolTip("Drag rows to change output filename token order.");
     naming_layout->addWidget(token_list, 1);
 
     auto *token_buttons = new QWidget(naming_group);
@@ -2740,9 +2746,16 @@ void MainWindow::show_settings_dialog() {
             ? utsure::core::job::OutputNaming::default_template().tokens
             : settings.tokens;
         for (const auto &token : tokens) {
-            auto *item = new QListWidgetItem(output_naming_token_label(token.type));
+            auto *item = new QListWidgetItem(QStringLiteral("⋮⋮ %1").arg(output_naming_token_label(token.type)));
             item->setData(Qt::UserRole, output_naming_token_type_text(token.type));
-            item->setFlags(item->flags() | Qt::ItemIsUserCheckable | Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+            item->setFlags(
+                item->flags() |
+                Qt::ItemIsUserCheckable |
+                Qt::ItemIsEnabled |
+                Qt::ItemIsSelectable |
+                Qt::ItemIsDragEnabled |
+                Qt::ItemIsDropEnabled
+            );
             item->setCheckState(token.enabled ? Qt::Checked : Qt::Unchecked);
             token_list->addItem(item);
         }
