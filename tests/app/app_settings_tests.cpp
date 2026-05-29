@@ -254,7 +254,7 @@ int assert_duplicate_copies_job_choices_and_stays_independent(const std::filesys
         .source_path = path_to_qstring(source_path),
         .source_name = "episode01.mkv",
         .output_name_custom_text = "OP",
-        .output_path = path_to_qstring(output_directory / "OP Duplicate - 01 x265 1920x1080.mp4"),
+        .output_path = path_to_qstring(output_directory / "[OP] Duplicate - 01 x265 1920x1080.mp4"),
         .output_path_manual_override = false,
         .same_as_input = false,
         .subtitle_enabled = true,
@@ -308,7 +308,7 @@ int assert_duplicate_auto_output_uses_exclusion_without_extra_counter_skip(const
     touch_file(source_path);
     std::filesystem::create_directories(output_directory);
 
-    const QString original_output = path_to_qstring(output_directory / "OP DuplicateCounter - 05 x265 1920x1080.mp4");
+    const QString original_output = path_to_qstring(output_directory / "[OP] DuplicateCounter - 05 x265 1920x1080.mp4");
     const auto result = duplicate_encode_entry(DuplicateEncodeEntryRequest{
         .original = DuplicateEncodeEntryState{
             .source_path = path_to_qstring(source_path),
@@ -326,7 +326,7 @@ int assert_duplicate_auto_output_uses_exclusion_without_extra_counter_skip(const
         result.duplicate.output_path == original_output ||
         !result.sequence_counter_reserved ||
         result.persisted_sequence_number != 6 ||
-        !result.duplicate.output_path.endsWith("OP DuplicateCounter - 06 x265 1920x1080.mp4")) {
+        !result.duplicate.output_path.endsWith("[OP] DuplicateCounter - 06 x265 1920x1080.mp4")) {
         return fail("Duplicate auto output did not reserve exactly the next safe sequence number.");
     }
 

@@ -1044,6 +1044,7 @@ Completed:
   * Tightened manual subtitle safety with an explicit guard so Toshi mode remains auto-only, removed duplicated selectedText candidate generation, and changed selectedText source-directory diagnostics to use selected-text wording.
   * Added focused tests for selectedText subtitle matching, Toshi mode settings persistence, output naming exclusions, and duplicate copy/manual-output/manual-subtitle/counter behavior. Local validation remains limited to static checks; GitHub Actions is the compile/test source.
   * Completed a fix-only review pass after commit `7292a9acd2c4f3c87be73a0268652be91c83d6b9`: duplicate runtime reset now happens before applying the helper's full copied state, manual duplicate output generation no longer falls back to the original path, unverifiable duplicate paths are treated as unsafe, and no-sequence templates document and test Copy/Copy N collision avoidance without promising persisted no-reuse.
+  * Fixed the selectedText filename rendering regression so the token again renders as bracketed sanitized text such as `[OP]`, while empty selectedText is omitted and raw selectedText remains unchanged for Toshi subtitle lookup and sequence-counter keys.
 
 ## Immediate next milestone
 

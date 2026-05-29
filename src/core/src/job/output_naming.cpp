@@ -431,7 +431,7 @@ std::string token_value(
 ) {
     switch (token_type) {
     case OutputNamingTokenType::selected_text:
-        return fragments.custom_text;
+        return fragments.custom_text.empty() ? std::string{} : "[" + fragments.custom_text + "]";
     case OutputNamingTokenType::source_folder_name:
         return fragments.source_folder_name;
     case OutputNamingTokenType::sequence_number:
