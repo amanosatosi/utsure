@@ -1,5 +1,6 @@
 #include "utsure/core/media/audio_stream_selection.hpp"
 #include "utsure/core/job/encode_job.hpp"
+#include "utsure/core/job/encode_job_metrics.hpp"
 #include "utsure/core/job/encode_job_report.hpp"
 #include "utsure/core/media/media_decoder.hpp"
 #include "utsure/core/media/media_inspector.hpp"
@@ -36,6 +37,7 @@ using utsure::core::job::EncodeJobStage;
 using utsure::core::job::EncodeJobSubtitleSettings;
 using utsure::core::job::EncodeJobSummary;
 using utsure::core::job::EncodeJobThumbnailPrerollSettings;
+using utsure::core::job::calculate_final_encode_metrics;
 using utsure::core::job::format_encode_job_report;
 using utsure::core::media::AudioOutputMode;
 using utsure::core::media::CpuUsageMode;
@@ -635,6 +637,11 @@ bool observer_logs_contain_level_and_text(
     return false;
 }
 
+int assert_final_average_progress_metrics(
+    const CollectingObserver &observer,
+    const EncodeJobSummary &summary
+);
+
 int assert_runtime_visibility(
     const CollectingObserver &observer,
     const EncodeJobSummary &summary
@@ -683,8 +690,53 @@ int assert_runtime_visibility(
         !observer_logs_contain_text(observer, "Video encoder:") ||
         !observer_logs_contain_text(observer, "Video decoder (") ||
         !observer_logs_contain_text(observer, "subtitle-free native-frame fast path") ||
-        !observer_logs_contain_text(observer, "Streaming performance: total_elapsed=")) {
+        !observer_logs_contain_text(observer, "Streaming performance: total_elapsed=") ||
+        !observer_logs_contain_text(observer, "Encode completed: ") ||
+        !observer_logs_contain_text(observer, " average ") ||
+        !observer_logs_contain_text(observer, " EFPS, ")) {
         return fail("The encode-job observer logs did not include the expected runtime settings.");
+    }
+
+    return assert_final_average_progress_metrics(observer, summary);
+}
+
+int assert_final_average_progress_metrics(
+    const CollectingObserver &observer,
+    const EncodeJobSummary &summary
+) {
+    if (observer.progress_updates.empty() ||
+        observer.progress_updates.back().stage != EncodeJobStage::completed) {
+        return fail("The encode job did not finish with a completed progress update.");
+    }
+
+    const auto &final_progress = observer.progress_updates.back();
+    const auto expected_metrics = calculate_final_encode_metrics(
+        summary.encoded_media_summary.encoded_video_frame_count,
+        summary.timeline_summary.output_duration_microseconds,
+        summary.streaming_runtime.total_elapsed_microseconds
+    );
+    if (!expected_metrics.average_efps.has_value()) {
+        return fail("The encode-job summary did not provide enough data for final average EFPS.");
+    }
+
+    if (!final_progress.encoded_fps.has_value() ||
+        std::fabs(*final_progress.encoded_fps - *expected_metrics.average_efps) > 1e-6) {
+        return fail("The completed progress update did not report final average EFPS.");
+    }
+
+    if (!expected_metrics.average_speed.has_value()) {
+        return fail("The encode-job summary did not provide enough data for final average speed.");
+    }
+
+    if (!final_progress.encoded_speed.has_value() ||
+        std::fabs(*final_progress.encoded_speed - *expected_metrics.average_speed) > 1e-6) {
+        return fail("The completed progress update did not report final average speed.");
+    }
+
+    if (!final_progress.encoded_video_frames.has_value() ||
+        *final_progress.encoded_video_frames !=
+            static_cast<std::uint64_t>(summary.encoded_media_summary.encoded_video_frame_count)) {
+        return fail("The completed progress update did not carry the final encoded frame count.");
     }
 
     return 0;
@@ -726,9 +778,33 @@ int run_threading_mode_selection_assertion() {
         return fail("Auto CPU mode should leave FFmpeg thread count selection to the backend.");
     }
 
+    const auto final_metrics = calculate_final_encode_metrics(
+        240,
+        10000000,
+        5000000
+    );
+    if (!final_metrics.average_efps.has_value() ||
+        std::fabs(*final_metrics.average_efps - 48.0) > 1e-9 ||
+        !final_metrics.average_speed.has_value() ||
+        std::fabs(*final_metrics.average_speed - 2.0) > 1e-9) {
+        return fail("Final encode metrics did not use total frames and duration over total elapsed time.");
+    }
+
+    const auto zero_elapsed_metrics = calculate_final_encode_metrics(
+        240,
+        10000000,
+        0
+    );
+    if (zero_elapsed_metrics.average_efps.has_value() ||
+        zero_elapsed_metrics.average_speed.has_value()) {
+        return fail("Final encode metrics did not guard against zero elapsed time.");
+    }
+
     std::cout << "threading.auto=0\n";
     std::cout << "threading.conservative=" << conservative_count << '\n';
     std::cout << "threading.aggressive=" << aggressive_count << '\n';
+    std::cout << "metrics.average_efps=" << *final_metrics.average_efps << '\n';
+    std::cout << "metrics.average_speed=" << *final_metrics.average_speed << '\n';
     return 0;
 }
 

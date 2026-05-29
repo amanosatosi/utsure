@@ -1046,6 +1046,7 @@ Completed:
   * Completed a fix-only review pass after commit `7292a9acd2c4f3c87be73a0268652be91c83d6b9`: duplicate runtime reset now happens before applying the helper's full copied state, manual duplicate output generation no longer falls back to the original path, unverifiable duplicate paths are treated as unsafe, and no-sequence templates document and test Copy/Copy N collision avoidance without promising persisted no-reuse.
   * Fixed the selectedText filename rendering regression so the token again renders as bracketed sanitized text such as `[OP]`, while empty selectedText is omitted and raw selectedText remains unchanged for Toshi subtitle lookup and sequence-counter keys.
   * Fixed the Settings dialog output naming order UI so token rows are now drag-and-drop reorderable, while the existing up/down buttons, reset behavior, checkbox state, and JSON serialization continue to use the actual list order.
+  * Fixed completed-job metrics so successful encodes finish with average EFPS and average speed computed from total frames/duration over actual encode elapsed time, plus a final summary log line with frames, elapsed time, average EFPS, and average speed when available.
 
 ## Immediate next milestone
 

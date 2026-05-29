@@ -3,13 +3,17 @@
 #include "encode_job_working_set_guard.hpp"
 #include "../runtime_anomaly_policy.hpp"
 #include "../media/streaming_transcode_pipeline.hpp"
+#include "utsure/core/job/encode_job_metrics.hpp"
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 #include "utsure/core/timeline/timeline.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
+#include <iomanip>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -123,17 +127,34 @@ void notify_encode_progress(
     });
 }
 
-void notify_final_progress(EncodeJobTelemetry &telemetry, std::string message) {
+void notify_final_progress(
+    EncodeJobTelemetry &telemetry,
+    std::string message,
+    const std::int64_t encoded_video_frames = 0,
+    const std::int64_t encoded_video_duration_us = 0,
+    const std::int64_t encode_elapsed_us = 0
+) {
     if (telemetry.observer == nullptr) {
         return;
     }
 
+    const auto final_metrics =
+        calculate_final_encode_metrics(encoded_video_frames, encoded_video_duration_us, encode_elapsed_us);
     telemetry.observer->on_progress(EncodeJobProgress{
         .stage = EncodeJobStage::completed,
         .current_step = telemetry.total_steps,
         .total_steps = telemetry.total_steps,
         .message = std::move(message),
-        .overall_fraction = 1.0
+        .overall_fraction = 1.0,
+        .stage_fraction = 1.0,
+        .encoded_video_frames = encoded_video_frames > 0
+            ? std::optional<std::uint64_t>(static_cast<std::uint64_t>(encoded_video_frames))
+            : std::nullopt,
+        .encoded_video_duration_us = encoded_video_duration_us > 0
+            ? std::optional<std::int64_t>(encoded_video_duration_us)
+            : std::nullopt,
+        .encoded_fps = final_metrics.average_efps,
+        .encoded_speed = final_metrics.average_speed
     });
 }
 
@@ -243,6 +264,50 @@ std::string format_encode_runtime_log_message(const EncodeJob &job) {
         ", subtitle composition mode " + runtime_behavior.subtitle_composition_mode +
         ", subtitle diagnostics " + runtime_behavior.subtitle_diagnostics_mode +
         ", priority " + std::string(to_display_string(job.execution.process_priority)) + '.';
+}
+
+std::string format_elapsed_microseconds(const std::int64_t elapsed_us) {
+    if (elapsed_us <= 0) {
+        return "unknown";
+    }
+
+    const auto total_milliseconds = elapsed_us / 1000;
+    const auto milliseconds = total_milliseconds % 1000;
+    const auto total_seconds = total_milliseconds / 1000;
+    const auto seconds = total_seconds % 60;
+    const auto total_minutes = total_seconds / 60;
+    const auto minutes = total_minutes % 60;
+    const auto hours = total_minutes / 60;
+
+    std::ostringstream stream;
+    stream << std::setfill('0') << std::setw(2) << hours << ':'
+           << std::setw(2) << minutes << ':'
+           << std::setw(2) << seconds << '.'
+           << std::setw(3) << milliseconds;
+    return stream.str();
+}
+
+std::string format_decimal_or_dash(const std::optional<double> value, const int precision) {
+    if (!value.has_value() || !std::isfinite(*value) || *value < 0.0) {
+        return "-";
+    }
+
+    std::ostringstream stream;
+    stream << std::fixed << std::setprecision(precision) << *value;
+    return stream.str();
+}
+
+std::string format_completion_metrics_log(
+    const std::int64_t encoded_video_frames,
+    const std::int64_t encoded_video_duration_us,
+    const std::int64_t encode_elapsed_us
+) {
+    const auto metrics =
+        calculate_final_encode_metrics(encoded_video_frames, encoded_video_duration_us, encode_elapsed_us);
+    return "Encode completed: " + std::to_string(std::max<std::int64_t>(encoded_video_frames, 0)) +
+        " frames in " + format_elapsed_microseconds(encode_elapsed_us) +
+        ", average " + format_decimal_or_dash(metrics.average_efps, 1) + " EFPS, " +
+        format_decimal_or_dash(metrics.average_speed, 2) + "x speed.";
 }
 
 }  // namespace
@@ -492,7 +557,22 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             "Encode job completed successfully. Output written to '" +
                 streaming_result.summary->encoded_media_summary.output_path.lexically_normal().string() + "'."
         );
-        notify_final_progress(telemetry, "Encode completed successfully.");
+        notify_log(
+            telemetry,
+            EncodeJobLogLevel::info,
+            format_completion_metrics_log(
+                streaming_result.summary->encoded_media_summary.encoded_video_frame_count,
+                streaming_result.summary->timeline_summary.output_duration_microseconds,
+                streaming_result.summary->performance_metrics.total_elapsed_microseconds
+            )
+        );
+        notify_final_progress(
+            telemetry,
+            "Encode completed successfully.",
+            streaming_result.summary->encoded_media_summary.encoded_video_frame_count,
+            streaming_result.summary->timeline_summary.output_duration_microseconds,
+            streaming_result.summary->performance_metrics.total_elapsed_microseconds
+        );
 
         return EncodeJobResult{
             .encode_job_summary = EncodeJobSummary{

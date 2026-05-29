@@ -5210,9 +5210,18 @@ void MainWindow::update_job_progress(
         );
     }
 
-    if (progress.encoded_fps.has_value() && *progress.encoded_fps > 0.0) {
+    if (progress.stage == utsure::core::job::EncodeJobStage::completed) {
+        job.efps_display = progress.encoded_fps.has_value() && *progress.encoded_fps > 0.0
+            ? QString::number(*progress.encoded_fps, 'f', 1)
+            : QString{};
+        job.speed_display = progress.encoded_speed.has_value() && *progress.encoded_speed > 0.0
+            ? QString("%1x").arg(QString::number(*progress.encoded_speed, 'f', 2))
+            : QString{};
+    } else if (progress.encoded_fps.has_value() && *progress.encoded_fps > 0.0) {
         job.efps_display = QString::number(*progress.encoded_fps, 'f', 1);
-        if (job.inspected_source_info.has_value() && job.inspected_source_info->primary_video_stream.has_value()) {
+        if (progress.encoded_speed.has_value() && *progress.encoded_speed > 0.0) {
+            job.speed_display = QString("%1x").arg(QString::number(*progress.encoded_speed, 'f', 2));
+        } else if (job.inspected_source_info.has_value() && job.inspected_source_info->primary_video_stream.has_value()) {
             const double source_fps = rational_to_double(job.inspected_source_info->primary_video_stream->average_frame_rate);
             if (source_fps > 0.0) {
                 job.speed_display = QString("%1x").arg(QString::number(*progress.encoded_fps / source_fps, 'f', 1));

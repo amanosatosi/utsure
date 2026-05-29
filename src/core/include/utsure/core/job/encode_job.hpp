@@ -48,6 +48,7 @@ struct EncodeJobProgress final {
     std::optional<std::int64_t> encoded_video_duration_us{};
     std::optional<std::int64_t> total_video_duration_us{};
     std::optional<double> encoded_fps{};
+    std::optional<double> encoded_speed{};
 };
 
 struct EncodeJobLogMessage final {
