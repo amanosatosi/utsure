@@ -890,26 +890,22 @@ QFrame#SourceDropOverlayIllustration {
 QLabel#SourceDropOverlayEyebrow {
     background: transparent;
     color: #ffce2e;
-    font-size: 11px;
     font-weight: 800;
     letter-spacing: 1.6px;
 }
 QLabel#SourceDropOverlayIcon {
     background: transparent;
     color: #111111;
-    font-size: 36px;
     font-weight: 900;
 }
 QLabel#SourceDropOverlayTitle {
     background: transparent;
     color: #f6f6fb;
-    font-size: 24px;
     font-weight: 900;
 }
 QLabel#SourceDropOverlayBody {
     background: transparent;
     color: #bbbcc8;
-    font-size: 13px;
 }
 QFrame#PreviewTransportBar {
     background: rgba(20, 20, 26, 232);
@@ -933,13 +929,10 @@ QLabel#BrandMark[logoFallback="true"] {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2c1044, stop:1 #b241ff);
     border: 1px solid #1b1225;
     color: #ffce2e;
-    font-family: "Yu Gothic UI", "Yu Gothic", "Meiryo UI", "Meiryo", "Segoe UI";
-    font-size: 16px;
     font-weight: 900;
 }
 QLabel#BrandName {
     color: #b241ff;
-    font-size: 17px;
     font-weight: 900;
 }
 QLabel#BrandSubtitle,
@@ -1223,7 +1216,6 @@ QSplitter::handle:vertical {
 }
 QLabel#PreviewTitleLabel {
     color: #f4f4f8;
-    font-size: 16px;
     font-weight: 900;
     letter-spacing: 0.7px;
 }
@@ -1234,7 +1226,6 @@ QLabel#PreviewTrimBadge,
 QLabel#PreviewTimeBadge {
     border-radius: 10px;
     padding: 2px 6px;
-    font-family: Consolas, "Courier New", monospace;
 }
 QLabel#PreviewTrimBadge {
     background: #1a1a22;

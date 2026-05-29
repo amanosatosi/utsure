@@ -116,8 +116,8 @@ void PreviewSurfaceWidget::paintEvent(QPaintEvent *event) {
     }
 
     painter.setPen(QColor("#f4f4f8"));
+    // Preserve the QApplication font family/size; only adjust weight for the custom-painted placeholder.
     QFont headline_font = painter.font();
-    headline_font.setPointSize(16);
     headline_font.setBold(true);
     painter.setFont(headline_font);
 
@@ -130,7 +130,6 @@ void PreviewSurfaceWidget::paintEvent(QPaintEvent *event) {
     if (!placeholder_message_.trimmed().isEmpty()) {
         painter.setPen(QColor("#8b8b99"));
         QFont message_font = painter.font();
-        message_font.setPointSize(11);
         message_font.setBold(false);
         painter.setFont(message_font);
         QRect message_rect = target_rect.adjusted(12, (target_rect.height() / 2) - 4, -12, -8);

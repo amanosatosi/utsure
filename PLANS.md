@@ -1063,6 +1063,7 @@ Scope:
 Completed:
   * Added bundled Pyidaungsu Regular/Bold app resources and package artifact copies, with the Pyidaungsu OFL license notice included under third-party licenses.
   * Added Qt-owned UI font resolution/application that uses system Pyidaungsu when available, otherwise loads bundled Pyidaungsu, applies the resolved font through `QApplication::setFont`, and logs the selected source.
+  * Removed app stylesheet font-family/font-size overrides, including the previous Segoe UI path, so the central resolver/settings font is the source of truth for app-wide UI text.
   * Added JSON UI font settings with safe defaults, invalid value fallback, and Settings dialog controls for family, size, and reset while preserving the existing app theme.
   * Added focused app tests for settings round-trip/fallback and a headless UI font smoke path that assigns the Myanmar sample text to basic Qt widgets using the resolved font path.
   * Subtitle rendering fonts remain out of scope for this task.
