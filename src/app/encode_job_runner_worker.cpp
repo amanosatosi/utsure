@@ -63,8 +63,15 @@ QString format_success_details(const utsure::core::job::EncodeJobSummary &summar
         << '/' << summary.timeline_summary.output_frame_rate.denominator << '\n'
         << "Decoded video frames: " << summary.decoded_video_frame_count << '\n'
         << "Decoded audio blocks: " << summary.decoded_audio_block_count << '\n'
-        << "Subtitled frames: " << summary.subtitled_video_frame_count << "\n\n"
-        << "Detailed report:\n"
+        << "Subtitled frames: " << summary.subtitled_video_frame_count << '\n';
+    if (!summary.warnings.empty()) {
+        readable_summary << '\n' << "Warnings:\n";
+        for (const auto &warning : summary.warnings) {
+            readable_summary << "- " << warning << '\n';
+        }
+    }
+    readable_summary
+        << "\nDetailed report:\n"
         << utsure::core::job::format_encode_job_report(summary);
 
     return to_qstring(readable_summary.str());
@@ -107,22 +114,22 @@ void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
             to_qstring(result.error->output_path)
         );
     } catch (const std::exception &exception) {
-        const auto main_source_path = job.input.main_source_path.lexically_normal().string();
-        const auto output_path = job.output.output_path.lexically_normal().string();
+        const auto main_source_path = path_to_qstring(job.input.main_source_path);
+        const auto output_path = path_to_qstring(job.output.output_path);
         const QString problem = QString("Encode failed: The encode worker caught an unexpected runtime failure.");
         const QString details = QString("Main source: %1\nOutput: %2\nProblem: %3")
-            .arg(to_qstring(main_source_path))
-            .arg(to_qstring(output_path))
+            .arg(main_source_path)
+            .arg(output_path)
             .arg(to_qstring(exception.what()));
-        emit job_finished(false, false, problem, details, to_qstring(output_path));
+        emit job_finished(false, false, problem, details, output_path);
     } catch (...) {
-        const auto main_source_path = job.input.main_source_path.lexically_normal().string();
-        const auto output_path = job.output.output_path.lexically_normal().string();
+        const auto main_source_path = path_to_qstring(job.input.main_source_path);
+        const auto output_path = path_to_qstring(job.output.output_path);
         const QString problem = QString("Encode failed: The encode worker caught an unknown runtime failure.");
         const QString details = QString("Main source: %1\nOutput: %2\nProblem: Unknown non-standard exception.")
-            .arg(to_qstring(main_source_path))
-            .arg(to_qstring(output_path));
-        emit job_finished(false, false, problem, details, to_qstring(output_path));
+            .arg(main_source_path)
+            .arg(output_path);
+        emit job_finished(false, false, problem, details, output_path);
     }
 }
 

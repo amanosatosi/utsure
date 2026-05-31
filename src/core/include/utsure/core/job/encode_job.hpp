@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <vector>
 #include <string_view>
 
 namespace utsure::core::job {
@@ -147,6 +148,7 @@ struct EncodeJobSummary final {
     std::int64_t subtitled_video_frame_count{0};
     EncodeJobStreamingRuntimeSummary streaming_runtime{};
     media::EncodedMediaSummary encoded_media_summary{};
+    std::vector<std::string> warnings{};
 };
 
 struct EncodeJobError final {

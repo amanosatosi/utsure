@@ -126,6 +126,27 @@ std::string trim_ascii_whitespace(std::string value) {
     return std::string(begin, end);
 }
 
+std::string remove_trailing_crc32_tag(std::string stem) {
+    if (has_trailing_crc32_tag(stem)) {
+        stem.resize(stem.size() - 10U);
+        stem = trim_ascii_whitespace(std::move(stem));
+    }
+    return stem;
+}
+
+std::filesystem::path build_crc32_suffix_path(
+    const std::filesystem::path &path,
+    std::string stem,
+    const std::string_view crc32_hex
+) {
+    const std::string normalized_crc = uppercase_ascii(std::string(crc32_hex));
+    std::filesystem::path renamed = path;
+    renamed.replace_filename(path_from_utf8_string(
+        std::move(stem) + " [" + normalized_crc + "]" + path_component_to_utf8_string(path.extension())
+    ));
+    return renamed.lexically_normal();
+}
+
 std::string collapse_ascii_spaces(std::string value) {
     std::string collapsed{};
     collapsed.reserve(value.size());
@@ -1029,18 +1050,63 @@ std::filesystem::path OutputNaming::append_or_replace_crc32_suffix(
     const std::filesystem::path &path,
     const std::string_view crc32_hex
 ) {
-    std::string stem = path_component_to_utf8_string(path.stem());
-    if (has_trailing_crc32_tag(stem)) {
-        stem.resize(stem.size() - 10U);
-        stem = trim_ascii_whitespace(std::move(stem));
+    return build_crc32_suffix_path(
+        path,
+        remove_trailing_crc32_tag(path_component_to_utf8_string(path.stem())),
+        crc32_hex
+    );
+}
+
+std::optional<std::filesystem::path> OutputNaming::choose_available_crc32_suffix_path(
+    const std::filesystem::path &path,
+    const std::string_view crc32_hex,
+    std::string *error_message
+) {
+    const std::string base_stem = remove_trailing_crc32_tag(path_component_to_utf8_string(path.stem()));
+    const auto original_path = path.lexically_normal();
+    bool availability_error = false;
+    const auto try_candidate =
+        [&original_path, &availability_error, error_message](const std::filesystem::path &candidate) {
+        if (candidate.lexically_normal() == original_path) {
+            return true;
+        }
+        std::error_code exists_error{};
+        const bool exists = std::filesystem::exists(candidate, exists_error);
+        if (exists_error) {
+            availability_error = true;
+            if (error_message != nullptr) {
+                *error_message = "Could not verify CRC32 target filename availability.";
+            }
+            return false;
+        }
+        return !exists;
+    };
+
+    const auto direct_candidate = build_crc32_suffix_path(path, base_stem, crc32_hex);
+    if (try_candidate(direct_candidate)) {
+        return direct_candidate;
+    }
+    if (availability_error) {
+        return std::nullopt;
     }
 
-    const std::string normalized_crc = uppercase_ascii(std::string(crc32_hex));
-    std::filesystem::path renamed = path;
-    renamed.replace_filename(path_from_utf8_string(
-        stem + " [" + normalized_crc + "]" + path_component_to_utf8_string(path.extension())
-    ));
-    return renamed.lexically_normal();
+    for (int copy_index = 1; copy_index < 1000; ++copy_index) {
+        const std::string copy_stem = base_stem + (copy_index == 1
+            ? " Copy"
+            : " Copy " + std::to_string(copy_index));
+        const auto copy_candidate = build_crc32_suffix_path(path, copy_stem, crc32_hex);
+        if (try_candidate(copy_candidate)) {
+            return copy_candidate;
+        }
+        if (availability_error) {
+            return std::nullopt;
+        }
+    }
+
+    if (error_message != nullptr && error_message->empty()) {
+        *error_message = "Could not find an available CRC32 target filename.";
+    }
+    return std::nullopt;
 }
 
 }  // namespace utsure::core::job

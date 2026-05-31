@@ -111,6 +111,11 @@ public:
         const std::filesystem::path &path,
         std::string_view crc32_hex
     );
+    [[nodiscard]] static std::optional<std::filesystem::path> choose_available_crc32_suffix_path(
+        const std::filesystem::path &path,
+        std::string_view crc32_hex,
+        std::string *error_message = nullptr
+    );
 };
 
 }  // namespace utsure::core::job

@@ -19,6 +19,7 @@
 #include <string>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace utsure::core::job {
 
@@ -45,6 +46,15 @@ struct EncodeJobTelemetry final {
     int total_steps{0};
     int current_step{0};
 };
+
+std::string path_to_utf8_string(const std::filesystem::path &path) {
+#if defined(_WIN32)
+    const auto text = path.lexically_normal().u8string();
+    return std::string(reinterpret_cast<const char *>(text.c_str()), text.size());
+#else
+    return path.lexically_normal().string();
+#endif
+}
 
 int calculate_total_steps(const EncodeJob &job) {
     int total_steps = 1 + 1 + 1;
@@ -197,54 +207,72 @@ bool same_path_or_equivalent(const std::filesystem::path &left, const std::files
     return !error && equivalent;
 }
 
-std::filesystem::path finalize_crc32_suffix(
+struct Crc32FinalizeResult final {
+    std::filesystem::path output_path{};
+    std::optional<std::string> warning{};
+};
+
+Crc32FinalizeResult finalize_crc32_suffix(
     EncodeJobTelemetry &telemetry,
     const std::filesystem::path &output_path
 ) {
+    notify_log(telemetry, EncodeJobLogLevel::info, "Calculating CRC32 for completed output...");
+
     std::string crc_error{};
     const auto crc32_hex = OutputNaming::calculate_file_crc32_hex(output_path, &crc_error);
     if (!crc32_hex.has_value()) {
+        const std::string warning = "CRC32 suffix was not added. " + crc_error;
         notify_log(
             telemetry,
             EncodeJobLogLevel::warning,
-            "CRC32 suffix was not added. " + crc_error
+            warning
         );
-        return output_path;
+        return Crc32FinalizeResult{.output_path = output_path, .warning = warning};
     }
 
-    const std::filesystem::path crc_output_path =
+    std::string crc_target_error{};
+    const auto available_crc_output_path =
+        OutputNaming::choose_available_crc32_suffix_path(output_path, *crc32_hex, &crc_target_error);
+    if (!available_crc_output_path.has_value()) {
+        const std::string warning = "CRC32 suffix was not added for target '" +
+            path_to_utf8_string(OutputNaming::append_or_replace_crc32_suffix(output_path, *crc32_hex)) +
+            "'. " + crc_target_error;
+        notify_log(telemetry, EncodeJobLogLevel::warning, warning);
+        return Crc32FinalizeResult{.output_path = output_path, .warning = warning};
+    }
+
+    const std::filesystem::path crc_output_path = *available_crc_output_path;
+    const std::filesystem::path direct_crc_output_path =
         OutputNaming::append_or_replace_crc32_suffix(output_path, *crc32_hex);
+    if (crc_output_path.lexically_normal() != direct_crc_output_path.lexically_normal()) {
+        notify_log(
+            telemetry,
+            EncodeJobLogLevel::warning,
+            "CRC32 target filename already exists; using fallback output path '" +
+                path_to_utf8_string(crc_output_path) + "'."
+        );
+    }
     if (same_path_or_equivalent(output_path, crc_output_path)) {
         notify_log(
             telemetry,
             EncodeJobLogLevel::info,
             "CRC32 suffix already matched final output name: [" + *crc32_hex + "]."
         );
-        return output_path;
-    }
-
-    std::error_code exists_error{};
-    const bool target_exists = std::filesystem::exists(crc_output_path, exists_error);
-    if (exists_error || target_exists) {
-        notify_log(
-            telemetry,
-            EncodeJobLogLevel::warning,
-            "CRC32 suffix was not added because the target filename is unavailable: " +
-                crc_output_path.lexically_normal().string()
-        );
-        return output_path;
+        return Crc32FinalizeResult{.output_path = output_path};
     }
 
     std::error_code rename_error{};
     std::filesystem::rename(output_path, crc_output_path, rename_error);
     if (rename_error) {
+        const std::string warning =
+            "CRC32 suffix was not added because the completed output could not be renamed: " +
+            rename_error.message();
         notify_log(
             telemetry,
             EncodeJobLogLevel::warning,
-            "CRC32 suffix was not added because the completed output could not be renamed: " +
-                rename_error.message()
+            warning
         );
-        return output_path;
+        return Crc32FinalizeResult{.output_path = output_path, .warning = warning};
     }
 
     notify_log(
@@ -252,7 +280,7 @@ std::filesystem::path finalize_crc32_suffix(
         EncodeJobLogLevel::info,
         "CRC32 suffix added: [" + *crc32_hex + "]."
     );
-    return crc_output_path;
+    return Crc32FinalizeResult{.output_path = crc_output_path};
 }
 
 EncodeJobResult make_error(
@@ -272,8 +300,8 @@ EncodeJobResult make_error(
     return EncodeJobResult{
         .encode_job_summary = std::nullopt,
         .error = EncodeJobError{
-            .main_source_path = job.input.main_source_path.lexically_normal().string(),
-            .output_path = job.output.output_path.lexically_normal().string(),
+            .main_source_path = path_to_utf8_string(job.input.main_source_path),
+            .output_path = path_to_utf8_string(job.output.output_path),
             .message = message,
             .actionable_hint = actionable_hint,
             .canceled = canceled
@@ -313,7 +341,7 @@ std::string format_segment_log_message(
     const std::filesystem::path &source_path
 ) {
     return "Decoding the " + std::string(timeline::to_string(kind)) + " segment from '" +
-        source_path.lexically_normal().string() + "'.";
+        path_to_utf8_string(source_path) + "'.";
 }
 
 std::string format_encode_log_message(const EncodeJob &job) {
@@ -624,11 +652,16 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
 
         auto completed_summary = *streaming_result.summary;
         auto completed_job = job;
+        std::vector<std::string> completion_warnings{};
         if (job.output.append_crc32_suffix) {
-            completed_summary.encoded_media_summary.output_path = finalize_crc32_suffix(
+            const Crc32FinalizeResult crc_result = finalize_crc32_suffix(
                 telemetry,
                 completed_summary.encoded_media_summary.output_path
             );
+            completed_summary.encoded_media_summary.output_path = crc_result.output_path;
+            if (crc_result.warning.has_value()) {
+                completion_warnings.push_back(*crc_result.warning);
+            }
             completed_job.output.output_path = completed_summary.encoded_media_summary.output_path;
         }
 
@@ -636,7 +669,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             telemetry,
             EncodeJobLogLevel::info,
             "Encode job completed successfully. Output written to '" +
-                completed_summary.encoded_media_summary.output_path.lexically_normal().string() + "'."
+                path_to_utf8_string(completed_summary.encoded_media_summary.output_path) + "'."
         );
         notify_log(
             telemetry,
@@ -705,7 +738,8 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                     .average_output_fps =
                         completed_summary.performance_metrics.average_output_fps
                 },
-                .encoded_media_summary = completed_summary.encoded_media_summary
+                .encoded_media_summary = completed_summary.encoded_media_summary,
+                .warnings = std::move(completion_warnings)
             },
             .error = std::nullopt
         };

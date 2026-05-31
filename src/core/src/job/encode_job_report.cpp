@@ -18,11 +18,21 @@ std::string format_path_leaf(const std::filesystem::path &path) {
     }
 
     const auto leaf = path.filename();
+#if defined(_WIN32)
+    if (!leaf.empty()) {
+        const auto text = leaf.u8string();
+        return std::string(reinterpret_cast<const char *>(text.c_str()), text.size());
+    }
+
+    const auto text = path.lexically_normal().u8string();
+    return std::string(reinterpret_cast<const char *>(text.c_str()), text.size());
+#else
     if (!leaf.empty()) {
         return leaf.string();
     }
 
     return path.lexically_normal().string();
+#endif
 }
 
 std::string format_optional_path_leaf(const std::optional<std::filesystem::path> &path) {

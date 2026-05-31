@@ -55,6 +55,28 @@ void touch_file(const std::filesystem::path &path) {
     stream << "test";
 }
 
+std::filesystem::path path_from_utf8_string(const std::string_view value) {
+#if defined(_WIN32)
+    std::u8string utf8{};
+    utf8.reserve(value.size());
+    for (const unsigned char character : value) {
+        utf8.push_back(static_cast<char8_t>(character));
+    }
+    return std::filesystem::path{utf8};
+#else
+    return std::filesystem::path{std::string{value}};
+#endif
+}
+
+std::string path_to_utf8_string(const std::filesystem::path &path) {
+#if defined(_WIN32)
+    const auto text = path.u8string();
+    return std::string(reinterpret_cast<const char *>(text.c_str()), text.size());
+#else
+    return path.string();
+#endif
+}
+
 int assert_default_name_generation(const std::filesystem::path &root) {
     const auto source_directory = root / "My Show";
     const auto output_directory = root / "encodes";
@@ -739,6 +761,27 @@ int assert_crc32_suffix_helpers(const std::filesystem::path &root) {
     const auto replaced = OutputNaming::append_or_replace_crc32_suffix(appended, "CBF43926");
     if (replaced.filename().string() != "[OP] Folder - 01 x265 1920x1080 [CBF43926].mkv") {
         return fail("Existing CRC32 suffix was not replaced cleanly.");
+    }
+
+    const std::string myanmar_stem =
+        "\xE1\x80\xA1"
+        "\xE1\x80\x95"
+        "\xE1\x80\xAD"
+        "\xE1\x80\xAF"
+        "\xE1\x80\x84"
+        "\xE1\x80\xBA"
+        "\xE1\x80\xB8";
+    const auto unicode_output_path = root / "crc" / path_from_utf8_string(myanmar_stem + ".mkv");
+    const auto unicode_appended = OutputNaming::append_or_replace_crc32_suffix(unicode_output_path, "01020304");
+    if (path_to_utf8_string(unicode_appended.filename()) != myanmar_stem + " [01020304].mkv") {
+        return fail("CRC32 suffix helper did not preserve a non-ASCII filename stem.");
+    }
+
+    touch_file(appended);
+    const auto collision = OutputNaming::choose_available_crc32_suffix_path(output_path, "A1B2C3D4");
+    if (!collision.has_value() ||
+        collision->filename().string() != "[OP] Folder - 01 x265 1920x1080 Copy [A1B2C3D4].mkv") {
+        return fail("CRC32 collision did not choose a deterministic Copy fallback path.");
     }
 
     std::cout << "crc32.name=" << appended.filename().string() << '\n';
