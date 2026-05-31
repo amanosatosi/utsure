@@ -1069,6 +1069,7 @@ Completed:
   * Updated libassmod render/burn-in regressions so valid `\img` assets proceed through libassmod, while missing assets are covered by focused resolver tests.
   * Utsure does not implement `\img` rendering itself; libassmod remains responsible for rendering registered assets.
   * Fix-only review after commit `acb398decfb10e049d7157f23e84f21e77b46e97`: removed the accidental temporary libassmod checkout, tightened scanning to rendered Dialogue text, cleaned Windows/Unicode path handling in the asset decode path, converted registration failures to structured session errors with cleanup, documented the libassmod asset-provider role, and added missing/comment/extensionless-collision coverage.
+  * Tiny Unicode path follow-up: ASS `\img` asset references are now converted from UTF-8 into filesystem paths explicitly on Windows, with focused non-ASCII filename coverage.
 
 ### M30 Bundled Pyidaungsu UI font fallback and configurable app UI font
 

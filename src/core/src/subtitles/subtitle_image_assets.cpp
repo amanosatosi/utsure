@@ -60,6 +60,19 @@ std::string path_to_utf8_string(const std::filesystem::path &path) {
 #endif
 }
 
+std::filesystem::path path_from_utf8_string(const std::string_view value) {
+#if defined(_WIN32)
+    std::u8string utf8{};
+    utf8.reserve(value.size());
+    for (const unsigned char character : value) {
+        utf8.push_back(static_cast<char8_t>(character));
+    }
+    return std::filesystem::path{utf8};
+#else
+    return std::filesystem::path{std::string{value}};
+#endif
+}
+
 bool starts_img_tag_name(std::string_view value, std::size_t index) {
     if (index >= value.size() || value[index] != '\\') {
         return false;
@@ -193,7 +206,7 @@ std::optional<std::filesystem::path> resolve_asset_path(
     const std::string &name,
     std::string *error_message
 ) {
-    const std::filesystem::path reference_path{name};
+    const std::filesystem::path reference_path = path_from_utf8_string(name);
     if (!is_safe_relative_reference(reference_path)) {
         if (error_message != nullptr) {
             *error_message = "Unsafe subtitle image asset path rejected: " + name;

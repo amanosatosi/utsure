@@ -42,6 +42,19 @@ void write_text(const std::filesystem::path &path, const std::string_view text) 
     stream << text;
 }
 
+std::filesystem::path path_from_utf8_string(const std::string_view value) {
+#if defined(_WIN32)
+    std::u8string utf8{};
+    utf8.reserve(value.size());
+    for (const unsigned char character : value) {
+        utf8.push_back(static_cast<char8_t>(character));
+    }
+    return std::filesystem::path{utf8};
+#else
+    return std::filesystem::path{std::string{value}};
+#endif
+}
+
 std::string ass_with_text(const std::string_view text) {
     return std::string{
         "[Script Info]\n"
@@ -111,6 +124,32 @@ int run_resolve_decode_assertions(const std::filesystem::path &sample_png) {
         result.assets[0].stride < result.assets[0].width * 4 ||
         result.assets[0].rgba.empty()) {
         return fail("Valid subtitle img asset loaded with unexpected metadata.");
+    }
+
+    const std::string myanmar_asset_name =
+        "\xE1\x80\xA1"
+        "\xE1\x80\x95"
+        "\xE1\x80\xAD"
+        "\xE1\x80\xAF"
+        "\xE1\x80\x84"
+        "\xE1\x80\xBA"
+        "\xE1\x80\xB8"
+        ".png";
+    std::filesystem::copy_file(
+        sample_png,
+        sidecar / path_from_utf8_string(myanmar_asset_name),
+        std::filesystem::copy_options::overwrite_existing
+    );
+    const auto unicode_path = root / "unicode.ass";
+    write_text(unicode_path, ass_with_text("{\\img(" + myanmar_asset_name + ")}Unicode"));
+    const auto unicode_result = utsure::core::subtitles::load_subtitle_image_assets(unicode_path);
+    if (!unicode_result.succeeded()) {
+        return fail("Non-ASCII subtitle img asset did not load: " + unicode_result.error->message);
+    }
+    if (unicode_result.assets.size() != 1U ||
+        unicode_result.assets[0].name != myanmar_asset_name ||
+        unicode_result.assets[0].source_path.filename() != path_from_utf8_string(myanmar_asset_name)) {
+        return fail("Non-ASCII subtitle img asset was not resolved as UTF-8.");
     }
 
     const auto missing_path = root / "missing.ass";
