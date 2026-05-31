@@ -29,6 +29,7 @@ struct ResizeSourceDimensions final {
 struct ResizeOutputDimensions final {
     int width{0};
     int height{0};
+    media::Rational sample_aspect_ratio{1, 1};
 };
 
 struct ResizeCalculationResult final {

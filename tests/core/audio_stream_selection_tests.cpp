@@ -18,7 +18,8 @@ utsure::core::media::AudioStreamInfo make_stream(
     const int stream_index,
     std::optional<std::string> language,
     std::optional<std::string> title,
-    const bool default_disposition
+    const bool default_disposition,
+    const bool decoder_available = true
 ) {
     return utsure::core::media::AudioStreamInfo{
         .stream_index = stream_index,
@@ -28,7 +29,7 @@ utsure::core::media::AudioStreamInfo make_stream(
         .language_tag = std::move(language),
         .title = std::move(title),
         .disposition_default = default_disposition,
-        .decoder_available = true
+        .decoder_available = decoder_available
     };
 }
 
@@ -43,6 +44,15 @@ int run_audio_selection_assertions() {
     const auto japanese_selected = select_preferred_audio_stream_index(japanese_plus_default_english);
     if (!japanese_selected.has_value() || *japanese_selected != 2) {
         return fail("Japanese audio was not selected ahead of default English audio.");
+    }
+
+    const std::vector jp_language_tag{
+        make_stream(1, std::optional<std::string>{"eng"}, std::optional<std::string>{"English"}, true),
+        make_stream(2, std::optional<std::string>{"jp"}, std::optional<std::string>{"JPN Audio"}, false)
+    };
+    const auto jp_selected = select_preferred_audio_stream_index(jp_language_tag);
+    if (!jp_selected.has_value() || *jp_selected != 2) {
+        return fail("jp language tag was not recognized as Japanese.");
     }
 
     const std::vector default_no_japanese{
@@ -63,9 +73,37 @@ int run_audio_selection_assertions() {
         return fail("First usable audio stream was not selected as fallback.");
     }
 
-    const auto japanese_title = make_stream(5, std::nullopt, std::optional<std::string>{"日本語"}, false);
-    if (!audio_stream_has_explicit_japanese_metadata(japanese_title)) {
-        return fail("Japanese title metadata was not recognized.");
+    const auto japanese_audio_title =
+        make_stream(5, std::nullopt, std::optional<std::string>{"Japanese Audio"}, false);
+    if (!audio_stream_has_explicit_japanese_metadata(japanese_audio_title)) {
+        return fail("Japanese Audio title metadata was not recognized.");
+    }
+
+    const auto jpn_audio_title =
+        make_stream(6, std::nullopt, std::optional<std::string>{"JPN Audio"}, false);
+    if (!audio_stream_has_explicit_japanese_metadata(jpn_audio_title)) {
+        return fail("JPN Audio title metadata was not recognized.");
+    }
+
+    const auto japanese_commentary_title =
+        make_stream(7, std::nullopt, std::optional<std::string>{"Japanese Commentary"}, false);
+    if (!audio_stream_has_explicit_japanese_metadata(japanese_commentary_title)) {
+        return fail("Japanese Commentary title metadata was not recognized.");
+    }
+
+    const auto japanese_utf8_title =
+        make_stream(8, std::nullopt, std::optional<std::string>{"\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E Main"}, false);
+    if (!audio_stream_has_explicit_japanese_metadata(japanese_utf8_title)) {
+        return fail("UTF-8 Japanese title metadata was not recognized.");
+    }
+
+    const std::vector undecodable_default_then_decodable{
+        make_stream(1, std::optional<std::string>{"jpn"}, std::optional<std::string>{"Japanese"}, true, false),
+        make_stream(2, std::optional<std::string>{"eng"}, std::optional<std::string>{"English"}, false)
+    };
+    const auto decodable_selected = select_preferred_audio_stream_index(undecodable_default_then_decodable);
+    if (!decodable_selected.has_value() || *decodable_selected != 2) {
+        return fail("Default auto-selection should prefer decodable tracks for normal encode paths.");
     }
 
     std::cout << "audio.selection=ok\n";

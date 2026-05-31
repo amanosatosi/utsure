@@ -35,7 +35,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M28 Toshi mode and duplicate encode entries implemented; awaiting GitHub Actions validation.
 - [x] M29 libassmod `\img` asset registration implemented; awaiting GitHub Actions validation.
 - [x] M30 Bundled Pyidaungsu UI font fallback and configurable app UI font implemented; awaiting GitHub Actions validation.
-- [x] M30 Encoding profiles, resize presets, and audio track selection implemented; awaiting GitHub Actions validation.
+- [x] M31 Encoding profiles, resize presets, and audio track selection implemented; awaiting GitHub Actions validation.
 
 ## Active assumptions
 
@@ -1093,7 +1093,7 @@ Completed:
   * Added focused app tests for settings round-trip/fallback and a headless UI font smoke path that assigns the Myanmar sample text to basic Qt widgets using the resolved font path.
   * Subtitle rendering fonts remain out of scope for this task.
 
-### M30 Encoding profiles, resize presets, and audio track selection
+### M31 Encoding profiles, resize presets, and audio track selection
 
 Status: Implemented; awaiting GitHub Actions validation
 
@@ -1110,7 +1110,8 @@ Completed:
   * Threaded selected audio stream indexes and resize settings into encode jobs so the pipeline uses the chosen source audio track and final output dimensions.
   * Updated the audio track UI to list inspected source tracks, default to Japanese when detected, preserve manual choices until the source changes, and keep profile application from replacing manual source-track selection.
   * Added focused settings/profile and resize regression tests; GitHub Actions remains the compile/test validation source.
+  * Fix-only follow-up after commit `476b08fa6c35e8bb34e19851c804612f77db9cbf`: CTest now points resize/audio-selection tests at explicit target files, this milestone is numbered M31 to keep Pyidaungsu as M30, Japanese audio metadata matching accepts common language/title variants, duplicate entries preserve manual audio selection state, Source resize preserves dimensions/SAR, and target-height resize documents the intentional output-metadata handoff used by the streaming/subtitle canvas path.
 
 ## Immediate next milestone
 
-Re-run GitHub Actions for M27/M28/M29/M30 validation, then resume pending M24/M25 external validation work.
+Re-run GitHub Actions for M27/M28/M29/M30/M31 validation, then resume pending M24/M25 external validation work.

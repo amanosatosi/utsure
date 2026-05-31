@@ -29,7 +29,11 @@ constexpr int kMaximumEncoderDimension = 8192;
     return rounded;
 }
 
-[[nodiscard]] std::optional<ResizeOutputDimensions> validate_dimensions(const int width, const int height) noexcept {
+[[nodiscard]] std::optional<ResizeOutputDimensions> validate_dimensions(
+    const int width,
+    const int height,
+    const media::Rational sample_aspect_ratio = media::Rational{1, 1}
+) noexcept {
     if (width <= 0 || height <= 0) {
         return std::nullopt;
     }
@@ -38,8 +42,9 @@ constexpr int kMaximumEncoderDimension = 8192;
     }
 
     return ResizeOutputDimensions{
-        .width = width - (width % 2),
-        .height = height - (height % 2)
+        .width = width,
+        .height = height,
+        .sample_aspect_ratio = sample_aspect_ratio
     };
 }
 
@@ -49,7 +54,7 @@ ResizeCalculationResult calculate_resize_dimensions(
     const ResizeSourceDimensions &source,
     const EncodeResizeSettings &settings
 ) noexcept {
-    const auto source_dimensions = validate_dimensions(source.width, source.height);
+    const auto source_dimensions = validate_dimensions(source.width, source.height, source.sample_aspect_ratio);
     if (!source_dimensions.has_value()) {
         return ResizeCalculationResult{
             .dimensions = std::nullopt,
@@ -100,7 +105,7 @@ ResizeCalculationResult calculate_resize_dimensions(
         static_cast<double>(target_height) * display_aspect_width / static_cast<double>(source.height);
     const int target_width = round_to_even(target_width_value);
 
-    const auto target_dimensions = validate_dimensions(target_width, target_height);
+    const auto target_dimensions = validate_dimensions(target_width, target_height, media::Rational{1, 1});
     if (!target_dimensions.has_value()) {
         return ResizeCalculationResult{
             .dimensions = std::nullopt,

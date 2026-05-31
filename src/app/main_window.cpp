@@ -2715,7 +2715,9 @@ void MainWindow::duplicate_job(const int source_index) {
             .video_preset = original_job.video_preset,
             .video_crf = original_job.video_crf,
             .audio_mode = original_job.audio_mode,
-            .audio_bitrate_kbps = original_job.audio_bitrate_kbps
+            .audio_bitrate_kbps = original_job.audio_bitrate_kbps,
+            .selected_audio_stream_index = original_job.selected_audio_stream_index,
+            .audio_track_manual_override = original_job.audio_track_manual_override
         },
         .automatic_output_request = automatic_output_request,
         .naming_template = app_settings_.output_naming,
@@ -2739,6 +2741,8 @@ void MainWindow::duplicate_job(const int source_index) {
     duplicate_entry.video_crf = duplicate_state.video_crf;
     duplicate_entry.audio_mode = duplicate_state.audio_mode;
     duplicate_entry.audio_bitrate_kbps = duplicate_state.audio_bitrate_kbps;
+    duplicate_entry.selected_audio_stream_index = duplicate_state.selected_audio_stream_index;
+    duplicate_entry.audio_track_manual_override = duplicate_state.audio_track_manual_override;
 
     if (!duplicate_result.diagnostic.trimmed().isEmpty()) {
         append_session_log(QString("[warning] %1").arg(duplicate_result.diagnostic.trimmed()));

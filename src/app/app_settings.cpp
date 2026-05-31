@@ -408,9 +408,6 @@ AppSettings AppSettings::defaults() {
     settings.version = kCurrentVersion;
     settings.output_naming = utsure::core::job::OutputNaming::default_template();
     settings.encoding_profiles = default_encoding_profiles();
-    if (!settings.encoding_profiles.empty()) {
-        settings.last_used_profile = settings.encoding_profiles.front().name;
-    }
     return settings;
 }
 
@@ -476,9 +473,7 @@ AppSettings::LoadResult AppSettings::load(const QString &config_path) {
             }
         );
         if (matching_profile == result.settings.encoding_profiles.end()) {
-            result.settings.last_used_profile = result.settings.encoding_profiles.empty()
-                ? fallback.last_used_profile
-                : result.settings.encoding_profiles.front().name;
+            result.settings.last_used_profile.clear();
         }
     }
     result.settings.sequence_counters = sequence_counters_from_json(root.value("sequenceCounters").toObject());

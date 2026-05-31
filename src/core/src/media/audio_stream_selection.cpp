@@ -61,7 +61,10 @@ std::string normalize_title_metadata(std::string value) {
     normalized.reserve(value.size());
     bool previous_was_space = false;
     for (const unsigned char character : value) {
-        const bool separator = std::isspace(character) != 0 || character == '_' || character == '-';
+        const bool separator = std::isspace(character) != 0 ||
+            std::ispunct(character) != 0 ||
+            character == '_' ||
+            character == '-';
         if (separator) {
             if (!previous_was_space && !normalized.empty()) {
                 normalized.push_back(' ');
@@ -83,15 +86,31 @@ std::string normalize_title_metadata(std::string value) {
 
 bool normalized_language_is_japanese(const std::string &language_tag) {
     return language_tag == "ja" ||
+        language_tag == "jp" ||
         language_tag == "jpn" ||
         language_tag == "japanese";
 }
 
+bool normalized_text_contains_word(const std::string &text, const std::string_view word) {
+    std::size_t offset = 0;
+    while ((offset = text.find(word, offset)) != std::string::npos) {
+        const bool left_boundary = offset == 0 || text[offset - 1] == ' ';
+        const std::size_t right_index = offset + word.size();
+        const bool right_boundary = right_index >= text.size() || text[right_index] == ' ';
+        if (left_boundary && right_boundary) {
+            return true;
+        }
+        offset = right_index;
+    }
+    return false;
+}
+
 bool normalized_title_is_japanese(const std::string &title) {
-    return title == "ja" ||
-        title == "jpn" ||
-        title == "japanese" ||
-        title == "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E";
+    return normalized_text_contains_word(title, "ja") ||
+        normalized_text_contains_word(title, "jp") ||
+        normalized_text_contains_word(title, "jpn") ||
+        normalized_text_contains_word(title, "japanese") ||
+        title.find("\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E") != std::string::npos;
 }
 
 std::vector<const AudioStreamInfo *> decodable_audio_streams_by_index(

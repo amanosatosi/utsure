@@ -6,6 +6,7 @@
 
 #include <QString>
 
+#include <optional>
 #include <string>
 
 struct DuplicateEncodeEntryState final {
@@ -23,6 +24,8 @@ struct DuplicateEncodeEntryState final {
     int video_crf{22};
     utsure::core::media::AudioOutputMode audio_mode{utsure::core::media::AudioOutputMode::encode_aac};
     int audio_bitrate_kbps{192};
+    std::optional<int> selected_audio_stream_index{};
+    bool audio_track_manual_override{false};
 };
 
 struct DuplicateEncodeEntryRequest final {

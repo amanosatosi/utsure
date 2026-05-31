@@ -860,7 +860,7 @@ utsure_enable_warnings(utsure_core_resize_tests)
 
 add_test(
     NAME utsure.core.job.resize
-    COMMAND utsure_core_resize_tests
+    COMMAND $<TARGET_FILE:utsure_core_resize_tests>
 )
 
 add_executable(utsure_core_audio_stream_selection_tests
@@ -878,7 +878,7 @@ utsure_enable_warnings(utsure_core_audio_stream_selection_tests)
 
 add_test(
     NAME utsure.core.media.audio_stream_selection
-    COMMAND utsure_core_audio_stream_selection_tests
+    COMMAND $<TARGET_FILE:utsure_core_audio_stream_selection_tests>
 )
 
 add_executable(utsure_core_source_import_paths_tests

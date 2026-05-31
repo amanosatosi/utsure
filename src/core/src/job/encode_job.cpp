@@ -358,10 +358,34 @@ std::optional<EncodeJobResult> apply_selected_main_audio_stream(
     );
 
     if (audio_stream == main_segment.inspected_source_info.audio_streams.end() || !audio_stream->decoder_available) {
+        if (audio_stream != main_segment.inspected_source_info.audio_streams.end() &&
+            !audio_stream->decoder_available &&
+            job.output.audio.mode == media::AudioOutputMode::copy_source) {
+            const auto resolved_audio = media::resolve_audio_output_plan(media::AudioOutputResolveRequest{
+                .output_path = job.output.output_path,
+                .settings = job.output.audio,
+                .segment_count = timeline_plan.segments.size(),
+                .main_source_trimmed = main_segment.has_source_trim(),
+                .main_source_audio_stream = &*audio_stream
+            });
+            if (resolved_audio.resolved_mode == media::ResolvedAudioOutputMode::copy_source) {
+                main_segment.inspected_source_info.selected_audio_stream_index = audio_stream->stream_index;
+                main_segment.inspected_source_info.primary_audio_stream = *audio_stream;
+                timeline_plan.output_audio_stream = *audio_stream;
+                notify_log(
+                    telemetry,
+                    EncodeJobLogLevel::info,
+                    "Using selected source audio stream index " + std::to_string(audio_stream->stream_index) +
+                        " for stream copy without opening an audio decoder."
+                );
+                return std::nullopt;
+            }
+        }
+
         return make_error(
             job,
-            "The selected source audio track is no longer available.",
-            "Reopen the source, choose an available audio track, and queue the job again.",
+            "The selected source audio track is not usable for this encode.",
+            "Choose a decodable audio track, or choose Copy source only when the selected track can be safely copied.",
             &telemetry
         );
     }
@@ -421,6 +445,12 @@ std::optional<EncodeJobResult> apply_output_resize_settings(
     }
 
     const auto dimensions = *resize_result.dimensions;
+    if (job.output.resize.mode == EncodeResizeMode::source) {
+        normalization_policy.video_max_width = 0;
+        normalization_policy.video_max_height = 0;
+        return std::nullopt;
+    }
+
     if (dimensions.width != video_stream.width || dimensions.height != video_stream.height) {
         notify_log(
             telemetry,
@@ -430,9 +460,12 @@ std::optional<EncodeJobResult> apply_output_resize_settings(
         );
     }
 
+    // The streaming pipeline currently derives encoder and subtitle canvas dimensions
+    // from the main segment's inspected stream. For target resize, this becomes the
+    // planned output stream shape; Source/no-resize above leaves source metadata intact.
     video_stream.width = dimensions.width;
     video_stream.height = dimensions.height;
-    video_stream.sample_aspect_ratio = media::Rational{1, 1};
+    video_stream.sample_aspect_ratio = dimensions.sample_aspect_ratio;
     normalization_policy.video_max_width = dimensions.width;
     normalization_policy.video_max_height = dimensions.height;
     return std::nullopt;

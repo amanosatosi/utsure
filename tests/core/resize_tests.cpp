@@ -22,6 +22,17 @@ bool expect_dimensions(
         result.dimensions->height == expected_height;
 }
 
+bool expect_sar(
+    const utsure::core::job::ResizeSourceDimensions &source,
+    const utsure::core::job::EncodeResizeSettings &settings,
+    const utsure::core::media::Rational expected_sar
+) {
+    const auto result = utsure::core::job::calculate_resize_dimensions(source, settings);
+    return result.succeeded() &&
+        result.dimensions->sample_aspect_ratio.numerator == expected_sar.numerator &&
+        result.dimensions->sample_aspect_ratio.denominator == expected_sar.denominator;
+}
+
 int run_resize_assertions() {
     using utsure::core::job::EncodeResizeMode;
     using utsure::core::job::EncodeResizeSettings;
@@ -78,8 +89,31 @@ int run_resize_assertions() {
         .height = 1079,
         .sample_aspect_ratio = Rational{1, 1}
     };
-    if (!expect_dimensions(odd_source, EncodeResizeSettings{}, 1918, 1078)) {
-        return fail("Source/no-resize did not round odd dimensions to encoder-safe even values.");
+    if (!expect_dimensions(odd_source, EncodeResizeSettings{}, 1919, 1079)) {
+        return fail("Source/no-resize did not preserve source dimensions.");
+    }
+
+    const ResizeSourceDimensions anamorphic_source{
+        .width = 720,
+        .height = 480,
+        .sample_aspect_ratio = Rational{32, 27}
+    };
+    if (!expect_dimensions(anamorphic_source, EncodeResizeSettings{}, 720, 480) ||
+        !expect_sar(anamorphic_source, EncodeResizeSettings{}, Rational{32, 27})) {
+        return fail("Source/no-resize did not preserve non-square sample aspect ratio.");
+    }
+    if (!expect_dimensions(
+            anamorphic_source,
+            EncodeResizeSettings{.mode = EncodeResizeMode::target_height, .target_height = 240},
+            428,
+            240
+        ) ||
+        !expect_sar(
+            anamorphic_source,
+            EncodeResizeSettings{.mode = EncodeResizeMode::target_height, .target_height = 240},
+            Rational{1, 1}
+        )) {
+        return fail("Target-height resize did not produce square-pixel dimensions from display aspect ratio.");
     }
 
     const auto invalid = utsure::core::job::calculate_resize_dimensions(

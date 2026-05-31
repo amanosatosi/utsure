@@ -95,8 +95,9 @@ int assert_missing_config_loads_defaults(const std::filesystem::path &root) {
         result.settings.encoding_profiles.empty() ||
         result.settings.output_naming.crc32_suffix_enabled ||
         result.settings.last_used.crf != 22 ||
+        !result.settings.last_used_profile.isEmpty() ||
         result.settings.toshi_mode_enabled) {
-        return fail("Missing settings config did not return default settings.");
+        return fail("Missing settings config did not return default settings without auto-applying a profile.");
     }
 
     std::cout << "settings.missing=defaults\n";
@@ -324,7 +325,9 @@ int assert_duplicate_copies_job_choices_and_stays_independent(const std::filesys
         .video_preset = "slow",
         .video_crf = 18,
         .audio_mode = utsure::core::media::AudioOutputMode::copy_source,
-        .audio_bitrate_kbps = 256
+        .audio_bitrate_kbps = 256,
+        .selected_audio_stream_index = 2,
+        .audio_track_manual_override = true
     };
 
     const auto result = duplicate_encode_entry(DuplicateEncodeEntryRequest{
@@ -346,7 +349,9 @@ int assert_duplicate_copies_job_choices_and_stays_independent(const std::filesys
         result.duplicate.video_preset != original.video_preset ||
         result.duplicate.video_crf != original.video_crf ||
         result.duplicate.audio_mode != original.audio_mode ||
-        result.duplicate.audio_bitrate_kbps != original.audio_bitrate_kbps) {
+        result.duplicate.audio_bitrate_kbps != original.audio_bitrate_kbps ||
+        result.duplicate.selected_audio_stream_index != original.selected_audio_stream_index ||
+        !result.duplicate.audio_track_manual_override) {
         return fail("Duplicate did not copy source, subtitle, and encode settings.");
     }
 
