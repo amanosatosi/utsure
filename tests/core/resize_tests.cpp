@@ -33,6 +33,16 @@ bool expect_sar(
         result.dimensions->sample_aspect_ratio.denominator == expected_sar.denominator;
 }
 
+bool expect_even_dimensions(
+    const utsure::core::job::ResizeSourceDimensions &source,
+    const utsure::core::job::EncodeResizeSettings &settings
+) {
+    const auto result = utsure::core::job::calculate_resize_dimensions(source, settings);
+    return result.succeeded() &&
+        (result.dimensions->width % 2) == 0 &&
+        (result.dimensions->height % 2) == 0;
+}
+
 int run_resize_assertions() {
     using utsure::core::job::EncodeResizeMode;
     using utsure::core::job::EncodeResizeSettings;
@@ -52,6 +62,12 @@ int run_resize_assertions() {
     }
     if (!expect_dimensions(source_16x9, EncodeResizeSettings{.mode = EncodeResizeMode::target_height, .target_height = 480}, 854, 480)) {
         return fail("1920x1080 to 480p did not resolve to an encoder-safe 854x480 result.");
+    }
+    if (!expect_even_dimensions(
+            source_16x9,
+            EncodeResizeSettings{.mode = EncodeResizeMode::target_height, .target_height = 541}
+        )) {
+        return fail("Odd target-height resize did not produce encoder-safe even dimensions.");
     }
 
     const ResizeSourceDimensions source_4x3{
@@ -82,6 +98,18 @@ int run_resize_assertions() {
     };
     if (!expect_dimensions(small_source, EncodeResizeSettings{.mode = EncodeResizeMode::target_height, .target_height = 720}, 640, 360)) {
         return fail("No-upscale resize did not keep a smaller source unchanged.");
+    }
+
+    const ResizeSourceDimensions odd_small_source{
+        .width = 641,
+        .height = 361,
+        .sample_aspect_ratio = Rational{1, 1}
+    };
+    if (!expect_even_dimensions(
+            odd_small_source,
+            EncodeResizeSettings{.mode = EncodeResizeMode::target_height, .target_height = 720}
+        )) {
+        return fail("No-upscale target resize returned odd encoded dimensions.");
     }
 
     const ResizeSourceDimensions odd_source{

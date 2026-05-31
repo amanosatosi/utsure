@@ -119,6 +119,10 @@ std::vector<const AudioStreamInfo *> decodable_audio_streams_by_index(
     std::vector<const AudioStreamInfo *> ordered_streams{};
     ordered_streams.reserve(audio_streams.size());
     for (const auto &audio_stream : audio_streams) {
+        // Auto-selection only chooses decodable tracks because Auto/AAC jobs need
+        // decoded audio. A user-selected Copy source job may still use a safe
+        // mux-copyable undecodable stream; encode-job validation handles that
+        // explicit manual path with container/layout checks.
         if (!audio_stream.decoder_available) {
             continue;
         }
