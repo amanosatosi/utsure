@@ -60,8 +60,14 @@ int run_resize_assertions() {
     if (!expect_dimensions(source_16x9, EncodeResizeSettings{.mode = EncodeResizeMode::target_height, .target_height = 540}, 960, 540)) {
         return fail("1920x1080 to 540p did not resolve to 960x540.");
     }
+    if (!expect_dimensions(source_16x9, EncodeResizeSettings{.mode = EncodeResizeMode::target_height, .target_height = 1080}, 1920, 1080)) {
+        return fail("1920x1080 to 1080p did not preserve the exact 1080p preset height.");
+    }
     if (!expect_dimensions(source_16x9, EncodeResizeSettings{.mode = EncodeResizeMode::target_height, .target_height = 480}, 854, 480)) {
         return fail("1920x1080 to 480p did not resolve to an encoder-safe 854x480 result.");
+    }
+    if (!expect_dimensions(source_16x9, EncodeResizeSettings{.mode = EncodeResizeMode::target_height, .target_height = 541}, 960, 540)) {
+        return fail("Custom odd target height 541 did not round down to 540.");
     }
     if (!expect_even_dimensions(
             source_16x9,

@@ -115,7 +115,7 @@ ResizeCalculationResult calculate_resize_dimensions(
 
     const int requested_target_height = !settings.allow_upscale && source.height <= settings.target_height
         ? floor_to_even(source.height)
-        : round_to_even(static_cast<double>(settings.target_height));
+        : floor_to_even(settings.target_height);
     const int target_height = requested_target_height;
     if (target_height <= 0 || target_height > kMaximumEncoderDimension) {
         return ResizeCalculationResult{

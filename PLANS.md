@@ -1112,6 +1112,7 @@ Completed:
   * Added focused settings/profile and resize regression tests; GitHub Actions remains the compile/test validation source.
   * Fix-only follow-up after commit `476b08fa6c35e8bb34e19851c804612f77db9cbf`: CTest now points resize/audio-selection tests at explicit target files, this milestone is numbered M31 to keep Pyidaungsu as M30, Japanese audio metadata matching accepts common language/title variants, duplicate entries preserve manual audio selection state, Source resize preserves dimensions/SAR, and target-height resize documents the intentional output-metadata handoff used by the streaming/subtitle canvas path.
   * Tiny follow-up after commit `c38526caa5b62968a070f3a1e26b2bd684da1621`: Source/no-resize keeps exact source dimensions and SAR, while target-height resize uses a separate encoded-output validation path that guarantees even dimensions; audio auto-selection remains decodable-track-first, with safe undecodable Copy source tracks available only through explicit manual selection.
+  * Resize policy cleanup: 540p remains exact half-height 1080p output (`960x540` for 16:9), and odd custom target heights now round down to the nearest even encoder-safe height instead of exceeding the requested maximum.
 
 ## Immediate next milestone
 
