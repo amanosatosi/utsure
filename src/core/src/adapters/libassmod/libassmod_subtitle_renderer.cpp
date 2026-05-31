@@ -1163,10 +1163,19 @@ public:
             auto quirk_messages = image_asset_result.references.empty()
                 ? std::vector<std::string>{}
                 : std::move(image_asset_result.diagnostics);
-            const auto registration_diagnostics = register_subtitle_image_assets(
-                *renderer,
-                image_asset_result.assets
-            );
+            std::vector<std::string> registration_diagnostics{};
+            try {
+                registration_diagnostics = register_subtitle_image_assets(
+                    *renderer,
+                    image_asset_result.assets
+                );
+            } catch (const std::exception &exception) {
+                return make_session_error(
+                    request,
+                    "Failed to register subtitle image assets with libassmod.",
+                    exception.what()
+                );
+            }
             quirk_messages.insert(
                 quirk_messages.end(),
                 registration_diagnostics.begin(),

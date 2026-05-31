@@ -676,7 +676,7 @@ int run_empty_bitmap_render_assertion(const std::filesystem::path &subtitle_path
     return 0;
 }
 
-int run_unsupported_img_render_assertion(const std::filesystem::path &subtitle_path) {
+int run_img_asset_render_assertion(const std::filesystem::path &subtitle_path) {
     auto subtitle_renderer = create_default_subtitle_renderer();
     if (!subtitle_renderer) {
         return fail("The default subtitle renderer could not be created.");
@@ -692,7 +692,12 @@ int run_unsupported_img_render_assertion(const std::filesystem::path &subtitle_p
 
     auto session_result = subtitle_renderer->create_session(session_request);
     if (!session_result.succeeded()) {
-        return fail("The best-effort libassmod img subtitle sample unexpectedly failed session creation.");
+        return fail(
+            "The libassmod img subtitle sample unexpectedly failed session creation: " +
+            session_result.error->message +
+            " Hint: " +
+            session_result.error->actionable_hint
+        );
     }
 
     std::vector<std::string> diagnostics{};
@@ -722,15 +727,14 @@ int run_unsupported_img_render_assertion(const std::filesystem::path &subtitle_p
         return fail(error_message);
     }
 
-    if (!string_messages_contain_text(diagnostics, "Reduced-fidelity fallback applied; subtitle rendering continues") ||
-        !string_messages_contain_text(diagnostics, "\\img") ||
-        !string_messages_contain_text(diagnostics, "unsupported effect details may be skipped")) {
-        return fail("The best-effort libassmod img subtitle sample did not log the expected quirk diagnostics.");
+    if (!string_messages_contain_text(diagnostics, "Subtitle image asset references detected: 1") ||
+        !string_messages_contain_text(diagnostics, "Subtitle image asset registered: thumbnail.png")) {
+        return fail("The libassmod img subtitle sample did not log the expected asset registration diagnostics.");
     }
 
     std::cout << "session.subtitle_path=" << format_path_leaf(subtitle_path) << '\n';
     std::cout << "session.created=yes\n";
-    std::cout << "quirk.diagnostic_logged=yes\n";
+    std::cout << "img_asset.registered=yes\n";
     std::cout << "render.succeeded=yes\n";
     std::cout << "render.bitmap_count=" << render_result.rendered_frame->bitmaps.size() << '\n';
     return 0;
@@ -934,7 +938,7 @@ int run_empty_bitmap_burn_in_assertion(
     return 0;
 }
 
-int run_best_effort_img_burn_in_assertion(
+int run_img_asset_burn_in_assertion(
     const std::filesystem::path &sample_path,
     const std::filesystem::path &subtitle_path,
     const std::filesystem::path &plain_output_path,
@@ -983,18 +987,17 @@ int run_best_effort_img_burn_in_assertion(
         .observer = &observer
     });
     if (!burned_job_result.succeeded()) {
-        return fail("The best-effort img subtitle burn-in job failed unexpectedly.");
+        return fail("The img asset subtitle burn-in job failed unexpectedly.");
     }
 
     const auto &summary = *burned_job_result.encode_job_summary;
     if (summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
-        return fail("The best-effort img subtitle burn-in job should report non-zero subtitle composition time.");
+        return fail("The img asset subtitle burn-in job should report non-zero subtitle composition time.");
     }
 
-    if (!observer_logs_contain_text(observer, "Reduced-fidelity fallback applied; subtitle rendering continues") ||
-        !observer_logs_contain_text(observer, "\\img") ||
-        !observer_logs_contain_text(observer, "unsupported effect details may be skipped")) {
-        return fail("The best-effort img subtitle burn-in job did not log the expected quirk diagnostics.");
+    if (!observer_logs_contain_text(observer, "Subtitle image asset references detected: 1") ||
+        !observer_logs_contain_text(observer, "Subtitle image asset registered: thumbnail.png")) {
+        return fail("The img asset subtitle burn-in job did not log the expected asset registration diagnostics.");
     }
 
     const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);
@@ -1028,9 +1031,9 @@ int run_best_effort_img_burn_in_assertion(
         *plain_output_decode.decoded_media_source,
         *burned_output_decode.decoded_media_source
     ) << '\n';
-    std::cout << "quirk.diagnostic_logged=yes\n";
-    std::cout << "best_effort.encode_succeeded=yes\n";
-    std::cout << "best_effort.frame0.changed="
+    std::cout << "img_asset.registered=yes\n";
+    std::cout << "img_asset.encode_succeeded=yes\n";
+    std::cout << "img_asset.frame0.changed="
               << (frames_are_identical(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U)
                     ? "no"
                     : "yes")
@@ -1606,11 +1609,11 @@ int main(int argc, char *argv[]) {
         return fail(
             "Usage: utsure_core_subtitle_burn_in_tests "
             "[--render <subtitle>|--render-gradient <subtitle>|--render-empty-effect <subtitle>|"
-            "--render-unsupported-img <subtitle>|--render-bs4 <subtitle>|--render-bs4-gradient <subtitle>|"
+            "--render-img-asset <subtitle>|--render-bs4 <subtitle>|--render-bs4-gradient <subtitle>|"
             "--render-bs4-forced-rgba <subtitle>|"
             "--h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--empty-bitmap-h264 <input> <subtitle> <plain-output> <burned-output>|"
-            "--best-effort-img-h264 <input> <subtitle> <plain-output> <burned-output>|"
+            "--img-asset-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--schedule-h264 <input> <subtitle> <burned-output>|"
             "--h265 <input> <subtitle> <plain-output> <burned-output>|"
             "--trimmed-h264 <input> <subtitle> <plain-output> <burned-output>|"
@@ -1652,8 +1655,8 @@ int main(int argc, char *argv[]) {
         return run_empty_bitmap_render_assertion(std::filesystem::path(argv[2]));
     }
 
-    if (mode == "--render-unsupported-img" && argc == 3) {
-        return run_unsupported_img_render_assertion(std::filesystem::path(argv[2]));
+    if (mode == "--render-img-asset" && argc == 3) {
+        return run_img_asset_render_assertion(std::filesystem::path(argv[2]));
     }
 
     if (mode == "--h264" && argc == 6) {
@@ -1675,8 +1678,8 @@ int main(int argc, char *argv[]) {
         );
     }
 
-    if (mode == "--best-effort-img-h264" && argc == 6) {
-        return run_best_effort_img_burn_in_assertion(
+    if (mode == "--img-asset-h264" && argc == 6) {
+        return run_img_asset_burn_in_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3]),
             std::filesystem::path(argv[4]),

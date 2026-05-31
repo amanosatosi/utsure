@@ -33,7 +33,8 @@ This file is the living execution plan for the repository. Update it when a mile
 - [ ] M25 Thumbnail pre-roll implemented; awaiting CI validation.
 - [x] M27 JSON settings and reliable output naming implemented; awaiting GitHub Actions revalidation after CI follow-up fixes.
 - [x] M28 Toshi mode and duplicate encode entries implemented; awaiting GitHub Actions validation.
-- [x] M29 Bundled Pyidaungsu UI font fallback and configurable app UI font implemented; awaiting GitHub Actions validation.
+- [x] M29 libassmod `\img` asset registration implemented; awaiting GitHub Actions validation.
+- [x] M30 Bundled Pyidaungsu UI font fallback and configurable app UI font implemented; awaiting GitHub Actions validation.
 
 ## Active assumptions
 
@@ -1050,7 +1051,25 @@ Completed:
   * Fixed the Settings dialog output naming order UI so token rows are now drag-and-drop reorderable, while the existing up/down buttons, reset behavior, checkbox state, and JSON serialization continue to use the actual list order.
   * Fixed completed-job metrics so successful encodes finish with average EFPS and average speed computed from total frames/duration over actual encode elapsed time, plus a final summary log line with frames, elapsed time, average EFPS, and average speed when available.
 
-### M29 Bundled Pyidaungsu UI font fallback and configurable app UI font
+### M29 libassmod `\img` asset registration
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Resolve, decode, and register libassmod `\img` image assets before subtitle rendering starts.
+  * Keep libassmod responsible for parsing and rendering `\img`; Utsure only acts as the host-side asset provider.
+  * Support PNG, JPEG, and WebP assets decoded through the existing FFmpeg media path into RGBA8 buffers.
+  * Resolve relative asset names beside the `.ass` file and in simple `assets`, `images`, and `img` sidecar directories, without recursive project scans.
+  * Fail missing, unsafe, unsupported, or invalid assets clearly during subtitle session setup/preflight when detectable.
+
+Completed:
+  * Added reusable core subtitle image asset scanning, resolution, decoding, validation, and diagnostics.
+  * Registered decoded RGBA assets once per libassmod render session through the pinned `ass_set_tag_image_rgba()` API and kept `ass_clear_tag_images()` cleanup in the session lifetime path.
+  * Rejected unsafe path traversal and unsupported formats, and kept normal ASS files without `\img` on the existing render path.
+  * Updated libassmod render/burn-in regressions so valid `\img` assets proceed through libassmod, while missing assets are covered by focused resolver tests.
+  * Utsure does not implement `\img` rendering itself; libassmod remains responsible for rendering registered assets.
+
+### M30 Bundled Pyidaungsu UI font fallback and configurable app UI font
 
 Status: Implemented; awaiting GitHub Actions validation
 
@@ -1071,4 +1090,4 @@ Completed:
 
 ## Immediate next milestone
 
-Re-run GitHub Actions for M27/M28/M29 validation, then resume pending M24/M25 external validation work.
+Re-run GitHub Actions for M27/M28/M29/M30 validation, then resume pending M24/M25 external validation work.

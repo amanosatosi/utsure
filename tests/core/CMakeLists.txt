@@ -1258,8 +1258,8 @@ add_test(
 )
 
 add_test(
-    NAME utsure.core.subtitles.libassmod.render.img_best_effort
-    COMMAND utsure_core_subtitle_burn_in_tests --render-unsupported-img "${UTSURE_SUBTITLE_IMG_SAMPLE_FILE}"
+    NAME utsure.core.subtitles.libassmod.render.img_asset
+    COMMAND utsure_core_subtitle_burn_in_tests --render-img-asset "${UTSURE_SUBTITLE_IMG_SAMPLE_FILE}"
 )
 
 add_test(
@@ -1295,16 +1295,16 @@ add_test(
 utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.empty_bitmap_effect.h264)
 
 add_test(
-    NAME utsure.core.subtitles.burn_in.img_best_effort.h264
+    NAME utsure.core.subtitles.burn_in.img_asset.h264
     COMMAND "${CMAKE_COMMAND}" -E env
         UTSURE_SUBTITLE_DIAGNOSTICS=verbose
-        utsure_core_subtitle_burn_in_tests --best-effort-img-h264
+        utsure_core_subtitle_burn_in_tests --img-asset-h264
             "${UTSURE_SAMPLE_MEDIA_FILE}"
             "${UTSURE_SUBTITLE_IMG_SAMPLE_FILE}"
-            "${UTSURE_TEST_MEDIA_DIR}/subtitle-img-best-effort-plain-h264.mp4"
-            "${UTSURE_TEST_MEDIA_DIR}/subtitle-img-best-effort-burn-h264.mp4"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-img-asset-plain-h264.mp4"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-img-asset-burn-h264.mp4"
 )
-utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.img_best_effort.h264)
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.img_asset.h264)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.schedule.transform.h264

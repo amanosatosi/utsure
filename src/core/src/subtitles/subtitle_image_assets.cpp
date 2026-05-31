@@ -72,7 +72,6 @@ std::size_t img_args_start(std::string_view value, std::size_t index) {
 
 std::optional<std::string> extract_img_path_argument(std::string_view args) {
     args = std::string_view(args.data(), args.find(')') == std::string_view::npos ? args.size() : args.find(')'));
-    args = std::string_view(args.data(), args.find('\\') == std::string_view::npos ? args.size() : args.find('\\'));
     const auto trimmed = trim_ascii(args);
     if (trimmed.empty()) {
         return std::nullopt;

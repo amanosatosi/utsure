@@ -62,11 +62,12 @@ int run_scan_assertions() {
     }
 
     const auto references = utsure::core::subtitles::find_subtitle_image_asset_references_in_text(
-        ass_with_text("{\\img(logo.png)}A {\\1img(\"assets/tile.png\", 2, 3)}B {\\img(logo.png)}C")
+        ass_with_text("{\\img(logo.png)}A {\\1img(\"assets/tile.png\", 2, 3)}B {\\2img(assets\\tile2.png)}C {\\img(logo.png)}D")
     );
-    if (references.size() != 2U ||
+    if (references.size() != 3U ||
         !contains_reference(references, "logo.png") ||
-        !contains_reference(references, "assets/tile.png")) {
+        !contains_reference(references, "assets/tile.png") ||
+        !contains_reference(references, "assets\\tile2.png")) {
         return fail("ASS img scanner did not extract and de-duplicate expected references.");
     }
 
