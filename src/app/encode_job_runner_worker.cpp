@@ -1,11 +1,12 @@
 #include "encode_job_runner_worker.hpp"
 
+#include "utsure/core/filesystem/path_format.hpp"
 #include "utsure/core/job/encode_job_report.hpp"
 
+#include <filesystem>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
-#include <filesystem>
 #include <string>
 #include <string_view>
 
@@ -21,15 +22,6 @@ QString path_to_qstring(const std::filesystem::path &path) {
     return QString::fromUtf8(reinterpret_cast<const char *>(text.c_str()), static_cast<qsizetype>(text.size()));
 #else
     return QString::fromStdString(path.lexically_normal().string());
-#endif
-}
-
-std::string path_to_utf8_string(const std::filesystem::path &path) {
-#if defined(_WIN32)
-    const auto text = path.lexically_normal().u8string();
-    return std::string(reinterpret_cast<const char *>(text.c_str()), text.size());
-#else
-    return path.lexically_normal().string();
 #endif
 }
 
@@ -55,7 +47,9 @@ QString format_error_details(const utsure::core::job::EncodeJobError &error) {
 QString format_success_details(const utsure::core::job::EncodeJobSummary &summary) {
     std::ostringstream readable_summary;
     readable_summary
-        << "Output file: " << path_to_utf8_string(summary.encoded_media_summary.output_path) << '\n'
+        << "Output file: "
+        << utsure::core::filesystem::path_to_utf8_string(summary.encoded_media_summary.output_path)
+        << '\n'
         << "Codec: " << utsure::core::media::to_string(summary.job.output.video.codec) << '\n'
         << "Preset / CRF: " << summary.job.output.video.preset << " / " << summary.job.output.video.crf << '\n'
         << "Timeline segments: " << summary.timeline_summary.segments.size() << '\n'
@@ -70,8 +64,8 @@ QString format_success_details(const utsure::core::job::EncodeJobSummary &summar
             readable_summary << "- " << warning << '\n';
         }
     }
-    readable_summary
-        << "\nDetailed report:\n"
+    readable_summary << '\n';
+    readable_summary << "Detailed report:\n"
         << utsure::core::job::format_encode_job_report(summary);
 
     return to_qstring(readable_summary.str());

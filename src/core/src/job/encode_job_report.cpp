@@ -2,6 +2,7 @@
 
 #include "../media/streaming_transcode_pipeline.hpp"
 #include "../media/transcode_threading.hpp"
+#include "utsure/core/filesystem/path_format.hpp"
 #include "utsure/core/media/decoded_media.hpp"
 
 #include <iomanip>
@@ -18,21 +19,11 @@ std::string format_path_leaf(const std::filesystem::path &path) {
     }
 
     const auto leaf = path.filename();
-#if defined(_WIN32)
     if (!leaf.empty()) {
-        const auto text = leaf.u8string();
-        return std::string(reinterpret_cast<const char *>(text.c_str()), text.size());
+        return filesystem::path_component_to_utf8_string(leaf);
     }
 
-    const auto text = path.lexically_normal().u8string();
-    return std::string(reinterpret_cast<const char *>(text.c_str()), text.size());
-#else
-    if (!leaf.empty()) {
-        return leaf.string();
-    }
-
-    return path.lexically_normal().string();
-#endif
+    return filesystem::path_to_utf8_string(path);
 }
 
 std::string format_optional_path_leaf(const std::optional<std::filesystem::path> &path) {

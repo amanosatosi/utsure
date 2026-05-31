@@ -1,5 +1,7 @@
 #include "utsure/core/job/output_naming.hpp"
 
+#include "utsure/core/filesystem/path_format.hpp"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -63,15 +65,6 @@ std::string format_crc32_hex(const std::uint32_t crc) {
     std::ostringstream stream;
     stream << std::uppercase << std::hex << std::setw(8) << std::setfill('0') << crc;
     return stream.str();
-}
-
-std::string path_component_to_utf8_string(const std::filesystem::path &path) {
-#if defined(_WIN32)
-    const auto text = path.u8string();
-    return std::string(reinterpret_cast<const char *>(text.c_str()), text.size());
-#else
-    return path.string();
-#endif
 }
 
 std::filesystem::path path_from_utf8_string(const std::string_view value) {
@@ -142,7 +135,8 @@ std::filesystem::path build_crc32_suffix_path(
     const std::string normalized_crc = uppercase_ascii(std::string(crc32_hex));
     std::filesystem::path renamed = path;
     renamed.replace_filename(path_from_utf8_string(
-        std::move(stem) + " [" + normalized_crc + "]" + path_component_to_utf8_string(path.extension())
+        std::move(stem) + " [" + normalized_crc + "]" +
+            filesystem::path_component_to_utf8_string(path.extension())
     ));
     return renamed.lexically_normal();
 }
@@ -1052,7 +1046,7 @@ std::filesystem::path OutputNaming::append_or_replace_crc32_suffix(
 ) {
     return build_crc32_suffix_path(
         path,
-        remove_trailing_crc32_tag(path_component_to_utf8_string(path.stem())),
+        remove_trailing_crc32_tag(filesystem::path_component_to_utf8_string(path.stem())),
         crc32_hex
     );
 }
@@ -1062,7 +1056,8 @@ std::optional<std::filesystem::path> OutputNaming::choose_available_crc32_suffix
     const std::string_view crc32_hex,
     std::string *error_message
 ) {
-    const std::string base_stem = remove_trailing_crc32_tag(path_component_to_utf8_string(path.stem()));
+    const std::string base_stem =
+        remove_trailing_crc32_tag(filesystem::path_component_to_utf8_string(path.stem()));
     const auto original_path = path.lexically_normal();
     bool availability_error = false;
     const auto try_candidate =

@@ -3,6 +3,7 @@
 #include "encode_job_working_set_guard.hpp"
 #include "../runtime_anomaly_policy.hpp"
 #include "../media/streaming_transcode_pipeline.hpp"
+#include "utsure/core/filesystem/path_format.hpp"
 #include "utsure/core/job/encode_job_metrics.hpp"
 #include "utsure/core/job/output_naming.hpp"
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
@@ -46,15 +47,6 @@ struct EncodeJobTelemetry final {
     int total_steps{0};
     int current_step{0};
 };
-
-std::string path_to_utf8_string(const std::filesystem::path &path) {
-#if defined(_WIN32)
-    const auto text = path.lexically_normal().u8string();
-    return std::string(reinterpret_cast<const char *>(text.c_str()), text.size());
-#else
-    return path.lexically_normal().string();
-#endif
-}
 
 int calculate_total_steps(const EncodeJob &job) {
     int total_steps = 1 + 1 + 1;
@@ -235,7 +227,7 @@ Crc32FinalizeResult finalize_crc32_suffix(
         OutputNaming::choose_available_crc32_suffix_path(output_path, *crc32_hex, &crc_target_error);
     if (!available_crc_output_path.has_value()) {
         const std::string warning = "CRC32 suffix was not added for target '" +
-            path_to_utf8_string(OutputNaming::append_or_replace_crc32_suffix(output_path, *crc32_hex)) +
+            filesystem::path_to_utf8_string(OutputNaming::append_or_replace_crc32_suffix(output_path, *crc32_hex)) +
             "'. " + crc_target_error;
         notify_log(telemetry, EncodeJobLogLevel::warning, warning);
         return Crc32FinalizeResult{.output_path = output_path, .warning = warning};
@@ -249,7 +241,7 @@ Crc32FinalizeResult finalize_crc32_suffix(
             telemetry,
             EncodeJobLogLevel::warning,
             "CRC32 target filename already exists; using fallback output path '" +
-                path_to_utf8_string(crc_output_path) + "'."
+                filesystem::path_to_utf8_string(crc_output_path) + "'."
         );
     }
     if (same_path_or_equivalent(output_path, crc_output_path)) {
@@ -265,8 +257,9 @@ Crc32FinalizeResult finalize_crc32_suffix(
     std::filesystem::rename(output_path, crc_output_path, rename_error);
     if (rename_error) {
         const std::string warning =
-            "CRC32 suffix was not added because the completed output could not be renamed: " +
-            rename_error.message();
+            "CRC32 suffix was not added because the completed output could not be renamed from '" +
+            filesystem::path_to_utf8_string(output_path) + "' to '" +
+            filesystem::path_to_utf8_string(crc_output_path) + "': " + rename_error.message();
         notify_log(
             telemetry,
             EncodeJobLogLevel::warning,
@@ -300,8 +293,8 @@ EncodeJobResult make_error(
     return EncodeJobResult{
         .encode_job_summary = std::nullopt,
         .error = EncodeJobError{
-            .main_source_path = path_to_utf8_string(job.input.main_source_path),
-            .output_path = path_to_utf8_string(job.output.output_path),
+            .main_source_path = filesystem::path_to_utf8_string(job.input.main_source_path),
+            .output_path = filesystem::path_to_utf8_string(job.output.output_path),
             .message = message,
             .actionable_hint = actionable_hint,
             .canceled = canceled
@@ -341,7 +334,7 @@ std::string format_segment_log_message(
     const std::filesystem::path &source_path
 ) {
     return "Decoding the " + std::string(timeline::to_string(kind)) + " segment from '" +
-        path_to_utf8_string(source_path) + "'.";
+        filesystem::path_to_utf8_string(source_path) + "'.";
 }
 
 std::string format_encode_log_message(const EncodeJob &job) {
@@ -669,7 +662,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             telemetry,
             EncodeJobLogLevel::info,
             "Encode job completed successfully. Output written to '" +
-                path_to_utf8_string(completed_summary.encoded_media_summary.output_path) + "'."
+                filesystem::path_to_utf8_string(completed_summary.encoded_media_summary.output_path) + "'."
         );
         notify_log(
             telemetry,
