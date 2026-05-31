@@ -4,6 +4,7 @@
 #include "utsure/core/media/media_encoder.hpp"
 #include "utsure/core/media/media_info.hpp"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -30,6 +31,7 @@ struct OutputNamingTemplate final {
     bool enabled{true};
     std::string separator{" - "};
     std::vector<OutputNamingToken> tokens{};
+    bool crc32_suffix_enabled{false};
 };
 
 struct OutputNamingRequest final {
@@ -99,6 +101,15 @@ public:
     [[nodiscard]] static std::vector<OutputNamingResult> reserve_batch(const std::vector<OutputNamingRequest> &requests);
     [[nodiscard]] static std::vector<OutputNamingReservationResult> reserve_batch(
         const std::vector<OutputNamingReservationRequest> &requests
+    );
+    [[nodiscard]] static std::string crc32_hex_for_bytes(std::string_view bytes);
+    [[nodiscard]] static std::optional<std::string> calculate_file_crc32_hex(
+        const std::filesystem::path &path,
+        std::string *error_message = nullptr
+    );
+    [[nodiscard]] static std::filesystem::path append_or_replace_crc32_suffix(
+        const std::filesystem::path &path,
+        std::string_view crc32_hex
     );
 };
 

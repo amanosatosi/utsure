@@ -1050,6 +1050,7 @@ Completed:
   * Fixed the selectedText filename rendering regression so the token again renders as bracketed sanitized text such as `[OP]`, while empty selectedText is omitted and raw selectedText remains unchanged for Toshi subtitle lookup and sequence-counter keys.
   * Fixed the Settings dialog output naming order UI so token rows are now drag-and-drop reorderable, while the existing up/down buttons, reset behavior, checkbox state, and JSON serialization continue to use the actual list order.
   * Fixed completed-job metrics so successful encodes finish with average EFPS and average speed computed from total frames/duration over actual encode elapsed time, plus a final summary log line with frames, elapsed time, average EFPS, and average speed when available.
+  * Added an optional CRC32 output filename suffix setting beside the existing filename suffix controls; it is disabled by default, calculated only after successful encode, appended as `[XXXXXXXX]`, and intended for fansub-style corruption checking rather than security.
 
 ### M29 libassmod `\img` asset registration
 

@@ -152,6 +152,7 @@ QJsonObject output_naming_to_json(const utsure::core::job::OutputNamingTemplate 
     QJsonObject object;
     object.insert("enabled", settings.enabled);
     object.insert("separator", QString::fromStdString(settings.separator));
+    object.insert("crc32SuffixEnabled", settings.crc32_suffix_enabled);
 
     QJsonArray tokens;
     for (const auto &token : settings.tokens) {
@@ -177,6 +178,12 @@ utsure::core::job::OutputNamingTemplate output_naming_from_json(
     }
     if (object.contains("separator") && object.value("separator").isString()) {
         settings.separator = object.value("separator").toString().toStdString();
+    }
+    if (object.contains("crc32SuffixEnabled")) {
+        settings.crc32_suffix_enabled = object.value("crc32SuffixEnabled").toBool(fallback.crc32_suffix_enabled);
+    } else if (object.value("suffixes").isObject()) {
+        settings.crc32_suffix_enabled =
+            object.value("suffixes").toObject().value("crc32").toBool(fallback.crc32_suffix_enabled);
     }
 
     if (!object.value("tokens").isArray()) {

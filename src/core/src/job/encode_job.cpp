@@ -4,17 +4,20 @@
 #include "../runtime_anomaly_policy.hpp"
 #include "../media/streaming_transcode_pipeline.hpp"
 #include "utsure/core/job/encode_job_metrics.hpp"
+#include "utsure/core/job/output_naming.hpp"
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 #include "utsure/core/timeline/timeline.hpp"
 
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <filesystem>
 #include <iomanip>
 #include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <utility>
 
 namespace utsure::core::job {
@@ -182,6 +185,74 @@ void notify_log_safely(
         notify_log(telemetry, level, std::move(message));
     } catch (...) {
     }
+}
+
+bool same_path_or_equivalent(const std::filesystem::path &left, const std::filesystem::path &right) {
+    if (left.lexically_normal() == right.lexically_normal()) {
+        return true;
+    }
+
+    std::error_code error{};
+    const bool equivalent = std::filesystem::equivalent(left, right, error);
+    return !error && equivalent;
+}
+
+std::filesystem::path finalize_crc32_suffix(
+    EncodeJobTelemetry &telemetry,
+    const std::filesystem::path &output_path
+) {
+    std::string crc_error{};
+    const auto crc32_hex = OutputNaming::calculate_file_crc32_hex(output_path, &crc_error);
+    if (!crc32_hex.has_value()) {
+        notify_log(
+            telemetry,
+            EncodeJobLogLevel::warning,
+            "CRC32 suffix was not added. " + crc_error
+        );
+        return output_path;
+    }
+
+    const std::filesystem::path crc_output_path =
+        OutputNaming::append_or_replace_crc32_suffix(output_path, *crc32_hex);
+    if (same_path_or_equivalent(output_path, crc_output_path)) {
+        notify_log(
+            telemetry,
+            EncodeJobLogLevel::info,
+            "CRC32 suffix already matched final output name: [" + *crc32_hex + "]."
+        );
+        return output_path;
+    }
+
+    std::error_code exists_error{};
+    const bool target_exists = std::filesystem::exists(crc_output_path, exists_error);
+    if (exists_error || target_exists) {
+        notify_log(
+            telemetry,
+            EncodeJobLogLevel::warning,
+            "CRC32 suffix was not added because the target filename is unavailable: " +
+                crc_output_path.lexically_normal().string()
+        );
+        return output_path;
+    }
+
+    std::error_code rename_error{};
+    std::filesystem::rename(output_path, crc_output_path, rename_error);
+    if (rename_error) {
+        notify_log(
+            telemetry,
+            EncodeJobLogLevel::warning,
+            "CRC32 suffix was not added because the completed output could not be renamed: " +
+                rename_error.message()
+        );
+        return output_path;
+    }
+
+    notify_log(
+        telemetry,
+        EncodeJobLogLevel::info,
+        "CRC32 suffix added: [" + *crc32_hex + "]."
+    );
+    return crc_output_path;
 }
 
 EncodeJobResult make_error(
@@ -551,80 +622,90 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             );
         }
 
+        auto completed_summary = *streaming_result.summary;
+        auto completed_job = job;
+        if (job.output.append_crc32_suffix) {
+            completed_summary.encoded_media_summary.output_path = finalize_crc32_suffix(
+                telemetry,
+                completed_summary.encoded_media_summary.output_path
+            );
+            completed_job.output.output_path = completed_summary.encoded_media_summary.output_path;
+        }
+
         notify_log(
             telemetry,
             EncodeJobLogLevel::info,
             "Encode job completed successfully. Output written to '" +
-                streaming_result.summary->encoded_media_summary.output_path.lexically_normal().string() + "'."
+                completed_summary.encoded_media_summary.output_path.lexically_normal().string() + "'."
         );
         notify_log(
             telemetry,
             EncodeJobLogLevel::info,
             format_completion_metrics_log(
-                streaming_result.summary->encoded_media_summary.encoded_video_frame_count,
-                streaming_result.summary->timeline_summary.output_duration_microseconds,
-                streaming_result.summary->performance_metrics.total_elapsed_microseconds
+                completed_summary.encoded_media_summary.encoded_video_frame_count,
+                completed_summary.timeline_summary.output_duration_microseconds,
+                completed_summary.performance_metrics.total_elapsed_microseconds
             )
         );
         notify_final_progress(
             telemetry,
             "Encode completed successfully.",
-            streaming_result.summary->encoded_media_summary.encoded_video_frame_count,
-            streaming_result.summary->timeline_summary.output_duration_microseconds,
-            streaming_result.summary->performance_metrics.total_elapsed_microseconds
+            completed_summary.encoded_media_summary.encoded_video_frame_count,
+            completed_summary.timeline_summary.output_duration_microseconds,
+            completed_summary.performance_metrics.total_elapsed_microseconds
         );
 
         return EncodeJobResult{
             .encode_job_summary = EncodeJobSummary{
-                .job = job,
+                .job = completed_job,
                 .inspected_input_info = timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info,
-                .timeline_summary = streaming_result.summary->timeline_summary,
+                .timeline_summary = completed_summary.timeline_summary,
                 .decode_normalization_policy = options.decode_normalization_policy,
-                .decoded_video_frame_count = streaming_result.summary->decoded_video_frame_count,
-                .decoded_audio_block_count = streaming_result.summary->decoded_audio_block_count,
-                .subtitled_video_frame_count = streaming_result.summary->subtitled_video_frame_count,
+                .decoded_video_frame_count = completed_summary.decoded_video_frame_count,
+                .decoded_audio_block_count = completed_summary.decoded_audio_block_count,
+                .subtitled_video_frame_count = completed_summary.subtitled_video_frame_count,
                 .streaming_runtime = EncodeJobStreamingRuntimeSummary{
                     .detected_logical_core_count =
-                        streaming_result.summary->runtime_behavior.detected_logical_core_count,
+                        completed_summary.runtime_behavior.detected_logical_core_count,
                     .effective_logical_core_count =
-                        streaming_result.summary->runtime_behavior.effective_logical_core_count,
-                    .cpu_usage_mode = streaming_result.summary->runtime_behavior.cpu_usage_mode,
+                        completed_summary.runtime_behavior.effective_logical_core_count,
+                    .cpu_usage_mode = completed_summary.runtime_behavior.cpu_usage_mode,
                     .selected_video_decoder_thread_count =
-                        streaming_result.summary->runtime_behavior.selected_video_decoder_thread_count,
+                        completed_summary.runtime_behavior.selected_video_decoder_thread_count,
                     .selected_video_decoder_thread_type =
-                        streaming_result.summary->runtime_behavior.selected_video_decoder_thread_type,
+                        completed_summary.runtime_behavior.selected_video_decoder_thread_type,
                     .selected_video_encoder_thread_count =
-                        streaming_result.summary->runtime_behavior.selected_video_encoder_thread_count,
+                        completed_summary.runtime_behavior.selected_video_encoder_thread_count,
                     .selected_video_encoder_thread_type =
-                        streaming_result.summary->runtime_behavior.selected_video_encoder_thread_type,
+                        completed_summary.runtime_behavior.selected_video_encoder_thread_type,
                     .video_processing_worker_count =
-                        streaming_result.summary->runtime_behavior.video_processing_worker_count,
+                        completed_summary.runtime_behavior.video_processing_worker_count,
                     .subtitle_processing_worker_count =
-                        streaming_result.summary->runtime_behavior.subtitle_processing_worker_count,
+                        completed_summary.runtime_behavior.subtitle_processing_worker_count,
                     .video_frame_queue_depth =
-                        streaming_result.summary->runtime_behavior.video_frame_queue_depth,
+                        completed_summary.runtime_behavior.video_frame_queue_depth,
                     .decoded_audio_block_queue_depth =
-                        streaming_result.summary->runtime_behavior.decoded_audio_block_queue_depth,
+                        completed_summary.runtime_behavior.decoded_audio_block_queue_depth,
                     .subtitle_bitmap_mode =
-                        streaming_result.summary->runtime_behavior.subtitle_bitmap_mode,
+                        completed_summary.runtime_behavior.subtitle_bitmap_mode,
                     .subtitle_composition_mode =
-                        streaming_result.summary->runtime_behavior.subtitle_composition_mode,
+                        completed_summary.runtime_behavior.subtitle_composition_mode,
                     .subtitle_diagnostics_mode =
-                        streaming_result.summary->runtime_behavior.subtitle_diagnostics_mode,
+                        completed_summary.runtime_behavior.subtitle_diagnostics_mode,
                     .video_decode_microseconds =
-                        streaming_result.summary->performance_metrics.video_decode.total_microseconds,
+                        completed_summary.performance_metrics.video_decode.total_microseconds,
                     .video_process_microseconds =
-                        streaming_result.summary->performance_metrics.video_process.total_microseconds,
+                        completed_summary.performance_metrics.video_process.total_microseconds,
                     .subtitle_compose_microseconds =
-                        streaming_result.summary->performance_metrics.subtitle_compose.total_microseconds,
+                        completed_summary.performance_metrics.subtitle_compose.total_microseconds,
                     .video_encode_microseconds =
-                        streaming_result.summary->performance_metrics.video_encode.total_microseconds,
+                        completed_summary.performance_metrics.video_encode.total_microseconds,
                     .total_elapsed_microseconds =
-                        streaming_result.summary->performance_metrics.total_elapsed_microseconds,
+                        completed_summary.performance_metrics.total_elapsed_microseconds,
                     .average_output_fps =
-                        streaming_result.summary->performance_metrics.average_output_fps
+                        completed_summary.performance_metrics.average_output_fps
                 },
-                .encoded_media_summary = streaming_result.summary->encoded_media_summary
+                .encoded_media_summary = completed_summary.encoded_media_summary
             },
             .error = std::nullopt
         };

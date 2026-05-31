@@ -714,6 +714,37 @@ int assert_non_sequence_template_uses_copy_suffix_for_excluded_path(const std::f
     return 0;
 }
 
+int assert_crc32_suffix_helpers(const std::filesystem::path &root) {
+    if (OutputNaming::crc32_hex_for_bytes("123456789") != "CBF43926") {
+        return fail("CRC32 known-value calculation did not match the standard check value.");
+    }
+    if (OutputNaming::crc32_hex_for_bytes("") != "00000000") {
+        return fail("CRC32 empty-input calculation did not match the standard check value.");
+    }
+
+    const auto output_path = root / "crc" / "[OP] Folder - 01 x265 1920x1080.mkv";
+    touch_file(output_path);
+
+    std::string file_crc_error{};
+    const auto file_crc = OutputNaming::calculate_file_crc32_hex(output_path, &file_crc_error);
+    if (!file_crc.has_value() || *file_crc != OutputNaming::crc32_hex_for_bytes("test")) {
+        return fail("CRC32 file calculation did not stream the expected bytes.");
+    }
+
+    const auto appended = OutputNaming::append_or_replace_crc32_suffix(output_path, "a1b2c3d4");
+    if (appended.filename().string() != "[OP] Folder - 01 x265 1920x1080 [A1B2C3D4].mkv") {
+        return fail("CRC32 suffix was not appended as an uppercase bracketed end tag.");
+    }
+
+    const auto replaced = OutputNaming::append_or_replace_crc32_suffix(appended, "CBF43926");
+    if (replaced.filename().string() != "[OP] Folder - 01 x265 1920x1080 [CBF43926].mkv") {
+        return fail("Existing CRC32 suffix was not replaced cleanly.");
+    }
+
+    std::cout << "crc32.name=" << appended.filename().string() << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main() {
@@ -773,6 +804,10 @@ int main() {
     }
 
     if (assert_non_sequence_template_uses_copy_suffix_for_excluded_path(root) != 0) {
+        return 1;
+    }
+
+    if (assert_crc32_suffix_helpers(root) != 0) {
         return 1;
     }
 

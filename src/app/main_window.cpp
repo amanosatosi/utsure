@@ -2166,6 +2166,7 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job_from_entry(
     job.output.audio.mode = entry.audio_mode;
     job.output.audio.codec = utsure::core::media::OutputAudioCodec::aac;
     job.output.audio.bitrate_kbps = entry.audio_bitrate_kbps;
+    job.output.append_crc32_suffix = app_settings_.output_naming.crc32_suffix_enabled;
     job.execution.threading.cpu_usage_mode = utsure::core::media::CpuUsageMode::auto_select;
     job.execution.process_priority = current_worker_priority();
 
@@ -2748,6 +2749,11 @@ void MainWindow::show_settings_dialog() {
     token_buttons_layout->addWidget(reset_button);
     naming_layout->addWidget(token_buttons);
 
+    auto *crc32_suffix_check = new QCheckBox("CRC32", naming_group);
+    crc32_suffix_check->setToolTip("Append a CRC32 tag after successful encode.");
+    crc32_suffix_check->setChecked(app_settings_.output_naming.crc32_suffix_enabled);
+    naming_layout->addWidget(crc32_suffix_check);
+
     layout->addWidget(naming_group, 1);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
@@ -2819,8 +2825,9 @@ void MainWindow::show_settings_dialog() {
 
     connect(move_up_button, &QPushButton::clicked, &dialog, [move_current_row]() { move_current_row(-1); });
     connect(move_down_button, &QPushButton::clicked, &dialog, [move_current_row]() { move_current_row(1); });
-    connect(reset_button, &QPushButton::clicked, &dialog, [populate_token_list]() {
+    connect(reset_button, &QPushButton::clicked, &dialog, [populate_token_list, crc32_suffix_check]() {
         populate_token_list(utsure::core::job::OutputNaming::default_template());
+        crc32_suffix_check->setChecked(utsure::core::job::OutputNaming::default_template().crc32_suffix_enabled);
     });
     connect(reset_font_button, &QPushButton::clicked, &dialog, [font_family_combo, font_size_spin]() {
         const auto defaults = UiFontManager::default_settings();
@@ -2844,6 +2851,7 @@ void MainWindow::show_settings_dialog() {
     }
 
     app_settings_.output_naming = read_token_settings();
+    app_settings_.output_naming.crc32_suffix_enabled = crc32_suffix_check->isChecked();
     app_settings_.toshi_mode_enabled = toshi_mode_check->isChecked();
     app_settings_.ui_font = AppSettings::UiFontSettings{
         .family = font_family_combo->currentText().trimmed(),
@@ -4211,9 +4219,10 @@ void MainWindow::ensure_runner_slot_count(const int slot_count) {
                 const bool succeeded,
                 const bool canceled,
                 const QString &status_text,
-                const QString &details_text
+                const QString &details_text,
+                const QString &output_path
             ) {
-                handle_runner_finished(slot_index, succeeded, canceled, status_text, details_text);
+                handle_runner_finished(slot_index, succeeded, canceled, status_text, details_text, output_path);
             }
         );
         connect(controller, &EncodeJobRunnerController::log_message, this, [this, slot_index](const QString &line) {
@@ -5311,7 +5320,8 @@ void MainWindow::handle_runner_finished(
     const bool succeeded,
     const bool canceled,
     const QString &status_text,
-    const QString &details_text
+    const QString &details_text,
+    const QString &output_path
 ) {
     if (slot_index < 0 || slot_index >= static_cast<int>(runner_slots_.size())) {
         if (stop_requested_ && active_runner_count() == 0) {
@@ -5336,6 +5346,13 @@ void MainWindow::handle_runner_finished(
     auto &job = jobs_[static_cast<std::size_t>(job_index)];
     if (slot.elapsed_valid) {
         job.elapsed_ms = slot.elapsed_timer.elapsed();
+    }
+    if (succeeded && !output_path.trimmed().isEmpty()) {
+        job.output_path = QDir::toNativeSeparators(output_path.trimmed());
+        if (job_index == selected_job_index_ && output_path_edit_ != nullptr) {
+            const QSignalBlocker blocker(output_path_edit_);
+            output_path_edit_->setText(job.output_path);
+        }
     }
     job.last_status_message = status_text;
     job.last_details_summary = details_text;

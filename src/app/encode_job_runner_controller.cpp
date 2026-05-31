@@ -96,10 +96,11 @@ void EncodeJobRunnerController::handle_worker_finished(
     const bool succeeded,
     const bool canceled,
     const QString &status_text,
-    const QString &details_text
+    const QString &details_text,
+    const QString &output_path
 ) {
     running_ = false;
     worker_thread_.setPriority(QThread::NormalPriority);
     emit running_changed(false);
-    emit job_finished(succeeded, canceled, status_text, details_text);
+    emit job_finished(succeeded, canceled, status_text, details_text, output_path);
 }

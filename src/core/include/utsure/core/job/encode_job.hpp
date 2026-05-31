@@ -97,6 +97,7 @@ struct EncodeJobOutputSettings final {
     std::filesystem::path output_path{};
     EncodeJobVideoOutputSettings video{};
     media::AudioEncodeSettings audio{};
+    bool append_crc32_suffix{false};
 };
 
 struct EncodeJobExecutionSettings final {

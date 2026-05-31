@@ -276,7 +276,8 @@ private:
         bool succeeded,
         bool canceled,
         const QString &status_text,
-        const QString &details_text
+        const QString &details_text,
+        const QString &output_path
     );
 
     static std::filesystem::path qstring_to_path(const QString &text);

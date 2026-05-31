@@ -1,9 +1,12 @@
 #include "utsure/core/job/output_naming.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cctype>
 #include <cstddef>
+#include <cstdint>
+#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <map>
@@ -20,6 +23,7 @@ namespace utsure::core::job {
 namespace {
 
 constexpr std::string_view kSequenceMarker = "\x1FUTSURE_SEQUENCE\x1F";
+constexpr std::uint32_t kCrc32Polynomial = 0xEDB88320U;
 
 std::string lowercase_ascii(std::string value) {
     std::transform(
@@ -43,6 +47,64 @@ std::string uppercase_ascii(std::string value) {
         }
     );
     return value;
+}
+
+std::uint32_t update_crc32(const std::uint32_t current_crc, const unsigned char byte) noexcept {
+    std::uint32_t crc = current_crc ^ byte;
+    for (int bit = 0; bit < 8; ++bit) {
+        crc = (crc & 1U) != 0U
+            ? (crc >> 1U) ^ kCrc32Polynomial
+            : (crc >> 1U);
+    }
+    return crc;
+}
+
+std::string format_crc32_hex(const std::uint32_t crc) {
+    std::ostringstream stream;
+    stream << std::uppercase << std::hex << std::setw(8) << std::setfill('0') << crc;
+    return stream.str();
+}
+
+std::string path_component_to_utf8_string(const std::filesystem::path &path) {
+#if defined(_WIN32)
+    const auto text = path.u8string();
+    return std::string(reinterpret_cast<const char *>(text.c_str()), text.size());
+#else
+    return path.string();
+#endif
+}
+
+std::filesystem::path path_from_utf8_string(const std::string_view value) {
+#if defined(_WIN32)
+    std::u8string utf8{};
+    utf8.reserve(value.size());
+    for (const unsigned char character : value) {
+        utf8.push_back(static_cast<char8_t>(character));
+    }
+    return std::filesystem::path{utf8};
+#else
+    return std::filesystem::path{std::string{value}};
+#endif
+}
+
+bool is_hex_digit_ascii(const char character) noexcept {
+    return (character >= '0' && character <= '9') ||
+        (character >= 'a' && character <= 'f') ||
+        (character >= 'A' && character <= 'F');
+}
+
+bool has_trailing_crc32_tag(const std::string_view stem) noexcept {
+    if (stem.size() < 10U || stem[stem.size() - 10U] != '[' || stem.back() != ']') {
+        return false;
+    }
+
+    const auto hex_start = stem.size() - 9U;
+    for (std::size_t index = 0; index < 8U; ++index) {
+        if (!is_hex_digit_ascii(stem[hex_start + index])) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool is_invalid_filename_character(const unsigned char character) {
@@ -746,7 +808,8 @@ OutputNamingTemplate OutputNaming::default_template() {
             OutputNamingToken{.type = OutputNamingTokenType::sequence_number, .enabled = true, .sequence_padding = 2},
             OutputNamingToken{.type = OutputNamingTokenType::codec, .enabled = true},
             OutputNamingToken{.type = OutputNamingTokenType::resolution, .enabled = true}
-        }
+        },
+        .crc32_suffix_enabled = false
     };
 }
 
@@ -920,6 +983,64 @@ std::vector<OutputNamingReservationResult> OutputNaming::reserve_batch(
     }
 
     return results;
+}
+
+std::string OutputNaming::crc32_hex_for_bytes(const std::string_view bytes) {
+    std::uint32_t crc = 0xFFFFFFFFU;
+    for (const unsigned char byte : bytes) {
+        crc = update_crc32(crc, byte);
+    }
+    return format_crc32_hex(crc ^ 0xFFFFFFFFU);
+}
+
+std::optional<std::string> OutputNaming::calculate_file_crc32_hex(
+    const std::filesystem::path &path,
+    std::string *error_message
+) {
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream) {
+        if (error_message != nullptr) {
+            *error_message = "Could not open output file for CRC32 calculation.";
+        }
+        return std::nullopt;
+    }
+
+    std::uint32_t crc = 0xFFFFFFFFU;
+    std::array<char, 1024 * 1024> buffer{};
+    while (stream) {
+        stream.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const auto count = stream.gcount();
+        for (std::streamsize index = 0; index < count; ++index) {
+            crc = update_crc32(crc, static_cast<unsigned char>(buffer[static_cast<std::size_t>(index)]));
+        }
+    }
+
+    if (!stream.eof()) {
+        if (error_message != nullptr) {
+            *error_message = "Could not read output file for CRC32 calculation.";
+        }
+        return std::nullopt;
+    }
+
+    return format_crc32_hex(crc ^ 0xFFFFFFFFU);
+}
+
+std::filesystem::path OutputNaming::append_or_replace_crc32_suffix(
+    const std::filesystem::path &path,
+    const std::string_view crc32_hex
+) {
+    std::string stem = path_component_to_utf8_string(path.stem());
+    if (has_trailing_crc32_tag(stem)) {
+        stem.resize(stem.size() - 10U);
+        stem = trim_ascii_whitespace(std::move(stem));
+    }
+
+    const std::string normalized_crc = uppercase_ascii(std::string(crc32_hex));
+    std::filesystem::path renamed = path;
+    renamed.replace_filename(path_from_utf8_string(
+        stem + " [" + normalized_crc + "]" + path_component_to_utf8_string(path.extension())
+    ));
+    return renamed.lexically_normal();
 }
 
 }  // namespace utsure::core::job

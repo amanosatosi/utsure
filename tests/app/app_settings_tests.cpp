@@ -92,6 +92,7 @@ int assert_missing_config_loads_defaults(const std::filesystem::path &root) {
 
     if (result.settings.version != AppSettings::kCurrentVersion ||
         result.settings.output_naming.tokens.empty() ||
+        result.settings.output_naming.crc32_suffix_enabled ||
         result.settings.last_used.crf != 22 ||
         result.settings.toshi_mode_enabled) {
         return fail("Missing settings config did not return default settings.");
@@ -145,6 +146,7 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
             .sequence_padding = 2
         }
     };
+    settings.output_naming.crc32_suffix_enabled = true;
     settings.toshi_mode_enabled = true;
     settings.ui_font = AppSettings::UiFontSettings{
         .family = "Pyidaungsu",
@@ -168,6 +170,7 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
         loaded.settings.output_naming.tokens.size() != 2U ||
         loaded.settings.output_naming.tokens[0].type != utsure::core::job::OutputNamingTokenType::codec ||
         loaded.settings.output_naming.tokens[1].enabled ||
+        !loaded.settings.output_naming.crc32_suffix_enabled ||
         loaded.settings.ui_font.family != "Pyidaungsu" ||
         loaded.settings.ui_font.point_size != 12 ||
         !loaded.settings.ui_font.use_bundled_myanmar_fallback ||
@@ -202,6 +205,7 @@ int assert_invalid_values_fall_back(const std::filesystem::path &root) {
 
     QJsonObject output_naming;
     output_naming.insert("tokens", tokens);
+    output_naming.insert("crc32SuffixEnabled", false);
 
     QJsonObject root_object;
     root_object.insert("version", 1);
@@ -227,6 +231,7 @@ int assert_invalid_values_fall_back(const std::filesystem::path &root) {
         loaded.settings.last_used.audio_bitrate_kbps != 192 ||
         loaded.settings.output_naming.tokens.size() != 1U ||
         loaded.settings.output_naming.tokens[0].type != utsure::core::job::OutputNamingTokenType::source_folder_name ||
+        loaded.settings.output_naming.crc32_suffix_enabled ||
         loaded.settings.ui_font.family != "Pyidaungsu" ||
         loaded.settings.ui_font.point_size != 10 ||
         !loaded.settings.ui_font.use_bundled_myanmar_fallback) {

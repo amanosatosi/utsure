@@ -24,7 +24,13 @@ public:
 signals:
     void progress_changed(utsure::core::job::EncodeJobProgress progress);
     void log_message(const QString &line);
-    void job_finished(bool succeeded, bool canceled, const QString &status_text, const QString &details_text);
+    void job_finished(
+        bool succeeded,
+        bool canceled,
+        const QString &status_text,
+        const QString &details_text,
+        const QString &output_path
+    );
 
 private:
     [[nodiscard]] bool cancel_requested() const noexcept;
