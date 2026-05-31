@@ -25,6 +25,7 @@ add_library(utsure_encoder_core STATIC
     src/subtitles/subtitle_auto_selection.cpp
     src/subtitles/subtitle_font_recovery.cpp
     src/subtitles/subtitle_frame_composer.cpp
+    src/subtitles/subtitle_image_assets.cpp
     src/subtitles/subtitle_renderer.cpp
     src/subtitles/thumbnail_preroll.cpp
     src/timeline/timeline.cpp

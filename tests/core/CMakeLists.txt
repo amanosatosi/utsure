@@ -899,6 +899,31 @@ add_test(
     COMMAND utsure_core_subtitle_auto_selection_tests
 )
 
+add_executable(utsure_core_subtitle_image_assets_tests
+    subtitle_image_assets_tests.cpp
+)
+
+target_link_libraries(utsure_core_subtitle_image_assets_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_core_subtitle_image_assets_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_subtitle_image_assets_tests)
+
+add_dependencies(utsure_core_subtitle_image_assets_tests utsure_generate_sample_media)
+
+add_test(
+    NAME utsure.core.subtitles.image_assets.scan
+    COMMAND utsure_core_subtitle_image_assets_tests --scan
+)
+
+add_test(
+    NAME utsure.core.subtitles.image_assets.resolve_decode
+    COMMAND utsure_core_subtitle_image_assets_tests --resolve-decode "${UTSURE_THUMBNAIL_PREROLL_IMAGE_FILE}"
+)
+
 add_executable(utsure_core_thumbnail_preroll_tests
     thumbnail_preroll_tests.cpp
 )

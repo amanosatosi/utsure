@@ -63,6 +63,7 @@ cmake --build "${build_dir}" --target utsure_core_output_naming_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_source_import_paths_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_batch_parallelism_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_subtitle_auto_selection_tests --parallel
+cmake --build "${build_dir}" --target utsure_core_subtitle_image_assets_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_thumbnail_preroll_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_subtitle_font_recovery_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_timeline_tests --parallel

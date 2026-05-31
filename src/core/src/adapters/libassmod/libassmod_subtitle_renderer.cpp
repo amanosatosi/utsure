@@ -1,4 +1,5 @@
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
+#include "utsure/core/subtitles/subtitle_image_assets.hpp"
 #include "libassmod_rgba_bitmap_validation.hpp"
 #include "../../runtime_anomaly_policy.hpp"
 #include "../../subtitles/subtitle_bitmap_compositor.hpp"
@@ -11,13 +12,10 @@ extern "C" {
 
 #include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -81,31 +79,11 @@ struct AutoRenderResultDeleter final {
 
 using AutoRenderResultHandle = std::unique_ptr<ASS_RenderResult, AutoRenderResultDeleter>;
 
-struct ScriptFeatureScan final {
-    bool references_tag_images{false};
-};
-
 enum class SubtitleBitmapFrameVisibility : std::uint8_t {
     visible = 0,
     clipped,
     off_frame
 };
-
-std::vector<std::string> build_script_feature_quirk_messages(const ScriptFeatureScan &scan) {
-    std::vector<std::string> messages{};
-    if (scan.references_tag_images) {
-        messages.push_back(
-            runtime_policy::format_operation_message(
-                runtime_policy::RuntimeAnomalyClass::reduced_fidelity,
-                "subtitle rendering",
-                "script references \\img tags, but this build does not register host-side RGBA tag images; "
-                "unsupported effect details may be skipped."
-            )
-        );
-    }
-
-    return messages;
-}
 
 std::string path_to_utf8_string(const std::filesystem::path &path) {
 #if defined(_WIN32)
@@ -316,35 +294,6 @@ std::string format_renderer_setup_diagnostics(
     return message.str();
 }
 
-ScriptFeatureScan scan_script_features(const std::filesystem::path &subtitle_path) {
-    std::ifstream stream(subtitle_path, std::ios::binary);
-    if (!stream) {
-        throw std::runtime_error(
-            "Failed to open subtitle script '" + subtitle_path.lexically_normal().string() +
-            "' for libassmod feature scanning."
-        );
-    }
-
-    std::string script_text{
-        std::istreambuf_iterator<char>(stream),
-        std::istreambuf_iterator<char>()
-    };
-    std::transform(script_text.begin(), script_text.end(), script_text.begin(), [](const unsigned char value) {
-        return static_cast<char>(std::tolower(value));
-    });
-
-    const bool references_tag_images =
-        script_text.find("\\img(") != std::string::npos ||
-        script_text.find("\\1img(") != std::string::npos ||
-        script_text.find("\\2img(") != std::string::npos ||
-        script_text.find("\\3img(") != std::string::npos ||
-        script_text.find("\\4img(") != std::string::npos;
-
-    return ScriptFeatureScan{
-        .references_tag_images = references_tag_images
-    };
-}
-
 LibraryHandle create_library() {
     LibraryHandle library(ass_library_init());
     if (!library) {
@@ -399,6 +348,65 @@ TrackHandle load_track(
     }
 
     return track;
+}
+
+ASS_TagImageFormat to_ass_tag_image_format(const SubtitleImageAssetFormat format) {
+    switch (format) {
+    case SubtitleImageAssetFormat::png:
+        return ASS_TAG_IMAGE_FORMAT_PNG;
+    case SubtitleImageAssetFormat::jpeg:
+        return ASS_TAG_IMAGE_FORMAT_JPEG;
+    case SubtitleImageAssetFormat::webp:
+        return ASS_TAG_IMAGE_FORMAT_WEBP;
+    }
+
+    throw std::runtime_error("Unsupported subtitle image asset format.");
+}
+
+std::vector<std::string> register_subtitle_image_assets(
+    ASS_Renderer &renderer,
+    const std::vector<SubtitleImageAsset> &assets
+) {
+    std::vector<std::string> diagnostics{};
+    if (assets.empty()) {
+        return diagnostics;
+    }
+
+    try {
+        for (const auto &asset : assets) {
+            if (asset.name.empty() || asset.width <= 0 || asset.height <= 0 ||
+                asset.stride < asset.width * 4 || asset.rgba.empty()) {
+                throw std::runtime_error("Invalid subtitle image asset buffer for '" + asset.name + "'.");
+            }
+
+            const int result = ass_set_tag_image_rgba(
+                &renderer,
+                asset.name.c_str(),
+                to_ass_tag_image_format(asset.format),
+                asset.width,
+                asset.height,
+                asset.stride,
+                asset.rgba.data()
+            );
+            if (result != 0) {
+                throw std::runtime_error(
+                    "libassmod rejected subtitle image asset '" + asset.name + "' from '" +
+                    asset.source_path.lexically_normal().string() + "'."
+                );
+            }
+
+            diagnostics.push_back(
+                "Subtitle image asset registered: " + asset.name + " -> " +
+                asset.source_path.lexically_normal().string() + " (" +
+                std::to_string(asset.width) + "x" + std::to_string(asset.height) + ")"
+            );
+        }
+    } catch (...) {
+        ass_clear_tag_images(&renderer);
+        throw;
+    }
+
+    return diagnostics;
 }
 
 std::uint8_t ass_color_red(const std::uint32_t color) noexcept {
@@ -680,6 +688,7 @@ public:
         SubtitleRenderSessionCreateRequest create_request,
         std::string subtitle_path_string,
         std::vector<std::string> quirk_messages,
+        std::vector<SubtitleImageAsset> image_assets,
         LibraryHandle library,
         RendererHandle renderer,
         TrackHandle track
@@ -687,6 +696,7 @@ public:
         : create_request_(std::move(create_request)),
           subtitle_path_string_(std::move(subtitle_path_string)),
           quirk_messages_(std::move(quirk_messages)),
+          image_assets_(std::move(image_assets)),
           library_(std::move(library)),
           renderer_(std::move(renderer)),
           track_(std::move(track)),
@@ -1052,6 +1062,7 @@ private:
     SubtitleRenderSessionCreateRequest create_request_{};
     std::string subtitle_path_string_{};
     std::vector<std::string> quirk_messages_{};
+    std::vector<SubtitleImageAsset> image_assets_{};
     LibraryHandle library_{};
     RendererHandle renderer_{};
     TrackHandle track_{};
@@ -1140,8 +1151,27 @@ public:
             auto library = create_library();
             configure_library_fonts(*library, request);
             auto renderer = create_renderer(*library, request);
-            const auto script_feature_scan = scan_script_features(normalized_path);
-            auto quirk_messages = build_script_feature_quirk_messages(script_feature_scan);
+            auto image_asset_result = load_subtitle_image_assets(normalized_path);
+            if (!image_asset_result.succeeded()) {
+                return make_session_error(
+                    request,
+                    image_asset_result.error->message,
+                    image_asset_result.error->actionable_hint
+                );
+            }
+
+            auto quirk_messages = image_asset_result.references.empty()
+                ? std::vector<std::string>{}
+                : std::move(image_asset_result.diagnostics);
+            const auto registration_diagnostics = register_subtitle_image_assets(
+                *renderer,
+                image_asset_result.assets
+            );
+            quirk_messages.insert(
+                quirk_messages.end(),
+                registration_diagnostics.begin(),
+                registration_diagnostics.end()
+            );
 
             auto track = load_track(*library, request);
 
@@ -1150,6 +1180,7 @@ public:
                     request,
                     normalized_path.string(),
                     std::move(quirk_messages),
+                    std::move(image_asset_result.assets),
                     std::move(library),
                     std::move(renderer),
                     std::move(track)
