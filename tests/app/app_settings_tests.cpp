@@ -92,6 +92,7 @@ int assert_missing_config_loads_defaults(const std::filesystem::path &root) {
 
     if (result.settings.version != AppSettings::kCurrentVersion ||
         result.settings.output_naming.tokens.empty() ||
+        result.settings.encoding_profiles.empty() ||
         result.settings.output_naming.crc32_suffix_enabled ||
         result.settings.last_used.crf != 22 ||
         result.settings.toshi_mode_enabled) {
@@ -153,6 +154,24 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
         .point_size = 12,
         .use_bundled_myanmar_fallback = true
     };
+    settings.encoding_profiles = {
+        AppSettings::EncodingProfile{
+            .name = "HEVC 540p Data Saver",
+            .encode = AppSettings::LastUsedEncodeChoices{
+                .codec = utsure::core::media::OutputVideoCodec::h265,
+                .preset = "medium",
+                .crf = 23,
+                .audio_mode = utsure::core::media::AudioOutputMode::encode_aac,
+                .audio_bitrate_kbps = 128
+            },
+            .resize = utsure::core::job::EncodeResizeSettings{
+                .mode = utsure::core::job::EncodeResizeMode::target_height,
+                .target_height = 540,
+                .allow_upscale = false
+            }
+        }
+    };
+    settings.last_used_profile = "HEVC 540p Data Saver";
     settings.set_sequence_counter_value("bdrip|show", 12);
 
     QString save_error;
@@ -174,9 +193,20 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
         loaded.settings.ui_font.family != "Pyidaungsu" ||
         loaded.settings.ui_font.point_size != 12 ||
         !loaded.settings.ui_font.use_bundled_myanmar_fallback ||
+        loaded.settings.encoding_profiles.size() != 1U ||
+        loaded.settings.encoding_profiles.front().name != "HEVC 540p Data Saver" ||
+        loaded.settings.encoding_profiles.front().resize.mode != utsure::core::job::EncodeResizeMode::target_height ||
+        loaded.settings.encoding_profiles.front().resize.target_height != 540 ||
+        loaded.settings.encoding_profiles.front().encode.audio_bitrate_kbps != 128 ||
+        loaded.settings.last_used_profile != "HEVC 540p Data Saver" ||
         !loaded.settings.toshi_mode_enabled ||
         loaded.settings.sequence_counter_value("bdrip|show") != 12) {
         return fail("Settings JSON did not round-trip encode choices, naming tokens, UI font, Toshi mode, and counters.");
+    }
+
+    const QByteArray json = read_file_bytes(config_path);
+    if (json.contains("streamIndex") || json.contains("selectedAudioStream")) {
+        return fail("Encoding profiles must not persist source-specific audio stream indexes.");
     }
 
     std::cout << "settings.roundtrip=ok\n";
@@ -216,6 +246,14 @@ int assert_invalid_values_fall_back(const std::filesystem::path &root) {
         {"pointSize", 999},
         {"useBundledMyanmarFallback", true}
     });
+    root_object.insert("encodingProfiles", QJsonArray{
+        QJsonObject{
+            {"name", ""},
+            {"video", QJsonObject{{"codec", "bad"}, {"preset", "bad"}, {"crf", 999}}},
+            {"audio", QJsonObject{{"mode", "bad"}, {"bitrateKbps", 999}}},
+            {"resize", QJsonObject{{"mode", "targetHeight"}, {"height", -5}}}
+        }
+    });
 
     QFile file(config_path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -234,7 +272,8 @@ int assert_invalid_values_fall_back(const std::filesystem::path &root) {
         loaded.settings.output_naming.crc32_suffix_enabled ||
         loaded.settings.ui_font.family != "Pyidaungsu" ||
         loaded.settings.ui_font.point_size != 10 ||
-        !loaded.settings.ui_font.use_bundled_myanmar_fallback) {
+        !loaded.settings.ui_font.use_bundled_myanmar_fallback ||
+        loaded.settings.encoding_profiles.empty()) {
         return fail("Invalid saved settings did not fall back to valid defaults safely.");
     }
 

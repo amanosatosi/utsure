@@ -12,6 +12,8 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <optional>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -65,6 +67,12 @@ utsure::core::media::AudioOutputMode audio_mode_from_json(
     }
     if (text == "aac" || text == "encode_aac") {
         return utsure::core::media::AudioOutputMode::encode_aac;
+    }
+    if (text == "disabled" || text == "disable" || text == "none") {
+        return utsure::core::media::AudioOutputMode::disable;
+    }
+    if (text == "auto" || text == "auto_select") {
+        return utsure::core::media::AudioOutputMode::auto_select;
     }
 
     return fallback;
@@ -121,6 +129,121 @@ AppSettings::LastUsedEncodeChoices encode_choices_from_json(
     choices.audio_mode = audio_mode_from_json(object.value("audioMode"), fallback.audio_mode);
     choices.audio_bitrate_kbps = bounded_int_from_json(object.value("audioBitrateKbps"), fallback.audio_bitrate_kbps, 64, 512);
     return choices;
+}
+
+QString resize_mode_to_json(const utsure::core::job::EncodeResizeMode mode) {
+    return QString::fromUtf8(utsure::core::job::to_string(mode));
+}
+
+utsure::core::job::EncodeResizeSettings resize_settings_from_json(
+    const QJsonObject &object,
+    const utsure::core::job::EncodeResizeSettings &fallback
+) {
+    auto settings = fallback;
+    if (object.contains("mode") && object.value("mode").isString()) {
+        const auto parsed_mode = utsure::core::job::resize_mode_from_string(
+            object.value("mode").toString().toStdString()
+        );
+        settings.mode = parsed_mode.value_or(fallback.mode);
+    }
+    settings.target_height = bounded_int_from_json(object.value("height"), fallback.target_height, 0, 8192);
+    if (object.contains("allowUpscale")) {
+        settings.allow_upscale = object.value("allowUpscale").toBool(fallback.allow_upscale);
+    }
+    if (settings.mode == utsure::core::job::EncodeResizeMode::target_height && settings.target_height <= 0) {
+        return fallback;
+    }
+    return settings;
+}
+
+QJsonObject resize_settings_to_json(const utsure::core::job::EncodeResizeSettings &settings) {
+    QJsonObject object;
+    object.insert("mode", resize_mode_to_json(settings.mode));
+    if (settings.mode == utsure::core::job::EncodeResizeMode::target_height) {
+        object.insert("height", settings.target_height);
+        object.insert("aspectRatio", "source");
+        object.insert("allowUpscale", settings.allow_upscale);
+    }
+    return object;
+}
+
+QJsonObject encoding_profile_to_json(const AppSettings::EncodingProfile &profile) {
+    QJsonObject object;
+    object.insert("name", profile.name);
+    object.insert("video", QJsonObject{
+        {"codec", video_codec_to_json(profile.encode.codec)},
+        {"preset", profile.encode.preset},
+        {"crf", profile.encode.crf}
+    });
+    object.insert("audio", QJsonObject{
+        {"mode", audio_mode_to_json(profile.encode.audio_mode)},
+        {"bitrateKbps", profile.encode.audio_bitrate_kbps}
+    });
+    object.insert("resize", resize_settings_to_json(profile.resize));
+    return object;
+}
+
+std::optional<AppSettings::EncodingProfile> encoding_profile_from_json(
+    const QJsonObject &object,
+    const AppSettings::EncodingProfile &fallback
+) {
+    const QString name = object.value("name").toString().trimmed();
+    if (name.isEmpty()) {
+        return std::nullopt;
+    }
+
+    AppSettings::EncodingProfile profile = fallback;
+    profile.name = name;
+
+    const QJsonObject video_object = object.value("video").toObject();
+    profile.encode.codec = video_codec_from_json(video_object.value("codec"), fallback.encode.codec);
+    profile.encode.preset = safe_preset_from_json(video_object.value("preset"), fallback.encode.preset);
+    profile.encode.crf = bounded_int_from_json(video_object.value("crf"), fallback.encode.crf, 0, 51);
+
+    const QJsonObject audio_object = object.value("audio").toObject();
+    profile.encode.audio_mode = audio_mode_from_json(audio_object.value("mode"), fallback.encode.audio_mode);
+    profile.encode.audio_bitrate_kbps =
+        bounded_int_from_json(audio_object.value("bitrateKbps"), fallback.encode.audio_bitrate_kbps, 64, 512);
+
+    profile.resize = resize_settings_from_json(object.value("resize").toObject(), fallback.resize);
+    return profile;
+}
+
+QJsonArray encoding_profiles_to_json(const std::vector<AppSettings::EncodingProfile> &profiles) {
+    QJsonArray array;
+    for (const auto &profile : profiles) {
+        if (profile.name.trimmed().isEmpty()) {
+            continue;
+        }
+        array.append(encoding_profile_to_json(profile));
+    }
+    return array;
+}
+
+std::vector<AppSettings::EncodingProfile> encoding_profiles_from_json(const QJsonArray &array) {
+    std::vector<AppSettings::EncodingProfile> profiles;
+    const auto defaults = AppSettings::default_encoding_profiles();
+    const auto fallback = defaults.empty() ? AppSettings::EncodingProfile{} : defaults.front();
+    for (const QJsonValue &value : array) {
+        if (!value.isObject()) {
+            continue;
+        }
+        auto profile = encoding_profile_from_json(value.toObject(), fallback);
+        if (!profile.has_value()) {
+            continue;
+        }
+        const auto duplicate_name = std::find_if(
+            profiles.begin(),
+            profiles.end(),
+            [&](const AppSettings::EncodingProfile &existing) {
+                return existing.name.compare(profile->name, Qt::CaseInsensitive) == 0;
+            }
+        );
+        if (duplicate_name == profiles.end()) {
+            profiles.push_back(std::move(*profile));
+        }
+    }
+    return profiles.empty() ? defaults : profiles;
 }
 
 QJsonObject ui_font_to_json(const AppSettings::UiFontSettings &settings) {
@@ -253,6 +376,8 @@ QJsonDocument settings_to_json_document(const AppSettings &settings) {
     root.insert("toshiMode", QJsonObject{
         {"enabled", settings.toshi_mode_enabled}
     });
+    root.insert("encodingProfiles", encoding_profiles_to_json(settings.encoding_profiles));
+    root.insert("lastUsedProfile", settings.last_used_profile);
     root.insert("sequenceCounters", sequence_counters_to_json(settings.sequence_counters));
     return QJsonDocument(root);
 }
@@ -282,6 +407,10 @@ AppSettings AppSettings::defaults() {
     AppSettings settings;
     settings.version = kCurrentVersion;
     settings.output_naming = utsure::core::job::OutputNaming::default_template();
+    settings.encoding_profiles = default_encoding_profiles();
+    if (!settings.encoding_profiles.empty()) {
+        settings.last_used_profile = settings.encoding_profiles.front().name;
+    }
     return settings;
 }
 
@@ -334,6 +463,24 @@ AppSettings::LoadResult AppSettings::load(const QString &config_path) {
     result.settings.ui_font = ui_font_from_json(root.value("uiFont").toObject(), fallback.ui_font);
     result.settings.toshi_mode_enabled =
         root.value("toshiMode").toObject().value("enabled").toBool(fallback.toshi_mode_enabled);
+    result.settings.encoding_profiles = root.value("encodingProfiles").isArray()
+        ? encoding_profiles_from_json(root.value("encodingProfiles").toArray())
+        : fallback.encoding_profiles;
+    result.settings.last_used_profile = root.value("lastUsedProfile").toString(fallback.last_used_profile).trimmed();
+    if (!result.settings.last_used_profile.isEmpty()) {
+        const auto matching_profile = std::find_if(
+            result.settings.encoding_profiles.begin(),
+            result.settings.encoding_profiles.end(),
+            [&](const AppSettings::EncodingProfile &profile) {
+                return profile.name.compare(result.settings.last_used_profile, Qt::CaseInsensitive) == 0;
+            }
+        );
+        if (matching_profile == result.settings.encoding_profiles.end()) {
+            result.settings.last_used_profile = result.settings.encoding_profiles.empty()
+                ? fallback.last_used_profile
+                : result.settings.encoding_profiles.front().name;
+        }
+    }
     result.settings.sequence_counters = sequence_counters_from_json(root.value("sequenceCounters").toObject());
     return result;
 }
@@ -398,4 +545,84 @@ void AppSettings::set_sequence_counter_value(const std::string &key, const int v
 
 void AppSettings::remember_encode_choices(const LastUsedEncodeChoices &choices) {
     last_used = choices;
+}
+
+std::vector<AppSettings::EncodingProfile> AppSettings::default_encoding_profiles() {
+    return {
+        EncodingProfile{
+            .name = "H.264 1080p Compatibility",
+            .encode = LastUsedEncodeChoices{
+                .codec = utsure::core::media::OutputVideoCodec::h264,
+                .preset = "fast",
+                .crf = 22,
+                .audio_mode = utsure::core::media::AudioOutputMode::encode_aac,
+                .audio_bitrate_kbps = 192
+            },
+            .resize = utsure::core::job::EncodeResizeSettings{
+                .mode = utsure::core::job::EncodeResizeMode::target_height,
+                .target_height = 1080,
+                .allow_upscale = false
+            }
+        },
+        EncodingProfile{
+            .name = "HEVC 1080p Quality",
+            .encode = LastUsedEncodeChoices{
+                .codec = utsure::core::media::OutputVideoCodec::h265,
+                .preset = "slow",
+                .crf = 18,
+                .audio_mode = utsure::core::media::AudioOutputMode::encode_aac,
+                .audio_bitrate_kbps = 192
+            },
+            .resize = utsure::core::job::EncodeResizeSettings{
+                .mode = utsure::core::job::EncodeResizeMode::target_height,
+                .target_height = 1080,
+                .allow_upscale = false
+            }
+        },
+        EncodingProfile{
+            .name = "HEVC 720p Smaller",
+            .encode = LastUsedEncodeChoices{
+                .codec = utsure::core::media::OutputVideoCodec::h265,
+                .preset = "medium",
+                .crf = 21,
+                .audio_mode = utsure::core::media::AudioOutputMode::encode_aac,
+                .audio_bitrate_kbps = 160
+            },
+            .resize = utsure::core::job::EncodeResizeSettings{
+                .mode = utsure::core::job::EncodeResizeMode::target_height,
+                .target_height = 720,
+                .allow_upscale = false
+            }
+        },
+        EncodingProfile{
+            .name = "HEVC 540p Data Saver",
+            .encode = LastUsedEncodeChoices{
+                .codec = utsure::core::media::OutputVideoCodec::h265,
+                .preset = "medium",
+                .crf = 23,
+                .audio_mode = utsure::core::media::AudioOutputMode::encode_aac,
+                .audio_bitrate_kbps = 128
+            },
+            .resize = utsure::core::job::EncodeResizeSettings{
+                .mode = utsure::core::job::EncodeResizeMode::target_height,
+                .target_height = 540,
+                .allow_upscale = false
+            }
+        },
+        EncodingProfile{
+            .name = "HEVC 480p Small",
+            .encode = LastUsedEncodeChoices{
+                .codec = utsure::core::media::OutputVideoCodec::h265,
+                .preset = "medium",
+                .crf = 25,
+                .audio_mode = utsure::core::media::AudioOutputMode::encode_aac,
+                .audio_bitrate_kbps = 128
+            },
+            .resize = utsure::core::job::EncodeResizeSettings{
+                .mode = utsure::core::job::EncodeResizeMode::target_height,
+                .target_height = 480,
+                .allow_upscale = false
+            }
+        }
+    };
 }

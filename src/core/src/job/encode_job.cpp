@@ -329,6 +329,115 @@ timeline::TimelineAssemblyRequest build_timeline_request(const EncodeJob &job) {
     };
 }
 
+std::optional<EncodeJobResult> apply_selected_main_audio_stream(
+    const EncodeJob &job,
+    timeline::TimelinePlan &timeline_plan,
+    EncodeJobTelemetry &telemetry
+) {
+    if (!job.input.selected_main_audio_stream_index.has_value()) {
+        return std::nullopt;
+    }
+
+    if (timeline_plan.segments.empty() || timeline_plan.main_segment_index >= timeline_plan.segments.size()) {
+        return make_error(
+            job,
+            "Cannot select the requested audio track because the main timeline segment is unavailable.",
+            "Inspect the source again and retry the encode.",
+            &telemetry
+        );
+    }
+
+    auto &main_segment = timeline_plan.segments[timeline_plan.main_segment_index];
+    const int requested_stream_index = *job.input.selected_main_audio_stream_index;
+    const auto audio_stream = std::find_if(
+        main_segment.inspected_source_info.audio_streams.begin(),
+        main_segment.inspected_source_info.audio_streams.end(),
+        [requested_stream_index](const media::AudioStreamInfo &stream) {
+            return stream.stream_index == requested_stream_index;
+        }
+    );
+
+    if (audio_stream == main_segment.inspected_source_info.audio_streams.end() || !audio_stream->decoder_available) {
+        return make_error(
+            job,
+            "The selected source audio track is no longer available.",
+            "Reopen the source, choose an available audio track, and queue the job again.",
+            &telemetry
+        );
+    }
+
+    main_segment.inspected_source_info.selected_audio_stream_index = audio_stream->stream_index;
+    main_segment.inspected_source_info.primary_audio_stream = *audio_stream;
+    timeline_plan.output_audio_stream = *audio_stream;
+    notify_log(
+        telemetry,
+        EncodeJobLogLevel::info,
+        "Using selected source audio stream index " + std::to_string(audio_stream->stream_index) + "."
+    );
+    return std::nullopt;
+}
+
+std::optional<EncodeJobResult> apply_output_resize_settings(
+    const EncodeJob &job,
+    timeline::TimelinePlan &timeline_plan,
+    media::DecodeNormalizationPolicy &normalization_policy,
+    EncodeJobTelemetry &telemetry
+) {
+    if (timeline_plan.segments.empty() || timeline_plan.main_segment_index >= timeline_plan.segments.size()) {
+        return make_error(
+            job,
+            "Cannot resolve output dimensions because the main timeline segment is unavailable.",
+            "Inspect the source again and retry the encode.",
+            &telemetry
+        );
+    }
+
+    auto &main_segment = timeline_plan.segments[timeline_plan.main_segment_index];
+    if (!main_segment.inspected_source_info.primary_video_stream.has_value()) {
+        return make_error(
+            job,
+            "Cannot resolve output dimensions because the main video stream is unavailable.",
+            "Choose a source with a usable video stream.",
+            &telemetry
+        );
+    }
+
+    auto &video_stream = *main_segment.inspected_source_info.primary_video_stream;
+    const auto resize_result = calculate_resize_dimensions(
+        ResizeSourceDimensions{
+            .width = video_stream.width,
+            .height = video_stream.height,
+            .sample_aspect_ratio = video_stream.sample_aspect_ratio
+        },
+        job.output.resize
+    );
+    if (!resize_result.succeeded()) {
+        return make_error(
+            job,
+            resize_result.error_message,
+            "Choose Source resize or a valid target-height resize preset.",
+            &telemetry
+        );
+    }
+
+    const auto dimensions = *resize_result.dimensions;
+    if (dimensions.width != video_stream.width || dimensions.height != video_stream.height) {
+        notify_log(
+            telemetry,
+            EncodeJobLogLevel::info,
+            "Resize output resolved to " + std::to_string(dimensions.width) + "x" +
+                std::to_string(dimensions.height) + "."
+        );
+    }
+
+    video_stream.width = dimensions.width;
+    video_stream.height = dimensions.height;
+    video_stream.sample_aspect_ratio = media::Rational{1, 1};
+    normalization_policy.video_max_width = dimensions.width;
+    normalization_policy.video_max_height = dimensions.height;
+    return std::nullopt;
+}
+
 std::string format_segment_log_message(
     const timeline::TimelineSegmentKind kind,
     const std::filesystem::path &source_path
@@ -503,7 +612,16 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             );
         }
 
-        const auto &timeline_plan = *timeline_assembly_result.timeline_plan;
+        auto timeline_plan = *timeline_assembly_result.timeline_plan;
+        auto normalization_policy = options.decode_normalization_policy;
+        if (auto audio_selection_error = apply_selected_main_audio_stream(job, timeline_plan, telemetry);
+            audio_selection_error.has_value()) {
+            return *audio_selection_error;
+        }
+        if (auto resize_error = apply_output_resize_settings(job, timeline_plan, normalization_policy, telemetry);
+            resize_error.has_value()) {
+            return *resize_error;
+        }
         notify_log(
             telemetry,
             EncodeJobLogLevel::info,
@@ -513,7 +631,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
         if (const auto working_set_failure = working_set_guard::check(
                 timeline_plan,
                 job.subtitles,
-                options.decode_normalization_policy
+                normalization_policy
             ); working_set_failure.has_value()) {
             return make_error(
                 job,
@@ -619,7 +737,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                 .subtitle_settings = &job.subtitles,
                 .thumbnail_preroll_settings = &job.thumbnail_preroll,
                 .media_encode_request = build_media_encode_request(job),
-                .normalization_policy = options.decode_normalization_policy,
+                .normalization_policy = normalization_policy,
                 .subtitle_renderer = subtitle_renderer.get(),
                 .queue_limits = resolve_pipeline_queue_limits(job),
                 .progress_callback = [&telemetry](const media::streaming::StreamingEncodeProgress &progress) {
@@ -686,7 +804,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                 .job = completed_job,
                 .inspected_input_info = timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info,
                 .timeline_summary = completed_summary.timeline_summary,
-                .decode_normalization_policy = options.decode_normalization_policy,
+                .decode_normalization_policy = normalization_policy,
                 .decoded_video_frame_count = completed_summary.decoded_video_frame_count,
                 .decoded_audio_block_count = completed_summary.decoded_audio_block_count,
                 .subtitled_video_frame_count = completed_summary.subtitled_video_frame_count,

@@ -89,6 +89,9 @@ public:
         utsure::core::media::AudioOutputMode audio_mode{utsure::core::media::AudioOutputMode::encode_aac};
         int audio_bitrate_kbps{192};
         QString audio_track_display{"Primary track"};
+        std::optional<int> selected_audio_stream_index{};
+        bool audio_track_manual_override{false};
+        utsure::core::job::EncodeResizeSettings resize{};
         qint64 current_time_us{0};
         qint64 trim_in_us{0};
         qint64 trim_out_us{10000000};
@@ -170,6 +173,11 @@ private:
     void show_settings_dialog();
     void show_info_dialog();
     void show_parallel_settings_dialog();
+    void apply_selected_profile();
+    void save_current_settings_as_profile();
+    void update_selected_profile();
+    void rename_selected_profile();
+    void delete_selected_profile();
 
     void choose_output_path();
     void restore_selected_job_auto_output_path();
@@ -249,6 +257,7 @@ private:
     void refresh_toolbar_state();
     void refresh_parallel_batch_summary();
     void refresh_audio_track_combo();
+    void refresh_profile_combo();
     void update_start_button_visuals();
     void advance_busy_spinner();
     void set_source_drop_overlay_visible(bool visible);
@@ -345,6 +354,13 @@ private:
     QComboBox *video_codec_combo_{nullptr};
     QComboBox *preset_combo_{nullptr};
     QSpinBox *crf_spin_box_{nullptr};
+    QComboBox *resize_preset_combo_{nullptr};
+    QComboBox *profile_combo_{nullptr};
+    QPushButton *profile_apply_button_{nullptr};
+    QPushButton *profile_save_button_{nullptr};
+    QPushButton *profile_update_button_{nullptr};
+    QPushButton *profile_rename_button_{nullptr};
+    QPushButton *profile_delete_button_{nullptr};
     QComboBox *audio_format_combo_{nullptr};
     QComboBox *audio_quality_combo_{nullptr};
     QComboBox *audio_track_combo_{nullptr};

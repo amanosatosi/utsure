@@ -35,6 +35,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M28 Toshi mode and duplicate encode entries implemented; awaiting GitHub Actions validation.
 - [x] M29 libassmod `\img` asset registration implemented; awaiting GitHub Actions validation.
 - [x] M30 Bundled Pyidaungsu UI font fallback and configurable app UI font implemented; awaiting GitHub Actions validation.
+- [x] M30 Encoding profiles, resize presets, and audio track selection implemented; awaiting GitHub Actions validation.
 
 ## Active assumptions
 
@@ -1091,6 +1092,24 @@ Completed:
   * Added JSON UI font settings with safe defaults, invalid value fallback, and Settings dialog controls for family, size, and reset while preserving the existing app theme.
   * Added focused app tests for settings round-trip/fallback and a headless UI font smoke path that assigns the Myanmar sample text to basic Qt widgets using the resolved font path.
   * Subtitle rendering fonts remain out of scope for this task.
+
+### M30 Encoding profiles, resize presets, and audio track selection
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Add JSON-backed encoding profiles for video, audio encode, and resize settings without storing source paths, output paths, selectedText, sequence counters, or source-specific audio stream indexes.
+  * Add common aspect-ratio-preserving target-height presets: Source, 1080p, 720p, 540p, and 480p, with no upscaling by default and encoder-safe even dimensions.
+  * Reuse existing core multi-audio inspection and Japanese-first audio policy, while exposing a per-job manual audio override in the Qt UI.
+  * Keep profile and resize policy reusable/testable in core/app settings, with Qt widgets limited to applying user choices.
+
+Completed:
+  * Added default and user-saved encoding profiles persisted in the existing JSON settings file, plus UI actions to apply, save, update, rename, and delete profiles.
+  * Profiles now save codec, preset, CRF, audio encode mode/bitrate, and resize settings, and explicitly do not persist source-specific audio stream indexes.
+  * Added reusable core resize calculation for Source and target-height presets, preserving source display aspect ratio and avoiding upscale unless explicitly allowed.
+  * Threaded selected audio stream indexes and resize settings into encode jobs so the pipeline uses the chosen source audio track and final output dimensions.
+  * Updated the audio track UI to list inspected source tracks, default to Japanese when detected, preserve manual choices until the source changes, and keep profile application from replacing manual source-track selection.
+  * Added focused settings/profile and resize regression tests; GitHub Actions remains the compile/test validation source.
 
 ## Immediate next milestone
 

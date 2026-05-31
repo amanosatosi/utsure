@@ -845,6 +845,42 @@ add_test(
     COMMAND utsure_core_output_naming_tests
 )
 
+add_executable(utsure_core_resize_tests
+    resize_tests.cpp
+)
+
+target_link_libraries(utsure_core_resize_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_core_resize_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_resize_tests)
+
+add_test(
+    NAME utsure.core.job.resize
+    COMMAND utsure_core_resize_tests
+)
+
+add_executable(utsure_core_audio_stream_selection_tests
+    audio_stream_selection_tests.cpp
+)
+
+target_link_libraries(utsure_core_audio_stream_selection_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_core_audio_stream_selection_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_audio_stream_selection_tests)
+
+add_test(
+    NAME utsure.core.media.audio_stream_selection
+    COMMAND utsure_core_audio_stream_selection_tests
+)
+
 add_executable(utsure_core_source_import_paths_tests
     source_import_paths_tests.cpp
 )

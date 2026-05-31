@@ -10,6 +10,7 @@
 #include "utsure/core/build_info.hpp"
 #include "utsure/core/job/batch_parallelism.hpp"
 #include "utsure/core/job/encode_job_preflight.hpp"
+#include "utsure/core/media/audio_stream_selection.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 #include "utsure/core/media/source_import_paths.hpp"
 #include "utsure/core/subtitles/subtitle_auto_selection.hpp"
@@ -42,6 +43,7 @@
 #include <QHash>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -77,6 +79,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -362,29 +365,82 @@ std::optional<qint64> parse_preview_jump_time_text(const QString &text, const Pr
     return std::max<qint64>(0, static_cast<qint64>(std::llround(total_seconds * 1000000.0L)));
 }
 
+bool text_matches_english_audio_metadata(const QString &text) {
+    const QString normalized = text.trimmed().toLower();
+    return normalized == "eng" || normalized == "en" || normalized == "english";
+}
+
+QString audio_language_display(const utsure::core::media::AudioStreamInfo &audio_stream) {
+    if (utsure::core::media::audio_stream_has_explicit_japanese_metadata(audio_stream)) {
+        return "Japanese";
+    }
+
+    if (audio_stream.language_tag.has_value() && text_matches_english_audio_metadata(to_qstring(*audio_stream.language_tag))) {
+        return "English";
+    }
+    if (audio_stream.title.has_value() && text_matches_english_audio_metadata(to_qstring(*audio_stream.title))) {
+        return "English";
+    }
+    if (audio_stream.language_tag.has_value() && !audio_stream.language_tag->empty()) {
+        return to_qstring(*audio_stream.language_tag).toUpper();
+    }
+    return "Unknown";
+}
+
+QString audio_channel_display(const utsure::core::media::AudioStreamInfo &audio_stream) {
+    switch (audio_stream.channel_count) {
+    case 1:
+        return "1.0";
+    case 2:
+        return "2.0";
+    case 6:
+        return "5.1";
+    case 8:
+        return "7.1";
+    default:
+        return QString("%1 ch").arg(audio_stream.channel_count);
+    }
+}
+
+QString format_audio_track_display(const utsure::core::media::AudioStreamInfo &audio_stream, const int ordinal) {
+    QString summary = QString("%1 - %2 %3 - %4 kHz")
+        .arg(audio_language_display(audio_stream))
+        .arg(to_qstring(audio_stream.codec_name).toUpper())
+        .arg(audio_channel_display(audio_stream))
+        .arg(audio_stream.sample_rate > 0 ? audio_stream.sample_rate / 1000 : 0);
+
+    if (audio_stream.title.has_value()) {
+        const QString title = to_qstring(*audio_stream.title).trimmed();
+        if (!title.isEmpty() && title.compare(audio_language_display(audio_stream), Qt::CaseInsensitive) != 0) {
+            summary += QString(" - %1").arg(title);
+        }
+    }
+    if (audio_stream.disposition_default) {
+        summary += " - Default";
+    }
+    if (ordinal > 0) {
+        summary = QString("Track %1: %2").arg(ordinal).arg(summary);
+    }
+    return summary;
+}
+
 QString format_audio_track_display(const utsure::core::media::MediaSourceInfo &source_info) {
     if (!source_info.primary_audio_stream.has_value()) {
         return "No source audio detected";
     }
 
-    const auto &audio_stream = *source_info.primary_audio_stream;
-    QString summary = QString("%1 | %2 | %3 channels | %4 Hz")
-        .arg(source_info.audio_streams.size() > 1 ? "Selected" : "Primary")
-        .arg(to_qstring(audio_stream.codec_name))
-        .arg(audio_stream.channel_count)
-        .arg(audio_stream.sample_rate);
-
-    if (source_info.audio_streams.size() > 1) {
-        summary += QString(" | %1 tracks").arg(static_cast<int>(source_info.audio_streams.size()));
-    }
-
-    if (audio_stream.language_tag.has_value()) {
-        summary += QString(" | %1").arg(to_qstring(*audio_stream.language_tag));
-    } else if (audio_stream.title.has_value()) {
-        summary += QString(" | %1").arg(to_qstring(*audio_stream.title));
-    }
-
-    return summary;
+    const auto stream_index = source_info.primary_audio_stream->stream_index;
+    const auto iterator = std::find_if(
+        source_info.audio_streams.begin(),
+        source_info.audio_streams.end(),
+        [stream_index](const auto &stream) {
+            return stream.stream_index == stream_index;
+        }
+    );
+    const int ordinal = iterator == source_info.audio_streams.end()
+        ? 0
+        : static_cast<int>(std::distance(source_info.audio_streams.begin(), iterator)) + 1;
+    return format_audio_track_display(*source_info.primary_audio_stream, ordinal);
 }
 
 QString basename_from_path(const QString &path_text) {
@@ -1594,6 +1650,22 @@ QLabel#PreviewTimeBadge {
     encode_settings_row->setContentsMargins(0, 0, 0, 0);
     encode_settings_row->setSpacing(8);
 
+    auto *profile_group = new QGroupBox("Encoding Profile", encode_tab_content);
+    auto *profile_layout = new QGridLayout(profile_group);
+    profile_combo_ = new QComboBox(profile_group);
+    profile_apply_button_ = new QPushButton("Apply", profile_group);
+    profile_save_button_ = new QPushButton("Save As", profile_group);
+    profile_update_button_ = new QPushButton("Update", profile_group);
+    profile_rename_button_ = new QPushButton("Rename", profile_group);
+    profile_delete_button_ = new QPushButton("Delete", profile_group);
+    profile_layout->addWidget(profile_combo_, 0, 0, 1, 3);
+    profile_layout->addWidget(profile_apply_button_, 0, 3);
+    profile_layout->addWidget(profile_save_button_, 1, 0);
+    profile_layout->addWidget(profile_update_button_, 1, 1);
+    profile_layout->addWidget(profile_rename_button_, 1, 2);
+    profile_layout->addWidget(profile_delete_button_, 1, 3);
+    encode_tab_layout->addWidget(profile_group);
+
     auto *video_group = new QGroupBox("Video", encode_tab_content);
     auto *video_layout = new QFormLayout(video_group);
     video_codec_combo_ = new QComboBox(video_group);
@@ -1613,18 +1685,27 @@ QLabel#PreviewTimeBadge {
     });
     crf_spin_box_ = new QSpinBox(video_group);
     crf_spin_box_->setRange(0, 51);
+    resize_preset_combo_ = new QComboBox(video_group);
+    resize_preset_combo_->addItem("Source", 0);
+    resize_preset_combo_->addItem("1080p", 1080);
+    resize_preset_combo_->addItem("720p", 720);
+    resize_preset_combo_->addItem("540p", 540);
+    resize_preset_combo_->addItem("480p", 480);
     video_layout->addRow("Codec", video_codec_combo_);
     video_layout->addRow("CRF", crf_spin_box_);
     video_layout->addRow("Preset", preset_combo_);
+    video_layout->addRow("Resize", resize_preset_combo_);
 
     auto *audio_group = new QGroupBox("Audio", encode_tab_content);
     auto *audio_layout = new QFormLayout(audio_group);
     audio_format_combo_ = new QComboBox(audio_group);
+    audio_format_combo_->addItem("Auto", static_cast<int>(utsure::core::media::AudioOutputMode::auto_select));
     audio_format_combo_->addItem("AAC", static_cast<int>(utsure::core::media::AudioOutputMode::encode_aac));
     audio_format_combo_->addItem(
         "Copy source",
         static_cast<int>(utsure::core::media::AudioOutputMode::copy_source)
     );
+    audio_format_combo_->addItem("No audio", static_cast<int>(utsure::core::media::AudioOutputMode::disable));
     audio_quality_combo_ = new QComboBox(audio_group);
     audio_quality_combo_->addItem("128 kbps", 128);
     audio_quality_combo_->addItem("160 kbps", 160);
@@ -1636,7 +1717,7 @@ QLabel#PreviewTimeBadge {
     audio_layout->addRow("Quality", audio_quality_combo_);
     audio_layout->addRow("Track", audio_track_combo_);
     auto *audio_note = new QLabel(
-        "Track selection is UI-only for now. The current backend still encodes the primary detected source track.",
+        "Japanese audio is selected automatically when detected. Manual track choices stay with the job.",
         audio_group
     );
     audio_note->setObjectName("MutedNote");
@@ -1916,6 +1997,11 @@ QLabel#PreviewTimeBadge {
     connect(settings_button_, &QToolButton::clicked, this, &MainWindow::show_settings_dialog);
     connect(info_button_, &QToolButton::clicked, this, &MainWindow::show_info_dialog);
     connect(parallel_button_, &QToolButton::clicked, this, &MainWindow::show_parallel_settings_dialog);
+    connect(profile_apply_button_, &QPushButton::clicked, this, &MainWindow::apply_selected_profile);
+    connect(profile_save_button_, &QPushButton::clicked, this, &MainWindow::save_current_settings_as_profile);
+    connect(profile_update_button_, &QPushButton::clicked, this, &MainWindow::update_selected_profile);
+    connect(profile_rename_button_, &QPushButton::clicked, this, &MainWindow::rename_selected_profile);
+    connect(profile_delete_button_, &QPushButton::clicked, this, &MainWindow::delete_selected_profile);
     connect(start_button_, &QToolButton::clicked, this, &MainWindow::start_encode_queue);
     connect(stop_button_, &QToolButton::clicked, this, &MainWindow::stop_encode_queue);
     connect(same_as_input_check_, &QCheckBox::toggled, this, &MainWindow::handle_same_as_input_toggled);
@@ -2000,11 +2086,17 @@ QLabel#PreviewTimeBadge {
     connect(video_codec_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [bind_editor_change](int) { bind_editor_change(); });
     connect(preset_combo_, &QComboBox::currentTextChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
     connect(crf_spin_box_, qOverload<int>(&QSpinBox::valueChanged), this, [bind_editor_change](int) { bind_editor_change(); });
+    connect(resize_preset_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [bind_editor_change](int) { bind_editor_change(); });
     connect(audio_format_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this, bind_editor_change](int) {
         bind_editor_change();
         refresh_editor_state();
     });
     connect(audio_quality_combo_, qOverload<int>(&QComboBox::currentIndexChanged), this, [bind_editor_change](int) { bind_editor_change(); });
+    connect(audio_track_combo_, qOverload<int>(&QComboBox::activated), this, [this](int) {
+        if (is_valid_job_index(selected_job_index_)) {
+            jobs_[static_cast<std::size_t>(selected_job_index_)].audio_track_manual_override = true;
+        }
+    });
     connect(audio_track_combo_, &QComboBox::currentTextChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
 
     connect(frame_back_button_, &QPushButton::clicked, this, [this]() { step_selected_job_frame(-1); });
@@ -2020,6 +2112,7 @@ QLabel#PreviewTimeBadge {
     if (!settings_load_result.warning.trimmed().isEmpty()) {
         append_session_log("[warning] " + settings_load_result.warning);
     }
+    refresh_profile_combo();
     refresh_all_views();
 }
 
@@ -2159,6 +2252,7 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job_from_entry(
 
     utsure::core::job::EncodeJob job{};
     job.input.main_source_path = qstring_to_path(entry.source_path);
+    job.input.selected_main_audio_stream_index = entry.selected_audio_stream_index;
     job.output.output_path = qstring_to_path(entry.output_path);
     job.output.video.codec = entry.video_codec;
     job.output.video.preset = entry.video_preset.trimmed().toUtf8().toStdString();
@@ -2166,6 +2260,7 @@ std::optional<utsure::core::job::EncodeJob> MainWindow::build_job_from_entry(
     job.output.audio.mode = entry.audio_mode;
     job.output.audio.codec = utsure::core::media::OutputAudioCodec::aac;
     job.output.audio.bitrate_kbps = entry.audio_bitrate_kbps;
+    job.output.resize = entry.resize;
     job.output.append_crc32_suffix = app_settings_.output_naming.crc32_suffix_enabled;
     job.execution.threading.cpu_usage_mode = utsure::core::media::CpuUsageMode::auto_select;
     job.execution.process_priority = current_worker_priority();
@@ -2241,6 +2336,18 @@ utsure::core::job::OutputNamingRequest MainWindow::build_output_naming_request(c
     if (job.inspected_source_info.has_value() && job.inspected_source_info->primary_video_stream.has_value()) {
         output_width = job.inspected_source_info->primary_video_stream->width;
         output_height = job.inspected_source_info->primary_video_stream->height;
+        const auto resize_result = utsure::core::job::calculate_resize_dimensions(
+            utsure::core::job::ResizeSourceDimensions{
+                .width = *output_width,
+                .height = *output_height,
+                .sample_aspect_ratio = job.inspected_source_info->primary_video_stream->sample_aspect_ratio
+            },
+            job.resize
+        );
+        if (resize_result.succeeded()) {
+            output_width = resize_result.dimensions->width;
+            output_height = resize_result.dimensions->height;
+        }
     }
 
     return utsure::core::job::OutputNamingRequest{
@@ -2877,6 +2984,210 @@ void MainWindow::show_settings_dialog() {
     }
     append_session_log("[info] Settings updated.");
     refresh_all_views();
+}
+
+void MainWindow::refresh_profile_combo() {
+    if (profile_combo_ == nullptr) {
+        return;
+    }
+
+    const QSignalBlocker blocker(profile_combo_);
+    profile_combo_->clear();
+    for (const auto &profile : app_settings_.encoding_profiles) {
+        profile_combo_->addItem(profile.name);
+    }
+    const int last_used_index = profile_combo_->findText(app_settings_.last_used_profile, Qt::MatchFixedString);
+    if (last_used_index >= 0) {
+        profile_combo_->setCurrentIndex(last_used_index);
+    }
+}
+
+void MainWindow::apply_selected_profile() {
+    if (!is_valid_job_index(selected_job_index_) || profile_combo_ == nullptr) {
+        return;
+    }
+
+    const QString profile_name = profile_combo_->currentText().trimmed();
+    const auto profile = std::find_if(
+        app_settings_.encoding_profiles.begin(),
+        app_settings_.encoding_profiles.end(),
+        [&](const AppSettings::EncodingProfile &candidate) {
+            return candidate.name == profile_name;
+        }
+    );
+    if (profile == app_settings_.encoding_profiles.end()) {
+        return;
+    }
+
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    job.video_codec = profile->encode.codec;
+    job.video_preset = profile->encode.preset;
+    job.video_crf = profile->encode.crf;
+    job.audio_mode = profile->encode.audio_mode;
+    job.audio_bitrate_kbps = profile->encode.audio_bitrate_kbps;
+    job.resize = profile->resize;
+    app_settings_.last_used_profile = profile->name;
+    persist_last_used_encode_choices_from_job(job);
+
+    QString save_error;
+    if (!app_settings_.save(app_settings_path_, &save_error)) {
+        persist_app_settings_warning("save selected profile", save_error);
+    }
+
+    load_selected_job_into_editor();
+    if (!job.output_path_manual_override) {
+        apply_generated_output_path(selected_job_index_, false);
+    }
+    refresh_all_views();
+}
+
+void MainWindow::save_current_settings_as_profile() {
+    if (!is_valid_job_index(selected_job_index_)) {
+        return;
+    }
+
+    bool accepted = false;
+    const QString name =
+        QInputDialog::getText(this, "Save Profile", "Profile name", QLineEdit::Normal, QString{}, &accepted)
+            .trimmed();
+    if (!accepted || name.isEmpty()) {
+        return;
+    }
+
+    sync_selected_job_from_editor();
+    const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    AppSettings::EncodingProfile profile{
+        .name = name,
+        .encode = AppSettings::LastUsedEncodeChoices{
+            .codec = job.video_codec,
+            .preset = job.video_preset,
+            .crf = job.video_crf,
+            .audio_mode = job.audio_mode,
+            .audio_bitrate_kbps = job.audio_bitrate_kbps
+        },
+        .resize = job.resize
+    };
+
+    const auto existing = std::find_if(
+        app_settings_.encoding_profiles.begin(),
+        app_settings_.encoding_profiles.end(),
+        [&](const AppSettings::EncodingProfile &candidate) {
+            return candidate.name.compare(name, Qt::CaseInsensitive) == 0;
+        }
+    );
+    if (existing == app_settings_.encoding_profiles.end()) {
+        app_settings_.encoding_profiles.push_back(profile);
+    } else {
+        *existing = profile;
+    }
+    app_settings_.last_used_profile = name;
+    QString save_error;
+    if (!app_settings_.save(app_settings_path_, &save_error)) {
+        persist_app_settings_warning("save profile", save_error);
+    }
+    refresh_profile_combo();
+}
+
+void MainWindow::update_selected_profile() {
+    if (!is_valid_job_index(selected_job_index_) || profile_combo_ == nullptr) {
+        return;
+    }
+
+    const QString name = profile_combo_->currentText().trimmed();
+    auto profile = std::find_if(
+        app_settings_.encoding_profiles.begin(),
+        app_settings_.encoding_profiles.end(),
+        [&](const AppSettings::EncodingProfile &candidate) {
+            return candidate.name == name;
+        }
+    );
+    if (profile == app_settings_.encoding_profiles.end()) {
+        return;
+    }
+
+    sync_selected_job_from_editor();
+    const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    profile->encode = AppSettings::LastUsedEncodeChoices{
+        .codec = job.video_codec,
+        .preset = job.video_preset,
+        .crf = job.video_crf,
+        .audio_mode = job.audio_mode,
+        .audio_bitrate_kbps = job.audio_bitrate_kbps
+    };
+    profile->resize = job.resize;
+    app_settings_.last_used_profile = profile->name;
+    QString save_error;
+    if (!app_settings_.save(app_settings_path_, &save_error)) {
+        persist_app_settings_warning("update profile", save_error);
+    }
+}
+
+void MainWindow::rename_selected_profile() {
+    if (profile_combo_ == nullptr) {
+        return;
+    }
+
+    const QString old_name = profile_combo_->currentText().trimmed();
+    auto profile = std::find_if(
+        app_settings_.encoding_profiles.begin(),
+        app_settings_.encoding_profiles.end(),
+        [&](const AppSettings::EncodingProfile &candidate) {
+            return candidate.name == old_name;
+        }
+    );
+    if (profile == app_settings_.encoding_profiles.end()) {
+        return;
+    }
+
+    bool accepted = false;
+    const QString new_name = QInputDialog::getText(
+        this,
+        "Rename Profile",
+        "Profile name",
+        QLineEdit::Normal,
+        old_name,
+        &accepted
+    ).trimmed();
+    if (!accepted || new_name.isEmpty()) {
+        return;
+    }
+
+    profile->name = new_name;
+    if (app_settings_.last_used_profile == old_name) {
+        app_settings_.last_used_profile = new_name;
+    }
+    QString save_error;
+    if (!app_settings_.save(app_settings_path_, &save_error)) {
+        persist_app_settings_warning("rename profile", save_error);
+    }
+    refresh_profile_combo();
+}
+
+void MainWindow::delete_selected_profile() {
+    if (profile_combo_ == nullptr || app_settings_.encoding_profiles.size() <= 1U) {
+        return;
+    }
+
+    const QString name = profile_combo_->currentText().trimmed();
+    app_settings_.encoding_profiles.erase(
+        std::remove_if(
+            app_settings_.encoding_profiles.begin(),
+            app_settings_.encoding_profiles.end(),
+            [&](const AppSettings::EncodingProfile &profile) {
+                return profile.name == name;
+            }
+        ),
+        app_settings_.encoding_profiles.end()
+    );
+    if (app_settings_.encoding_profiles.empty()) {
+        app_settings_.encoding_profiles = AppSettings::default_encoding_profiles();
+    }
+    app_settings_.last_used_profile = app_settings_.encoding_profiles.front().name;
+    QString save_error;
+    if (!app_settings_.save(app_settings_path_, &save_error)) {
+        persist_app_settings_warning("delete profile", save_error);
+    }
+    refresh_profile_combo();
 }
 
 void MainWindow::show_info_dialog() {
@@ -4076,9 +4387,20 @@ void MainWindow::sync_selected_job_from_editor() {
     job.video_codec = static_cast<utsure::core::media::OutputVideoCodec>(video_codec_combo_->currentData().toInt());
     job.video_preset = preset_combo_->currentText().trimmed();
     job.video_crf = crf_spin_box_->value();
+    const int resize_height = resize_preset_combo_->currentData().toInt();
+    job.resize = resize_height > 0
+        ? utsure::core::job::EncodeResizeSettings{
+            .mode = utsure::core::job::EncodeResizeMode::target_height,
+            .target_height = resize_height,
+            .allow_upscale = false
+        }
+        : utsure::core::job::EncodeResizeSettings{};
     job.audio_mode = static_cast<utsure::core::media::AudioOutputMode>(audio_format_combo_->currentData().toInt());
     job.audio_bitrate_kbps = audio_quality_combo_->currentData().toInt();
     job.audio_track_display = audio_track_combo_->currentText().trimmed();
+    bool stream_index_ok = false;
+    const int stream_index = audio_track_combo_->currentData().toInt(&stream_index_ok);
+    job.selected_audio_stream_index = stream_index_ok ? std::optional<int>(stream_index) : std::nullopt;
     persist_last_used_encode_choices_from_job(job);
 
     if (!job.output_path_manual_override) {
@@ -4122,6 +4444,7 @@ void MainWindow::load_selected_job_into_editor() {
         video_codec_combo_->setCurrentIndex(codec_index >= 0 ? codec_index : 0);
         preset_combo_->setCurrentText(app_settings_.last_used.preset);
         crf_spin_box_->setValue(app_settings_.last_used.crf);
+        resize_preset_combo_->setCurrentIndex(0);
         int audio_mode_index = audio_format_combo_->findData(static_cast<int>(app_settings_.last_used.audio_mode));
         audio_format_combo_->setCurrentIndex(audio_mode_index >= 0 ? audio_mode_index : 0);
         int audio_quality_index = audio_quality_combo_->findData(app_settings_.last_used.audio_bitrate_kbps);
@@ -4149,6 +4472,10 @@ void MainWindow::load_selected_job_into_editor() {
         video_codec_combo_->setCurrentIndex(codec_index >= 0 ? codec_index : 0);
         preset_combo_->setCurrentText(job.video_preset);
         crf_spin_box_->setValue(job.video_crf);
+        const int resize_index = job.resize.mode == utsure::core::job::EncodeResizeMode::target_height
+            ? resize_preset_combo_->findData(job.resize.target_height)
+            : 0;
+        resize_preset_combo_->setCurrentIndex(resize_index >= 0 ? resize_index : 0);
         int audio_mode_index = audio_format_combo_->findData(static_cast<int>(job.audio_mode));
         audio_format_combo_->setCurrentIndex(audio_mode_index >= 0 ? audio_mode_index : 0);
         int audio_quality_index = audio_quality_combo_->findData(job.audio_bitrate_kbps);
@@ -4260,18 +4587,38 @@ void MainWindow::ensure_job_inspection(const int job_index) {
     job.inspected_source_key = normalized_key;
     job.inspected_source_info.reset();
     job.source_inspection_error.clear();
+    job.audio_track_manual_override = false;
+    job.selected_audio_stream_index.reset();
     job.input_size_bytes = QFileInfo(job.source_path).exists() ? QFileInfo(job.source_path).size() : -1;
 
     const auto inspection_result = utsure::core::media::MediaInspector::inspect(qstring_to_path(job.source_path));
     if (!inspection_result.succeeded()) {
         job.source_inspection_error = to_qstring(inspection_result.error->message);
         job.audio_track_display = "No source audio detected";
+        job.selected_audio_stream_index.reset();
+        job.audio_track_manual_override = false;
         apply_automatic_subtitle_selection(job_index, false);
         apply_automatic_thumbnail_selection(job_index, false);
         return;
     }
 
     job.inspected_source_info = *inspection_result.media_source_info;
+    if (!job.audio_track_manual_override) {
+        job.selected_audio_stream_index = job.inspected_source_info->selected_audio_stream_index;
+    } else if (job.selected_audio_stream_index.has_value()) {
+        const int selected_index = *job.selected_audio_stream_index;
+        const auto selected_stream = std::find_if(
+            job.inspected_source_info->audio_streams.begin(),
+            job.inspected_source_info->audio_streams.end(),
+            [selected_index](const auto &stream) {
+                return stream.stream_index == selected_index;
+            }
+        );
+        if (selected_stream == job.inspected_source_info->audio_streams.end()) {
+            job.selected_audio_stream_index = job.inspected_source_info->selected_audio_stream_index;
+            job.audio_track_manual_override = false;
+        }
+    }
     job.audio_track_display = format_audio_track_display(*job.inspected_source_info);
 
     if (job.inspected_source_info->container_duration_microseconds.has_value() &&
@@ -4708,6 +5055,13 @@ void MainWindow::refresh_editor_state() {
     video_codec_combo_->setEnabled(editable);
     preset_combo_->setEnabled(editable);
     crf_spin_box_->setEnabled(editable);
+    resize_preset_combo_->setEnabled(editable);
+    profile_combo_->setEnabled(editable && !app_settings_.encoding_profiles.empty());
+    profile_apply_button_->setEnabled(editable && profile_combo_->count() > 0);
+    profile_save_button_->setEnabled(editable);
+    profile_update_button_->setEnabled(editable && profile_combo_->count() > 0);
+    profile_rename_button_->setEnabled(editable && profile_combo_->count() > 0);
+    profile_delete_button_->setEnabled(editable && profile_combo_->count() > 1);
     audio_format_combo_->setEnabled(editable);
     audio_quality_combo_->setEnabled(audio_quality_enabled);
     audio_track_combo_->setEnabled(editable);
@@ -4892,10 +5246,24 @@ void MainWindow::refresh_audio_track_combo() {
         return;
     }
 
-    const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+    auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     const QSignalBlocker blocker(audio_track_combo_);
     audio_track_combo_->clear();
-    audio_track_combo_->addItem(job.audio_track_display);
+    if (!job.inspected_source_info.has_value() || job.inspected_source_info->audio_streams.empty()) {
+        audio_track_combo_->addItem(job.audio_track_display);
+        return;
+    }
+
+    int selected_combo_index = 0;
+    for (int i = 0; i < static_cast<int>(job.inspected_source_info->audio_streams.size()); ++i) {
+        const auto &stream = job.inspected_source_info->audio_streams[static_cast<std::size_t>(i)];
+        audio_track_combo_->addItem(format_audio_track_display(stream, i + 1), stream.stream_index);
+        if (job.selected_audio_stream_index.has_value() && stream.stream_index == *job.selected_audio_stream_index) {
+            selected_combo_index = i;
+        }
+    }
+    audio_track_combo_->setCurrentIndex(selected_combo_index);
+    job.audio_track_display = audio_track_combo_->currentText().trimmed();
 }
 
 void MainWindow::update_start_button_visuals() {

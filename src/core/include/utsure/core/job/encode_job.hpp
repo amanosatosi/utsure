@@ -2,6 +2,7 @@
 
 #include "utsure/core/media/media_encoder.hpp"
 #include "utsure/core/media/media_info.hpp"
+#include "utsure/core/job/resize.hpp"
 #include "utsure/core/timeline/timeline.hpp"
 
 #include <cstddef>
@@ -71,6 +72,7 @@ struct EncodeJobInput final {
     std::optional<std::int64_t> main_source_trim_in_us{};
     std::optional<std::int64_t> main_source_trim_out_us{};
     std::optional<std::filesystem::path> outro_source_path{};
+    std::optional<int> selected_main_audio_stream_index{};
 };
 
 struct EncodeJobSubtitleSettings final {
@@ -98,6 +100,7 @@ struct EncodeJobOutputSettings final {
     std::filesystem::path output_path{};
     EncodeJobVideoOutputSettings video{};
     media::AudioEncodeSettings audio{};
+    EncodeResizeSettings resize{};
     bool append_crc32_suffix{false};
 };
 
