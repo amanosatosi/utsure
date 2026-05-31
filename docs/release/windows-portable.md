@@ -50,7 +50,6 @@ The packaging entry point is `scripts/ci/windows-msys2-package-portable.sh`.
 - No code signing is wired into CI.
 - The smoke test proves launchability, not full encode validation on a clean machine.
 - Linux and macOS packaging are not implemented.
-- libassmod `\img` host-side resource registration is still not part of the shipped pipeline.
 
 ## What GitHub Actions should continue to verify
 

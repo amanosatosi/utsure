@@ -129,6 +129,8 @@ Subtitle rendering stays behind the existing abstraction. The active libassmod a
 
 ASS subtitle sessions are prepared with `FontCollector` before libassmod session creation. The prepared font directory is passed through `SubtitleRenderSessionCreateRequest::font_search_directory`, kept alive for the session lifetime, and treated as the primary font-preparation result for preview, preflight, legacy burn-in, and streaming encode. Missing or failed `FontCollector` blocks ASS rendering instead of silently falling back to the normal font provider.
 
+For libassmod `\img` tags, Utsure acts only as a host asset provider. During subtitle session setup it scans rendered Dialogue event text for `\img` references, rejects absolute or path-traversal references, resolves assets next to the `.ass` file or in simple `assets`, `images`, and `img` sidecar folders, decodes supported PNG/JPEG/WebP images to RGBA, and registers them once with libassmod. libassmod owns tag parsing and rendering; Utsure does not manually draw `\img` output.
+
 The libassmod calls currently used in the adapter are:
 
 - `ass_library_init`
@@ -141,6 +143,7 @@ The libassmod calls currently used in the adapter are:
 - `ass_set_use_margins`
 - `ass_set_fonts`
 - `ass_read_file`
+- `ass_set_tag_image_rgba`
 - `ass_render_frame_rgba`
 - `ass_free_images_rgba`
 - `ass_clear_tag_images`

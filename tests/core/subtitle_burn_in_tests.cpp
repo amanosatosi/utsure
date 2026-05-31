@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -81,6 +82,24 @@ bool string_messages_contain_text(const std::vector<std::string> &messages, std:
     }
 
     return false;
+}
+
+std::size_t count_string_messages_containing_text(
+    const std::vector<std::string> &messages,
+    const std::string_view needle
+) {
+    std::size_t count = 0;
+    for (const auto &message : messages) {
+        if (message.find(needle) != std::string::npos) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+void write_text_file(const std::filesystem::path &path, const std::string_view text) {
+    std::ofstream stream(path, std::ios::binary);
+    stream << text;
 }
 
 struct SubtitleScheduleDiagnostic final {
@@ -732,11 +751,65 @@ int run_img_asset_render_assertion(const std::filesystem::path &subtitle_path) {
         return fail("The libassmod img subtitle sample did not log the expected asset registration diagnostics.");
     }
 
+    const auto second_render_result = session_result.session->render(SubtitleRenderRequest{
+        .timestamp_microseconds = 41667,
+        .debug_context = &debug_context
+    });
+    if (!second_render_result.succeeded()) {
+        return fail("The libassmod img subtitle sample failed a second render after session setup.");
+    }
+    if (count_string_messages_containing_text(diagnostics, "Subtitle image asset registered: thumbnail.png") != 1U) {
+        return fail("The libassmod img asset path should register/log assets once per session, not per render.");
+    }
+
     std::cout << "session.subtitle_path=" << format_path_leaf(subtitle_path) << '\n';
     std::cout << "session.created=yes\n";
     std::cout << "img_asset.registered=yes\n";
+    std::cout << "img_asset.registration_once=yes\n";
     std::cout << "render.succeeded=yes\n";
     std::cout << "render.bitmap_count=" << render_result.rendered_frame->bitmaps.size() << '\n';
+    return 0;
+}
+
+int run_missing_img_asset_render_assertion(const std::filesystem::path &subtitle_path) {
+    const auto missing_subtitle_path = subtitle_path.parent_path() / "subtitle-burn-img-missing.generated.ass";
+    write_text_file(
+        missing_subtitle_path,
+        "[Script Info]\n"
+        "Title: missing img asset test\n"
+        "ScriptType: v4.00+\n"
+        "PlayResX: 320\n"
+        "PlayResY: 180\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        "Style: Default,Arial,24,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,2,12,12,12,1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Dialogue: 0,0:00:00.00,0:00:00.45,Default,,0,0,0,,{\\img(missing-asset.png)}IMG TAG\n"
+    );
+
+    auto subtitle_renderer = create_default_subtitle_renderer();
+    if (!subtitle_renderer) {
+        return fail("The default subtitle renderer could not be created.");
+    }
+
+    const auto session_result = subtitle_renderer->create_session(SubtitleRenderSessionCreateRequest{
+        .subtitle_path = missing_subtitle_path,
+        .format_hint = "ass",
+        .canvas_width = 320,
+        .canvas_height = 180,
+        .sample_aspect_ratio = Rational{1, 1}
+    });
+    if (session_result.succeeded() ||
+        !session_result.error.has_value() ||
+        session_result.error->message.find("Missing subtitle image asset: missing-asset.png") == std::string::npos) {
+        return fail("Missing libassmod img asset did not fail session creation clearly.");
+    }
+
+    std::cout << "img_asset.missing=session_failed\n";
+    std::cout << "img_asset.error=clear\n";
     return 0;
 }
 
@@ -1657,6 +1730,10 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--render-img-asset" && argc == 3) {
         return run_img_asset_render_assertion(std::filesystem::path(argv[2]));
+    }
+
+    if (mode == "--render-img-missing" && argc == 3) {
+        return run_missing_img_asset_render_assertion(std::filesystem::path(argv[2]));
     }
 
     if (mode == "--h264" && argc == 6) {

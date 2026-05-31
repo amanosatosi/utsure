@@ -18,6 +18,7 @@ Implemented so far:
 - A core job/config layer that drives inspect -> bounded-memory streaming transcode -> muxed audio/video encode without introducing GUI-bound settings types.
 - A technology-agnostic subtitle renderer/session boundary with timestamped RGBA-oriented overlay contracts.
 - A `libassmod`-backed subtitle burn-in path that renders ASS subtitles onto decoded RGBA frames before final encode without relying on FFmpeg `libavfilter`.
+- Host-side `\img` asset resolution, decode, and registration for libassmod scripts that reference external image assets, while libassmod remains responsible for rendering the tag.
 - A core timeline layer that assembles intro/main/outro segments, preserves the main clip cadence, stitches aligned normalized audio, and feeds the existing encode-job path.
 - A bounded-memory streaming encode path centered on FFmpeg 7.1 `libavformat`, `libavcodec`, `libswscale`, and `libswresample`, with incremental demux/decode/subtitle-composite/encode/mux instead of full decoded-clip buffering.
 - A first usable Qt 6 Widgets window for selecting source/subtitle/intro/outro assets, choosing H.264 or H.265 with preset and CRF, setting an output path, starting the encode, and viewing progress, logs, and errors.
@@ -26,7 +27,6 @@ These milestones are currently covered by the Windows GitHub Actions build and t
 
 Not implemented yet:
 
-- Host-side `\img` asset registration for libassmod scripts that reference external RGBA tag images.
 - Hardware-accelerated decode/encode paths.
 - Linux/macOS validation beyond the documented Windows-first workflow.
 

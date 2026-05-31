@@ -61,6 +61,20 @@ int run_scan_assertions() {
         return fail("ASS without img tags reported image assets.");
     }
 
+    const auto ignored_references = utsure::core::subtitles::find_subtitle_image_asset_references_in_text(
+        "[Script Info]\n"
+        "; {\\img(script-comment.png)}\n"
+        "Title: {\\img(title.png)}\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+        "Comment: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\img(comment.png)}Ignored\n"
+        "Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\img(rendered.png)}Rendered\n"
+    );
+    if (ignored_references.size() != 1U || !contains_reference(ignored_references, "rendered.png")) {
+        return fail("ASS img scanner should only require rendered Dialogue event text assets.");
+    }
+
     const auto references = utsure::core::subtitles::find_subtitle_image_asset_references_in_text(
         ass_with_text("{\\img(logo.png)}A {\\1img(\"assets/tile.png\", 2, 3)}B {\\2img(assets\\tile2.png)}C {\\img(logo.png)}D")
     );
@@ -80,6 +94,7 @@ int run_resolve_decode_assertions(const std::filesystem::path &sample_png) {
     const auto sidecar = root / "assets";
     std::filesystem::create_directories(sidecar);
     std::filesystem::copy_file(sample_png, sidecar / "logo.png", std::filesystem::copy_options::overwrite_existing);
+    write_text(sidecar / "logo", "not an image");
 
     const auto subtitle_path = root / "sample.ass";
     write_text(subtitle_path, ass_with_text("{\\img(logo)}Image"));
@@ -90,6 +105,7 @@ int run_resolve_decode_assertions(const std::filesystem::path &sample_png) {
     if (result.references.size() != 1U ||
         result.assets.size() != 1U ||
         result.assets[0].name != "logo" ||
+        result.assets[0].source_path.filename() != "logo.png" ||
         result.assets[0].width <= 0 ||
         result.assets[0].height <= 0 ||
         result.assets[0].stride < result.assets[0].width * 4 ||

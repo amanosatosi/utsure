@@ -1263,6 +1263,11 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.subtitles.libassmod.render.img_missing_asset
+    COMMAND utsure_core_subtitle_burn_in_tests --render-img-missing "${UTSURE_SUBTITLE_IMG_SAMPLE_FILE}"
+)
+
+add_test(
     NAME utsure.core.subtitles.burn_in.h264
     COMMAND utsure_core_subtitle_burn_in_tests --h264
         "${UTSURE_SAMPLE_MEDIA_FILE}"

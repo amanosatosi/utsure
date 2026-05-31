@@ -104,7 +104,7 @@ SubtitleRenderSessionResult make_session_error(
     return SubtitleRenderSessionResult{
         .session = nullptr,
         .error = SubtitleRendererError{
-            .subtitle_path = request.subtitle_path.lexically_normal().string(),
+            .subtitle_path = path_to_utf8_string(request.subtitle_path),
             .message = runtime_policy::format_operation_message(
                 classification,
                 "subtitle session creation",
@@ -286,7 +286,7 @@ std::string format_renderer_setup_diagnostics(
             << ", font.provider=autodetect"
             << ", libassmod_ref=" << UTSURE_LIBASSMOD_REF;
     if (request.font_search_directory.has_value()) {
-        message << ", font.directory=" << request.font_search_directory->lexically_normal().string();
+        message << ", font.directory=" << path_to_utf8_string(*request.font_search_directory);
     } else {
         message << ", font.directory=none";
     }
@@ -343,7 +343,7 @@ TrackHandle load_track(
     TrackHandle track(ass_read_file(&library, subtitle_path_utf8.c_str(), nullptr));
     if (!track) {
         throw std::runtime_error(
-            "libassmod failed to parse subtitle script '" + request.subtitle_path.lexically_normal().string() + "'."
+            "libassmod failed to parse subtitle script '" + path_to_utf8_string(request.subtitle_path) + "'."
         );
     }
 
@@ -363,50 +363,70 @@ ASS_TagImageFormat to_ass_tag_image_format(const SubtitleImageAssetFormat format
     throw std::runtime_error("Unsupported subtitle image asset format.");
 }
 
-std::vector<std::string> register_subtitle_image_assets(
+struct SubtitleImageAssetRegistrationResult final {
+    std::vector<std::string> diagnostics{};
+    std::optional<SubtitleImageAssetError> error{};
+
+    [[nodiscard]] bool succeeded() const noexcept {
+        return !error.has_value();
+    }
+};
+
+SubtitleImageAssetRegistrationResult register_subtitle_image_assets(
     ASS_Renderer &renderer,
     const std::vector<SubtitleImageAsset> &assets
 ) {
     std::vector<std::string> diagnostics{};
     if (assets.empty()) {
-        return diagnostics;
+        return SubtitleImageAssetRegistrationResult{.diagnostics = {}, .error = std::nullopt};
     }
 
-    try {
-        for (const auto &asset : assets) {
-            if (asset.name.empty() || asset.width <= 0 || asset.height <= 0 ||
-                asset.stride < asset.width * 4 || asset.rgba.empty()) {
-                throw std::runtime_error("Invalid subtitle image asset buffer for '" + asset.name + "'.");
-            }
-
-            const int result = ass_set_tag_image_rgba(
-                &renderer,
-                asset.name.c_str(),
-                to_ass_tag_image_format(asset.format),
-                asset.width,
-                asset.height,
-                asset.stride,
-                asset.rgba.data()
-            );
-            if (result != 0) {
-                throw std::runtime_error(
-                    "libassmod rejected subtitle image asset '" + asset.name + "' from '" +
-                    asset.source_path.lexically_normal().string() + "'."
-                );
-            }
-
-            diagnostics.push_back(
-                "Subtitle image asset registered: " + asset.name + " -> " +
-                asset.source_path.lexically_normal().string() + " (" +
-                std::to_string(asset.width) + "x" + std::to_string(asset.height) + ")"
-            );
+    for (const auto &asset : assets) {
+        if (asset.name.empty() || asset.width <= 0 || asset.height <= 0 ||
+            asset.stride < asset.width * 4 || asset.rgba.empty()) {
+            ass_clear_tag_images(&renderer);
+            return SubtitleImageAssetRegistrationResult{
+                .diagnostics = std::move(diagnostics),
+                .error = SubtitleImageAssetError{
+                    .message = "Invalid subtitle image asset buffer: " + asset.name,
+                    .actionable_hint = "The decoded image asset is not a valid RGBA surface."
+                }
+            };
         }
-    } catch (...) {
-        ass_clear_tag_images(&renderer);
-        throw;
+
+        // libassmod's pinned ass_set_tag_image_rgba() copies the supplied RGBA bytes.
+        // The session still keeps decoded asset objects for diagnostics and future API changes.
+        const int result = ass_set_tag_image_rgba(
+            &renderer,
+            asset.name.c_str(),
+            to_ass_tag_image_format(asset.format),
+            asset.width,
+            asset.height,
+            asset.stride,
+            asset.rgba.data()
+        );
+        if (result != 0) {
+            ass_clear_tag_images(&renderer);
+            return SubtitleImageAssetRegistrationResult{
+                .diagnostics = std::move(diagnostics),
+                .error = SubtitleImageAssetError{
+                    .message = "libassmod rejected subtitle image asset: " + asset.name,
+                    .actionable_hint = "Asset path: " + path_to_utf8_string(asset.source_path)
+                }
+            };
+        }
+
+        diagnostics.push_back(
+            "Subtitle image asset registered: " + asset.name + " -> " +
+            path_to_utf8_string(asset.source_path) + " (" +
+            std::to_string(asset.width) + "x" + std::to_string(asset.height) + ")"
+        );
     }
 
-    return diagnostics;
+    return SubtitleImageAssetRegistrationResult{
+        .diagnostics = std::move(diagnostics),
+        .error = std::nullopt
+    };
 }
 
 std::uint8_t ass_color_red(const std::uint32_t color) noexcept {
@@ -1163,23 +1183,21 @@ public:
             auto quirk_messages = image_asset_result.references.empty()
                 ? std::vector<std::string>{}
                 : std::move(image_asset_result.diagnostics);
-            std::vector<std::string> registration_diagnostics{};
-            try {
-                registration_diagnostics = register_subtitle_image_assets(
-                    *renderer,
-                    image_asset_result.assets
-                );
-            } catch (const std::exception &exception) {
+            const auto registration_result = register_subtitle_image_assets(
+                *renderer,
+                image_asset_result.assets
+            );
+            if (!registration_result.succeeded()) {
                 return make_session_error(
                     request,
-                    "Failed to register subtitle image assets with libassmod.",
-                    exception.what()
+                    registration_result.error->message,
+                    registration_result.error->actionable_hint
                 );
             }
             quirk_messages.insert(
                 quirk_messages.end(),
-                registration_diagnostics.begin(),
-                registration_diagnostics.end()
+                registration_result.diagnostics.begin(),
+                registration_result.diagnostics.end()
             );
 
             auto track = load_track(*library, request);
@@ -1187,7 +1205,7 @@ public:
             return SubtitleRenderSessionResult{
                 .session = std::make_unique<LibassmodSubtitleRenderSession>(
                     request,
-                    normalized_path.string(),
+                    path_to_utf8_string(normalized_path),
                     std::move(quirk_messages),
                     std::move(image_asset_result.assets),
                     std::move(library),

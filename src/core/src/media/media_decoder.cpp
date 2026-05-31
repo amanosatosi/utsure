@@ -142,6 +142,15 @@ struct TimestampSeed final {
     TimestampOrigin origin{TimestampOrigin::stream_cursor};
 };
 
+std::string path_to_utf8_string(const std::filesystem::path &path) {
+#if defined(_WIN32)
+    const auto normalized = path.lexically_normal().u8string();
+    return std::string(reinterpret_cast<const char *>(normalized.c_str()), normalized.size());
+#else
+    return path.lexically_normal().string();
+#endif
+}
+
 std::vector<std::vector<float>> resample_audio_frame(
     SwrContext &resample_context,
     const AVFrame *decoded_frame,
@@ -1872,7 +1881,7 @@ MediaDecodeResult MediaDecoder::decode(
 ) noexcept {
     try {
         const auto normalized_input_path = input_path.lexically_normal();
-        const auto input_path_string = normalized_input_path.string();
+        const auto input_path_string = path_to_utf8_string(normalized_input_path);
 
         if (input_path_string.empty()) {
             return make_error(
@@ -1960,7 +1969,7 @@ MediaDecodeResult MediaDecoder::decode(
         };
     } catch (const std::exception &exception) {
         return make_error(
-            input_path.string(),
+            path_to_utf8_string(input_path),
             runtime_policy::format_operation_message(
                 runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
                 "media decode",
@@ -1978,7 +1987,7 @@ VideoFrameDecodeResult MediaDecoder::decode_video_frame_at_time(
 ) noexcept {
     try {
         const auto normalized_input_path = input_path.lexically_normal();
-        const auto input_path_string = normalized_input_path.string();
+        const auto input_path_string = path_to_utf8_string(normalized_input_path);
 
         if (input_path_string.empty()) {
             return make_video_frame_error(
@@ -2052,7 +2061,7 @@ VideoFrameDecodeResult MediaDecoder::decode_video_frame_at_time(
         };
     } catch (const std::exception &exception) {
         return make_video_frame_error(
-            input_path.string(),
+            path_to_utf8_string(input_path),
             runtime_policy::format_operation_message(
                 runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
                 "preview frame decode",
@@ -2071,7 +2080,7 @@ VideoFrameWindowDecodeResult MediaDecoder::decode_video_frame_window_at_time(
 ) noexcept {
     try {
         const auto normalized_input_path = input_path.lexically_normal();
-        const auto input_path_string = normalized_input_path.string();
+        const auto input_path_string = path_to_utf8_string(normalized_input_path);
 
         if (input_path_string.empty()) {
             return make_video_frame_window_error(
@@ -2143,7 +2152,7 @@ VideoFrameWindowDecodeResult MediaDecoder::decode_video_frame_window_at_time(
         };
     } catch (const std::exception &exception) {
         return make_video_frame_window_error(
-            input_path.string(),
+            path_to_utf8_string(input_path),
             runtime_policy::format_operation_message(
                 runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
                 "preview frame window decode",
@@ -2160,7 +2169,7 @@ VideoPreviewSessionCreateResult MediaDecoder::create_video_preview_session(
 ) noexcept {
     try {
         const auto normalized_input_path = input_path.lexically_normal();
-        const auto input_path_string = normalized_input_path.string();
+        const auto input_path_string = path_to_utf8_string(normalized_input_path);
 
         auto backend_result = ffms2_preview::create_video_preview_backend(
             normalized_input_path,
@@ -2187,7 +2196,7 @@ VideoPreviewSessionCreateResult MediaDecoder::create_video_preview_session(
         };
     } catch (const std::exception &exception) {
         return make_video_preview_session_error(
-            input_path.string(),
+            path_to_utf8_string(input_path),
             runtime_policy::format_operation_message(
                 runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
                 "preview session creation",
@@ -2205,7 +2214,7 @@ AudioPreviewSessionCreateResult MediaDecoder::create_audio_preview_session(
 ) noexcept {
     try {
         const auto normalized_input_path = input_path.lexically_normal();
-        const auto input_path_string = normalized_input_path.string();
+        const auto input_path_string = path_to_utf8_string(normalized_input_path);
 
         auto backend_result = ffms2_preview::create_audio_preview_backend(
             normalized_input_path,
@@ -2231,7 +2240,7 @@ AudioPreviewSessionCreateResult MediaDecoder::create_audio_preview_session(
         };
     } catch (const std::exception &exception) {
         return make_audio_preview_session_error(
-            input_path.string(),
+            path_to_utf8_string(input_path),
             runtime_policy::format_operation_message(
                 runtime_policy::RuntimeAnomalyClass::unsafe_or_corrupt,
                 "preview audio session creation",

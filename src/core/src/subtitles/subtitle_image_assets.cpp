@@ -43,6 +43,23 @@ std::string lowercase_ascii(std::string value) {
     return value;
 }
 
+bool iequals_ascii(const std::string_view left, const std::string_view right) {
+    return lowercase_ascii(std::string(left)) == lowercase_ascii(std::string(right));
+}
+
+bool starts_with_case_insensitive(const std::string_view value, const std::string_view prefix) {
+    return value.size() >= prefix.size() && iequals_ascii(value.substr(0, prefix.size()), prefix);
+}
+
+std::string path_to_utf8_string(const std::filesystem::path &path) {
+#if defined(_WIN32)
+    const auto normalized = path.lexically_normal().u8string();
+    return std::string(reinterpret_cast<const char *>(normalized.c_str()), normalized.size());
+#else
+    return path.lexically_normal().string();
+#endif
+}
+
 bool starts_img_tag_name(std::string_view value, std::size_t index) {
     if (index >= value.size() || value[index] != '\\') {
         return false;
@@ -93,7 +110,7 @@ std::optional<std::string> extract_img_path_argument(std::string_view args) {
 std::string read_text_file_or_throw(const std::filesystem::path &path) {
     std::ifstream stream(path, std::ios::binary);
     if (!stream) {
-        throw std::runtime_error("Could not read subtitle script '" + path.lexically_normal().string() + "'.");
+        throw std::runtime_error("Could not read subtitle script '" + path_to_utf8_string(path) + "'.");
     }
 
     return std::string{
@@ -131,7 +148,11 @@ bool path_has_parent_traversal(const std::filesystem::path &path) {
 }
 
 bool is_safe_relative_reference(const std::filesystem::path &path) {
-    return !path.empty() && !path.is_absolute() && !path_has_parent_traversal(path);
+    return !path.empty() &&
+        !path.is_absolute() &&
+        !path.has_root_name() &&
+        !path.has_root_directory() &&
+        !path_has_parent_traversal(path);
 }
 
 std::vector<std::filesystem::path> build_asset_candidates(
@@ -147,12 +168,14 @@ std::vector<std::filesystem::path> build_asset_candidates(
     };
 
     const auto add_reference_candidates = [&candidates, &extension_guesses](const std::filesystem::path &base) {
-        candidates.push_back(base);
         if (!base.has_extension()) {
             for (const auto &extension : extension_guesses) {
-                candidates.push_back(base.string() + extension.string());
+                auto candidate = base;
+                candidate.replace_extension(extension);
+                candidates.push_back(std::move(candidate));
             }
         }
+        candidates.push_back(base);
     };
 
     add_reference_candidates(subtitle_directory / reference_path);
@@ -178,18 +201,24 @@ std::optional<std::filesystem::path> resolve_asset_path(
         return std::nullopt;
     }
 
+    std::optional<std::filesystem::path> unsupported_existing_candidate{};
     for (const auto &candidate : build_asset_candidates(subtitle_directory, reference_path)) {
         const auto normalized = candidate.lexically_normal();
         if (!is_regular_file_quiet(normalized)) {
             continue;
         }
         if (!format_from_extension(normalized).has_value()) {
-            if (error_message != nullptr) {
-                *error_message = "Unsupported subtitle image asset format: " + normalized.lexically_normal().string();
-            }
-            return std::nullopt;
+            unsupported_existing_candidate = normalized;
+            continue;
         }
         return normalized;
+    }
+    if (unsupported_existing_candidate.has_value()) {
+        if (error_message != nullptr) {
+            *error_message = "Unsupported subtitle image asset format: " +
+                path_to_utf8_string(*unsupported_existing_candidate);
+        }
+        return std::nullopt;
     }
 
     if (error_message != nullptr) {
@@ -206,7 +235,7 @@ std::optional<SubtitleImageAssetError> validate_decoded_asset_frame(
     if (frame.width <= 0 || frame.height <= 0) {
         return SubtitleImageAssetError{
             .message = "Invalid subtitle image asset dimensions: " + name,
-            .actionable_hint = "Replace '" + source_path.lexically_normal().string() + "' with a readable non-empty image."
+            .actionable_hint = "Replace '" + path_to_utf8_string(source_path) + "' with a readable non-empty image."
         };
     }
     if (frame.width > kMaximumAssetDimension || frame.height > kMaximumAssetDimension) {
@@ -224,7 +253,7 @@ std::optional<SubtitleImageAssetError> validate_decoded_asset_frame(
     if (frame.planes.empty() || frame.planes[0].line_stride_bytes < frame.width * 4) {
         return SubtitleImageAssetError{
             .message = "Subtitle image asset did not decode to a valid RGBA surface: " + name,
-            .actionable_hint = "Replace '" + source_path.lexically_normal().string() + "' with a valid PNG, JPEG, or WebP image."
+            .actionable_hint = "Replace '" + path_to_utf8_string(source_path) + "' with a valid PNG, JPEG, or WebP image."
         };
     }
 
@@ -233,7 +262,7 @@ std::optional<SubtitleImageAssetError> validate_decoded_asset_frame(
     if (required_size > frame.planes[0].bytes.size()) {
         return SubtitleImageAssetError{
             .message = "Subtitle image asset decoded to a truncated RGBA buffer: " + name,
-            .actionable_hint = "Replace '" + source_path.lexically_normal().string() + "' with a valid image file."
+            .actionable_hint = "Replace '" + path_to_utf8_string(source_path) + "' with a valid image file."
         };
     }
 
@@ -257,26 +286,76 @@ SubtitleImageAssetLoadResult make_asset_error(
     };
 }
 
-}  // namespace
+std::vector<std::string> split_ass_fields(const std::string_view payload, const std::size_t field_count) {
+    std::vector<std::string> fields{};
+    fields.reserve(field_count);
+    std::size_t field_start = 0;
+    for (std::size_t field_index = 0; field_index + 1U < field_count; ++field_index) {
+        const auto comma = payload.find(',', field_start);
+        if (comma == std::string_view::npos) {
+            fields.emplace_back(payload.substr(field_start));
+            field_start = payload.size();
+            break;
+        }
 
-bool SubtitleImageAssetLoadResult::succeeded() const noexcept {
-    return !error.has_value();
+        fields.emplace_back(payload.substr(field_start, comma - field_start));
+        field_start = comma + 1U;
+    }
+
+    fields.emplace_back(payload.substr(std::min(field_start, payload.size())));
+    while (fields.size() < field_count) {
+        fields.emplace_back();
+    }
+    return fields;
 }
 
-std::vector<SubtitleImageAssetReference> find_subtitle_image_asset_references_in_text(
-    const std::string_view script_text
-) {
-    std::vector<SubtitleImageAssetReference> references{};
-    std::set<std::string> seen{};
+struct AssDialogueFormat final {
+    std::size_t text_index{9};
+    std::size_t field_count{10};
+};
 
+std::optional<AssDialogueFormat> parse_dialogue_format_line(const std::string_view line) {
+    if (!starts_with_case_insensitive(line, "Format:")) {
+        return std::nullopt;
+    }
+
+    const auto payload = line.substr(std::string_view("Format:").size());
+    std::vector<std::string> names{};
+    std::size_t field_start = 0;
+    while (field_start <= payload.size()) {
+        const auto comma = payload.find(',', field_start);
+        const auto field_end = comma == std::string_view::npos ? payload.size() : comma;
+        names.push_back(lowercase_ascii(trim_ascii(payload.substr(field_start, field_end - field_start))));
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        field_start = comma + 1U;
+    }
+
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        if (names[index] == "text") {
+            return AssDialogueFormat{
+                .text_index = index,
+                .field_count = names.size()
+            };
+        }
+    }
+    return std::nullopt;
+}
+
+void scan_override_blocks_for_img_references(
+    const std::string_view text,
+    std::vector<SubtitleImageAssetReference> &references,
+    std::set<std::string> &seen
+) {
     std::size_t index = 0;
-    while ((index = script_text.find('{', index)) != std::string_view::npos) {
-        const auto block_end = script_text.find('}', index + 1U);
+    while ((index = text.find('{', index)) != std::string_view::npos) {
+        const auto block_end = text.find('}', index + 1U);
         if (block_end == std::string_view::npos) {
             break;
         }
 
-        const auto block = script_text.substr(index + 1U, block_end - index - 1U);
+        const auto block = text.substr(index + 1U, block_end - index - 1U);
         for (std::size_t block_index = 0; block_index < block.size(); ++block_index) {
             if (!starts_img_tag_name(block, block_index)) {
                 continue;
@@ -295,6 +374,55 @@ std::vector<SubtitleImageAssetReference> find_subtitle_image_asset_references_in
         }
 
         index = block_end + 1U;
+    }
+}
+
+}  // namespace
+
+bool SubtitleImageAssetLoadResult::succeeded() const noexcept {
+    return !error.has_value();
+}
+
+std::vector<SubtitleImageAssetReference> find_subtitle_image_asset_references_in_text(
+    const std::string_view script_text
+) {
+    std::vector<SubtitleImageAssetReference> references{};
+    std::set<std::string> seen{};
+    bool in_events_section = false;
+    AssDialogueFormat format{};
+
+    std::istringstream stream{std::string(script_text)};
+    std::string line{};
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        const auto trimmed_line = trim_ascii(line);
+        if (trimmed_line.empty() || trimmed_line.front() == ';') {
+            continue;
+        }
+
+        if (trimmed_line.front() == '[' && trimmed_line.back() == ']') {
+            in_events_section = iequals_ascii(trimmed_line, "[Events]");
+            continue;
+        }
+        if (!in_events_section) {
+            continue;
+        }
+        if (const auto parsed_format = parse_dialogue_format_line(trimmed_line); parsed_format.has_value()) {
+            format = *parsed_format;
+            continue;
+        }
+        if (!starts_with_case_insensitive(trimmed_line, "Dialogue:")) {
+            continue;
+        }
+
+        const auto payload = trimmed_line.substr(std::string_view("Dialogue:").size());
+        auto fields = split_ass_fields(payload, format.field_count);
+        if (format.text_index >= fields.size()) {
+            continue;
+        }
+        scan_override_blocks_for_img_references(fields[format.text_index], references, seen);
     }
 
     return references;
@@ -346,7 +474,7 @@ SubtitleImageAssetLoadResult load_subtitle_image_assets(const std::filesystem::p
             return make_asset_error(
                 references,
                 std::move(diagnostics),
-                "Unsupported subtitle image asset format: " + resolved_path->lexically_normal().string(),
+                "Unsupported subtitle image asset format: " + path_to_utf8_string(*resolved_path),
                 "Use PNG, JPEG, or WebP subtitle image assets."
             );
         }
@@ -385,7 +513,7 @@ SubtitleImageAssetLoadResult load_subtitle_image_assets(const std::filesystem::p
         const auto &plane = frame.planes[0];
         diagnostics.push_back(
             "Subtitle image asset loaded: " + reference.name + " -> " +
-            resolved_path->lexically_normal().string() + " (" +
+            path_to_utf8_string(*resolved_path) + " (" +
             std::to_string(frame.width) + "x" + std::to_string(frame.height) + ")"
         );
         assets.push_back(SubtitleImageAsset{

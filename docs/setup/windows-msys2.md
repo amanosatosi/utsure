@@ -111,5 +111,5 @@ The FontCollector bundling step requires a Windows Python on `PATH`; GitHub Acti
 - The supported local path is Windows-first via MSYS2 UCRT64.
 - The only documented release output today is the portable Windows bundle.
 - Large jobs can still be rejected during preflight if the bounded-memory streaming pipeline estimate exceeds its safety limit.
-- libassmod `\img` subtitle scripts still require future host-side image registration and currently fail explicitly.
+- libassmod `\img` subtitle scripts can use host-side registered PNG, JPEG, or WebP assets resolved next to the `.ass` file or in simple sidecar asset folders; Utsure does not render those tags itself.
 - Local build verification is still secondary to GitHub Actions for this repository state; the FFMS2 preview backend was integrated for CI-first validation, not for local compile/testing.
