@@ -43,6 +43,13 @@ inline std::string format_subtitle_frame_diagnostics(
         message << "unknown";
     }
 
+    message << ", segment=";
+    if (request.debug_context != nullptr && !request.debug_context->segment_name.empty()) {
+        message << request.debug_context->segment_name;
+    } else {
+        message << "unknown";
+    }
+
     message << ", decoded_pts=";
     if (request.debug_context != nullptr && request.debug_context->decoded_frame_pts.has_value()) {
         message << *request.debug_context->decoded_frame_pts;
@@ -53,6 +60,14 @@ inline std::string format_subtitle_frame_diagnostics(
     message << ", output_pts=";
     if (request.debug_context != nullptr && request.debug_context->output_pts.has_value()) {
         message << *request.debug_context->output_pts;
+    } else {
+        message << "unknown";
+    }
+
+    message << ", segment_relative_us=";
+    if (request.debug_context != nullptr &&
+        request.debug_context->segment_relative_timestamp_microseconds.has_value()) {
+        message << *request.debug_context->segment_relative_timestamp_microseconds;
     } else {
         message << "unknown";
     }

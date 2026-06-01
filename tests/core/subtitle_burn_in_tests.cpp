@@ -103,7 +103,9 @@ void write_text_file(const std::filesystem::path &path, const std::string_view t
 }
 
 struct SubtitleScheduleDiagnostic final {
+    std::string segment_name{};
     std::int64_t output_pts{0};
+    std::int64_t segment_relative_timestamp_microseconds{0};
     std::int64_t subtitle_timestamp_microseconds{0};
 };
 
@@ -143,6 +145,27 @@ std::optional<std::int64_t> parse_diagnostic_int64(
     }
 }
 
+std::optional<std::string> parse_diagnostic_text(
+    const std::string &message,
+    const std::string_view key
+) {
+    const auto key_position = message.find(key);
+    if (key_position == std::string::npos) {
+        return std::nullopt;
+    }
+
+    const std::size_t value_begin = key_position + key.size();
+    if (value_begin >= message.size()) {
+        return std::nullopt;
+    }
+
+    const auto value_end = message.find(',', value_begin);
+    return message.substr(
+        value_begin,
+        value_end == std::string::npos ? std::string::npos : value_end - value_begin
+    );
+}
+
 std::vector<SubtitleScheduleDiagnostic> collect_subtitle_schedule_diagnostics(
     const CollectingObserver &observer
 ) {
@@ -152,14 +175,21 @@ std::vector<SubtitleScheduleDiagnostic> collect_subtitle_schedule_diagnostics(
             continue;
         }
 
+        const auto segment_name = parse_diagnostic_text(message.message, "segment=");
         const auto output_pts = parse_diagnostic_int64(message.message, "output_pts=");
+        const auto segment_relative_us = parse_diagnostic_int64(message.message, "segment_relative_us=");
         const auto subtitle_timestamp_us = parse_diagnostic_int64(message.message, "subtitle_timestamp_us=");
-        if (!output_pts.has_value() || !subtitle_timestamp_us.has_value()) {
+        if (!segment_name.has_value() ||
+            !output_pts.has_value() ||
+            !segment_relative_us.has_value() ||
+            !subtitle_timestamp_us.has_value()) {
             continue;
         }
 
         diagnostics.push_back(SubtitleScheduleDiagnostic{
+            .segment_name = *segment_name,
             .output_pts = *output_pts,
+            .segment_relative_timestamp_microseconds = *segment_relative_us,
             .subtitle_timestamp_microseconds = *subtitle_timestamp_us
         });
     }
@@ -521,8 +551,18 @@ int assert_subtitle_render_schedule_diagnostics(
         const auto expected_timestamp =
             decoded_output.video_frames[output_frame_offset + index].timestamp.start_microseconds -
             segment_start_microseconds;
-        const auto actual_timestamp = diagnostics[index].subtitle_timestamp_microseconds;
-        if (std::llabs(actual_timestamp - expected_timestamp) > 1) {
+        if (diagnostics[index].segment_name != "main") {
+            return fail(
+                std::string(context) +
+                " logged a subtitle render diagnostic outside the main segment."
+            );
+        }
+
+        const auto actual_segment_relative_timestamp =
+            diagnostics[index].segment_relative_timestamp_microseconds;
+        const auto actual_subtitle_timestamp = diagnostics[index].subtitle_timestamp_microseconds;
+        if (std::llabs(actual_segment_relative_timestamp - expected_timestamp) > 1 ||
+            std::llabs(actual_subtitle_timestamp - expected_timestamp) > 1) {
             return fail(
                 std::string(context) +
                 " used a subtitle render timestamp that did not match the segment-relative main clock."

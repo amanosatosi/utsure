@@ -1718,6 +1718,8 @@ StreamingVideoFrame clone_streaming_video_frame(const StreamingVideoFrame &sourc
 
 struct VideoProcessTask final {
     std::uint64_t order_index{0};
+    std::string segment_name{};
+    std::optional<std::int64_t> segment_relative_timestamp_microseconds{};
     QueuedVideoFrameOutput output{};
     std::optional<std::int64_t> subtitle_timestamp_microseconds{};
     int normalized_width{0};
@@ -1946,8 +1948,10 @@ private:
 
                     subtitles::SubtitleCompositionDebugContext debug_context{
                         .decoded_frame_index = task.output.frame.metadata.frame_index,
+                        .segment_name = task.segment_name,
                         .decoded_frame_pts = task.output.frame.metadata.timestamp.source_pts,
                         .output_pts = std::optional<std::int64_t>(task.output.timing.output_pts),
+                        .segment_relative_timestamp_microseconds = task.segment_relative_timestamp_microseconds,
                         .subtitle_timestamp_microseconds = *task.subtitle_timestamp_microseconds,
                         .worker_id = worker_id,
                         .session_id = subtitle_session.session_id,
@@ -4124,6 +4128,11 @@ SegmentProcessResult process_segment(
 
             video_frame_processor->submit(VideoProcessTask{
                 .order_index = next_video_process_order_index++,
+                .segment_name = std::string(timeline::to_string(segment_plan.kind)),
+                .segment_relative_timestamp_microseconds = rescale_to_microseconds(
+                    timing.output_pts - segment_output_start_pts,
+                    timeline_plan.output_video_time_base
+                ),
                 .output = QueuedVideoFrameOutput{
                     .frame = std::move(video_frame),
                     .timing = std::move(timing)

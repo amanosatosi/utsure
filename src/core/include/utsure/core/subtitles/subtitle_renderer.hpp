@@ -28,8 +28,10 @@ struct SubtitleRenderSessionCreateRequest final {
 
 struct SubtitleCompositionDebugContext final {
     std::int64_t decoded_frame_index{-1};
+    std::string segment_name{};
     std::optional<std::int64_t> decoded_frame_pts{};
     std::optional<std::int64_t> output_pts{};
+    std::optional<std::int64_t> segment_relative_timestamp_microseconds{};
     std::int64_t subtitle_timestamp_microseconds{0};
     int worker_id{-1};
     int session_id{-1};

@@ -37,6 +37,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M30 Bundled Pyidaungsu UI font fallback and configurable app UI font implemented; awaiting GitHub Actions validation.
 - [x] M31 Encoding profiles, resize presets, and audio track selection implemented; awaiting GitHub Actions validation.
 - [x] M32 Urgent subtitle/video sync correctness fix implemented; awaiting GitHub Actions validation.
+- [x] M33 Segment-local subtitle timing / segmented render recombine investigation implemented; awaiting GitHub Actions validation.
 
 ## Active assumptions
 
@@ -125,6 +126,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M25 slice is limited to thumbnail pre-roll: auto-discovering a same-resolution `thumbnail.*` image beside the selected subtitle, loading the matching same-stem `.ass` overlay such as `thumbnail.ass`, exposing the `utsure_data` actor line text for per-job editing without modifying the original ASS file, rendering the edited overlay through libassmod onto the thumbnail image, and prepending the resulting still as the first two video frames before any intro/main/outro content.
 - The M25 implementation assumes `thumbnail.*` matching is case-insensitive on the file stem and supports common FFmpeg-readable still formats (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tif`, `.tiff`); manually chosen thumbnail images are accepted only when their decoded video dimensions match the main source resolution.
 - The current M32 slice is limited to main-subtitle timing correctness in the streaming burn-in path: main subtitles render only on main-segment frames, subtitle render timestamps are main-video-relative, thumbnail/intro/outro frames do not receive main subtitles, and the obsolete full-output subtitle timing mode is rejected instead of silently changing user intent.
+- The current M33 slice investigated strict segmented intermediate recombine and chose not to implement it as an urgent rewrite. The active safe path is hardened segment-local clocks inside the existing streaming pipeline, plus test-only diagnostics for segment name, output timestamp, segment-relative timestamp, and subtitle timestamp. A future intermediate recombine design must preserve output geometry/cadence/audio shape, silence generation, selected main audio, non-ASCII paths, and deterministic temporary cleanup before replacing the current muxer.
 
 ## Architecture direction
 
@@ -1130,6 +1132,29 @@ Validation:
   * Added focused tests for main-only scheduling, intro/pre-roll offset handling, thumbnail+10s intro combined offsets, outro exclusion, full-output timing rejection, and resize canvas dimensions.
   * Local compile/test execution remains reserved for GitHub Actions; local validation for this slice was limited to stale-symbol searches, code-path inspection, and `git diff --check`.
 
+### M33 Segment-local subtitle timing / segmented render recombine
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Investigation:
+  * Option A, strict segmented intermediate recombine, is the clean long-term model: render thumbnail/pre-roll, intro, main, and outro to identical temporary normalized intermediates, then concatenate and encode/mux the final output.
+  * Option A is not a narrow urgent fix in the current architecture. The active streamer owns decode, normalization, subtitle composition, audio fallback/copy decisions, muxing, progress, partial-output cleanup, and thumbnail overlay preparation in one pass. Splitting that now would duplicate reliability policy and risk regressions in temp cleanup, selected audio, and non-ASCII path handling.
+  * Option B, segment-local render clocks inside the current streaming pipeline, is the smallest reliable path for this milestone. It keeps the existing muxer and cleanup policy while enforcing that main subtitles are only rendered on main-segment frames with main-video-relative timestamps.
+
+Implemented now:
+  * Kept thumbnail/pre-roll, intro, main, and outro as independently processed streaming segments in the existing pipeline.
+  * Main subtitles remain tied only to main segment time; thumbnail/pre-roll, intro, and outro never render the main subtitle file.
+  * Main subtitle render sessions still use the final output canvas dimensions, so resize presets and ASS positioning stay aligned with encoded output.
+  * Added diagnostics, gated by the existing subtitle diagnostics mode, for segment name, output timestamp, segment-relative timestamp, and subtitle timestamp passed to the renderer.
+
+Future intermediate recombine plan:
+  * Add a job-scoped temporary workspace beside the target output when possible, with unique names and deterministic cleanup on success, failure, and cancel.
+  * Encode each segment to an intermediate with identical resolution, pixel format, frame rate/time base, sample aspect ratio, audio sample rate, channel layout, and audio codec/container settings.
+  * Generate compatible silence for thumbnail/pre-roll and any segment without audio, and normalize intro/outro audio without changing the selected main audio track.
+  * Burn main subtitles only into the main intermediate using main-video-relative timestamps and final output dimensions, including `\img` asset registration.
+  * Concatenate only verified-compatible intermediates, then produce the final requested codec/container output without duplicating or dropping audio.
+  * Keep the current segment-local streaming path until the intermediate path has focused CI coverage for timing, resize, `\img`, audio selection, non-ASCII paths, cleanup, cancellation, and partial-output removal.
+
 ## Immediate next milestone
 
-Re-run GitHub Actions for M27/M28/M29/M30/M31/M32 validation, then resume pending M24/M25 external validation work.
+Re-run GitHub Actions for M27/M28/M29/M30/M31/M32/M33 validation, then resume pending M24/M25 external validation work.
