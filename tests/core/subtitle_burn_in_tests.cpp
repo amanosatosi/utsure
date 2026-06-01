@@ -102,6 +102,19 @@ void write_text_file(const std::filesystem::path &path, const std::string_view t
     stream << text;
 }
 
+const char *test_log_level_name(const EncodeJobLogLevel level) noexcept {
+    switch (level) {
+    case EncodeJobLogLevel::info:
+        return "info";
+    case EncodeJobLogLevel::warning:
+        return "warning";
+    case EncodeJobLogLevel::error:
+        return "error";
+    default:
+        return "unknown";
+    }
+}
+
 struct SubtitleScheduleDiagnostic final {
     std::string segment_name{};
     std::int64_t output_pts{0};
@@ -202,6 +215,47 @@ std::vector<SubtitleScheduleDiagnostic> collect_subtitle_schedule_diagnostics(
         }
     );
     return diagnostics;
+}
+
+void dump_encode_job_failure_diagnostics(
+    const std::string_view context,
+    const EncodeJobResult &result,
+    const CollectingObserver &observer,
+    const std::filesystem::path &output_path
+) {
+    std::cerr << context << ".\n";
+    std::cerr << "diagnostic.output_path=" << output_path.string() << '\n';
+
+    if (result.error.has_value()) {
+        std::cerr << "diagnostic.error.message=" << result.error->message << '\n';
+        std::cerr << "diagnostic.error.hint=" << result.error->actionable_hint << '\n';
+        std::cerr << "diagnostic.error.main_source_path=" << result.error->main_source_path << '\n';
+        std::cerr << "diagnostic.error.output_path=" << result.error->output_path << '\n';
+        std::cerr << "diagnostic.error.canceled=" << (result.error->canceled ? "yes" : "no") << '\n';
+    } else {
+        std::cerr << "diagnostic.error=missing\n";
+    }
+
+    if (result.encode_job_summary.has_value()) {
+        std::cerr << "diagnostic.encode_job_summary.begin\n"
+                  << format_encode_job_report(*result.encode_job_summary)
+                  << "\ndiagnostic.encode_job_summary.end\n";
+    } else {
+        std::cerr << "diagnostic.encode_job_summary=missing\n";
+    }
+
+    for (const auto &message : observer.log_messages) {
+        if (message.level == EncodeJobLogLevel::error ||
+            message.level == EncodeJobLogLevel::warning ||
+            contains_text(message.message, "Subtitle composition diagnostics:") ||
+            contains_text(message.message, "Timeline") ||
+            contains_text(message.message, "timeline") ||
+            contains_text(message.message, "subtitle") ||
+            contains_text(message.message, "Subtitle")) {
+            std::cerr << "diagnostic.observer." << test_log_level_name(message.level)
+                      << "=" << message.message << '\n';
+        }
+    }
 }
 
 std::string lowercase_ascii(std::string value) {
@@ -1753,6 +1807,12 @@ int run_timeline_resize_burn_in_assertion(
         .observer = &observer
     });
     if (!burned_job_result.succeeded()) {
+        dump_encode_job_failure_diagnostics(
+            "Main-relative resized timeline subtitle burn-in job failed unexpectedly",
+            burned_job_result,
+            observer,
+            burned_output_path
+        );
         return fail("Main-relative resized timeline subtitle burn-in job failed unexpectedly.");
     }
 
