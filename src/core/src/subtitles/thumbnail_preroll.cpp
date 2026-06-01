@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -355,18 +356,43 @@ std::vector<std::filesystem::path> find_thumbnail_candidates(const std::filesyst
     return candidates;
 }
 
-bool dimensions_have_same_aspect_ratio(
-    const int left_width,
-    const int left_height,
-    const int right_width,
-    const int right_height
+bool dimensions_match_resize_aspect_tolerance(
+    const int source_width,
+    const int source_height,
+    const int target_width,
+    const int target_height,
+    bool *used_tolerance = nullptr
 ) {
-    if (left_width <= 0 || left_height <= 0 || right_width <= 0 || right_height <= 0) {
+    if (used_tolerance != nullptr) {
+        *used_tolerance = false;
+    }
+
+    if (source_width <= 0 || source_height <= 0 || target_width <= 0 || target_height <= 0) {
         return false;
     }
 
-    return static_cast<long long>(left_width) * static_cast<long long>(right_height) ==
-        static_cast<long long>(right_width) * static_cast<long long>(left_height);
+    if (static_cast<long long>(source_width) * static_cast<long long>(target_height) ==
+        static_cast<long long>(target_width) * static_cast<long long>(source_height)) {
+        return true;
+    }
+
+    constexpr long double kMaxEncoderSafeRoundingErrorPixels = 1.0L;
+    const auto ideal_target_width =
+        static_cast<long double>(target_height) * static_cast<long double>(source_width) /
+        static_cast<long double>(source_height);
+    const auto ideal_target_height =
+        static_cast<long double>(target_width) * static_cast<long double>(source_height) /
+        static_cast<long double>(source_width);
+    const bool within_resize_tolerance =
+        (std::fabs(static_cast<long double>(target_width) - ideal_target_width) <=
+            kMaxEncoderSafeRoundingErrorPixels) &&
+        (std::fabs(static_cast<long double>(target_height) - ideal_target_height) <=
+            kMaxEncoderSafeRoundingErrorPixels);
+
+    if (within_resize_tolerance && used_tolerance != nullptr) {
+        *used_tolerance = true;
+    }
+    return within_resize_tolerance;
 }
 
 bool image_dimensions_are_usable(
@@ -407,17 +433,20 @@ bool image_dimensions_are_usable(
         return true;
     }
 
-    if (dimensions_have_same_aspect_ratio(
+    bool used_resize_tolerance = false;
+    if (dimensions_match_resize_aspect_tolerance(
             video_stream.width,
             video_stream.height,
             required_width,
-            required_height)) {
+            required_height,
+            &used_resize_tolerance)) {
         if (video_stream.width < required_width || video_stream.height < required_height) {
             if (diagnostic != nullptr) {
                 *diagnostic = "thumbnail candidate '" + filesystem::path_to_utf8_string(image_path.lexically_normal()) +
                     "' is " + std::to_string(video_stream.width) + "x" +
                     std::to_string(video_stream.height) + ", which is smaller than the final output size " +
-                    std::to_string(required_width) + "x" + std::to_string(required_height) + ".";
+                    std::to_string(required_width) + "x" + std::to_string(required_height) +
+                    "; thumbnail upscaling is not enabled.";
             }
             return false;
         }
@@ -426,7 +455,8 @@ bool image_dimensions_are_usable(
             *diagnostic = "thumbnail candidate '" + filesystem::path_to_utf8_string(image_path.lexically_normal()) +
                 "' normalized thumbnail source from " + std::to_string(video_stream.width) + "x" +
                 std::to_string(video_stream.height) + " to " + std::to_string(required_width) + "x" +
-                std::to_string(required_height) + ".";
+                std::to_string(required_height) +
+                (used_resize_tolerance ? " within resize aspect tolerance." : ".");
         }
         return true;
     }
@@ -434,7 +464,7 @@ bool image_dimensions_are_usable(
     if (diagnostic != nullptr) {
         *diagnostic = "thumbnail candidate '" + filesystem::path_to_utf8_string(image_path.lexically_normal()) + "' is " +
             std::to_string(video_stream.width) + "x" + std::to_string(video_stream.height) +
-            ", which does not match the final output aspect ratio " + std::to_string(required_width) +
+            ", whose aspect mismatch exceeds resize tolerance for final output " + std::to_string(required_width) +
             "x" + std::to_string(required_height) + ".";
     }
     return false;

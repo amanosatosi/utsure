@@ -75,6 +75,8 @@ cmake --build "${build_dir}" --target utsure_core_libassmod_rgba_reproducer --pa
 cmake --build "${build_dir}" --target utsure_core_subtitle_bitmap_compositor_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_subtitle_burn_in_tests --parallel
 
+ctest --test-dir "${build_dir}" -N
+ctest --test-dir "${build_dir}" --print-labels
 ctest --test-dir "${build_dir}" --output-on-failure "${ctest_args[@]}"
 
 if [[ "${build_app}" == "ON" && "${run_app_smoke_test}" == "ON" ]]; then

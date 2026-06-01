@@ -31,6 +31,7 @@ set(UTSURE_SUBTITLE_MOVE_SCHEDULE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle
 set(UTSURE_SUBTITLE_STRESS_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-main.mp4")
 set(UTSURE_THUMBNAIL_PREROLL_IMAGE_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail.png")
 set(UTSURE_THUMBNAIL_PREROLL_LARGE_IMAGE_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail-large.png")
+set(UTSURE_THUMBNAIL_PREROLL_4_3_IMAGE_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail-4x3.png")
 set(UTSURE_THUMBNAIL_PREROLL_SUBTITLE_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail-source.ass")
 set(UTSURE_THUMBNAIL_PREROLL_OVERLAY_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail.ass")
 
@@ -469,6 +470,15 @@ add_custom_command(
     VERBATIM
 )
 
+add_custom_command(
+    OUTPUT "${UTSURE_THUMBNAIL_PREROLL_4_3_IMAGE_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "color=c=black:size=640x480"
+        -frames:v 1
+        "${UTSURE_THUMBNAIL_PREROLL_4_3_IMAGE_FILE}"
+    VERBATIM
+)
+
 add_custom_target(
     utsure_generate_sample_media
     DEPENDS
@@ -490,6 +500,7 @@ add_custom_target(
         "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
         "${UTSURE_THUMBNAIL_PREROLL_IMAGE_FILE}"
         "${UTSURE_THUMBNAIL_PREROLL_LARGE_IMAGE_FILE}"
+        "${UTSURE_THUMBNAIL_PREROLL_4_3_IMAGE_FILE}"
 )
 
 add_executable(utsure_core_media_inspection_tests
@@ -1011,6 +1022,7 @@ add_test(
     COMMAND utsure_core_thumbnail_preroll_tests --resolve
         "${UTSURE_THUMBNAIL_PREROLL_SUBTITLE_FILE}"
         "${UTSURE_THUMBNAIL_PREROLL_LARGE_IMAGE_FILE}"
+        "${UTSURE_THUMBNAIL_PREROLL_4_3_IMAGE_FILE}"
 )
 
 add_executable(utsure_core_subtitle_font_recovery_tests
