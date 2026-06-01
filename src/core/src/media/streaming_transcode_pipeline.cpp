@@ -573,16 +573,21 @@ std::optional<std::uint64_t> compute_rgba_frame_bytes(const timeline::TimelinePl
     }
 
     const auto &video_stream = *main_info.primary_video_stream;
-    if (video_stream.width <= 0 || video_stream.height <= 0) {
+    const auto output_shape = timeline_plan.output_video_shape.value_or(timeline::TimelineOutputVideoShape{
+        .width = video_stream.width,
+        .height = video_stream.height,
+        .sample_aspect_ratio = video_stream.sample_aspect_ratio
+    });
+    if (output_shape.width <= 0 || output_shape.height <= 0) {
         return std::nullopt;
     }
 
     std::uint64_t bytes = 0;
-    if (!checked_mul_u64(static_cast<std::uint64_t>(video_stream.width), 4U, bytes)) {
+    if (!checked_mul_u64(static_cast<std::uint64_t>(output_shape.width), 4U, bytes)) {
         return std::nullopt;
     }
 
-    if (!checked_mul_u64(bytes, static_cast<std::uint64_t>(video_stream.height), bytes)) {
+    if (!checked_mul_u64(bytes, static_cast<std::uint64_t>(output_shape.height), bytes)) {
         return std::nullopt;
     }
 
@@ -3252,7 +3257,12 @@ VideoOutputPlan build_video_output_plan(const timeline::TimelinePlan &timeline_p
     }
 
     const auto &main_video_stream = *main_segment_info.primary_video_stream;
-    if (main_video_stream.width <= 0 || main_video_stream.height <= 0) {
+    const auto output_shape = timeline_plan.output_video_shape.value_or(timeline::TimelineOutputVideoShape{
+        .width = main_video_stream.width,
+        .height = main_video_stream.height,
+        .sample_aspect_ratio = main_video_stream.sample_aspect_ratio
+    });
+    if (output_shape.width <= 0 || output_shape.height <= 0) {
         throw std::runtime_error("The streaming pipeline requires a valid output resolution.");
     }
 
@@ -3262,11 +3272,11 @@ VideoOutputPlan build_video_output_plan(const timeline::TimelinePlan &timeline_p
     );
 
     return VideoOutputPlan{
-        .width = main_video_stream.width,
-        .height = main_video_stream.height,
+        .width = output_shape.width,
+        .height = output_shape.height,
         .time_base = timeline_plan.output_video_time_base,
         .average_frame_rate = timeline_plan.output_frame_rate,
-        .sample_aspect_ratio = normalize_sample_aspect_ratio(main_video_stream.sample_aspect_ratio),
+        .sample_aspect_ratio = normalize_sample_aspect_ratio(output_shape.sample_aspect_ratio),
         .frame_duration_pts = frame_duration_pts,
         .frame_duration_microseconds = rescale_to_microseconds(frame_duration_pts, timeline_plan.output_video_time_base)
     };
@@ -3463,20 +3473,23 @@ std::vector<std::vector<float>> copy_audio_block_prefix(
 }
 
 ResolvedVideoFrameTiming resolve_video_frame_timing_for_segment(
-    const timeline::TimelineSegmentKind kind,
+    const timeline::TimelineSegmentPlan &segment_plan,
     const StreamingVideoFrame &frame,
-    const VideoOutputPlan &video_output_plan,
     const Rational &output_video_time_base,
     const std::int64_t segment_output_start_pts,
     std::optional<std::int64_t> &first_source_pts_in_output_time_base,
     std::optional<std::int64_t> &previous_source_pts,
     Rational &previous_source_time_base
 ) {
+    const auto kind = segment_plan.kind;
+    const auto expected_source_video_stream = segment_plan.inspected_source_info.primary_video_stream;
     if (kind == timeline::TimelineSegmentKind::main &&
-        (frame.metadata.width != video_output_plan.width || frame.metadata.height != video_output_plan.height)) {
+        expected_source_video_stream.has_value() &&
+        (frame.metadata.width != expected_source_video_stream->width ||
+         frame.metadata.height != expected_source_video_stream->height)) {
         throw std::runtime_error(
             "The " + std::string(timeline::to_string(kind)) +
-            " segment decoded into a resolution that does not match the main segment."
+            " segment decoded into a resolution that does not match the inspected source dimensions."
         );
     }
 
@@ -4218,9 +4231,8 @@ SegmentProcessResult process_segment(
         }
 
         const auto resolved_timing = resolve_video_frame_timing_for_segment(
-            segment_plan.kind,
+            segment_plan,
             video_frame,
-            video_output_plan,
             timeline_plan.output_video_time_base,
             segment_output_start_pts,
             first_video_source_pts_in_output_time_base,

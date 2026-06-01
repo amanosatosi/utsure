@@ -445,6 +445,11 @@ std::optional<EncodeJobResult> apply_output_resize_settings(
     }
 
     const auto dimensions = *resize_result.dimensions;
+    timeline_plan.output_video_shape = timeline::TimelineOutputVideoShape{
+        .width = dimensions.width,
+        .height = dimensions.height,
+        .sample_aspect_ratio = dimensions.sample_aspect_ratio
+    };
     if (job.output.resize.mode == EncodeResizeMode::source) {
         normalization_policy.video_max_width = 0;
         normalization_policy.video_max_height = 0;
@@ -460,12 +465,9 @@ std::optional<EncodeJobResult> apply_output_resize_settings(
         );
     }
 
-    // The streaming pipeline currently derives encoder and subtitle canvas dimensions
-    // from the main segment's inspected stream. For target resize, this becomes the
-    // planned output stream shape; Source/no-resize above leaves source metadata intact.
-    video_stream.width = dimensions.width;
-    video_stream.height = dimensions.height;
-    video_stream.sample_aspect_ratio = dimensions.sample_aspect_ratio;
+    // Keep inspected source metadata native. The timeline output shape is the encoder,
+    // normalization, and subtitle canvas contract; decoder validation still compares
+    // decoded main frames against the inspected source dimensions.
     normalization_policy.video_max_width = dimensions.width;
     normalization_policy.video_max_height = dimensions.height;
     return std::nullopt;

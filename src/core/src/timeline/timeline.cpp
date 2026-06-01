@@ -347,6 +347,11 @@ TimelineAssemblyResult TimelineAssembler::assemble(const TimelineAssemblyRequest
                 .main_segment_index = main_segment_index,
                 .output_video_time_base = output_video_time_base,
                 .output_frame_rate = choose_output_frame_rate(main_video_stream, output_video_time_base),
+                .output_video_shape = TimelineOutputVideoShape{
+                    .width = main_video_stream.width,
+                    .height = main_video_stream.height,
+                    .sample_aspect_ratio = main_video_stream.sample_aspect_ratio
+                },
                 .output_audio_stream = output_audio_stream
             },
             .error = std::nullopt

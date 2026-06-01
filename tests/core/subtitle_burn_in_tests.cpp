@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <utility>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -120,6 +121,8 @@ struct SubtitleScheduleDiagnostic final {
     std::int64_t output_pts{0};
     std::int64_t segment_relative_timestamp_microseconds{0};
     std::int64_t subtitle_timestamp_microseconds{0};
+    int destination_width{0};
+    int destination_height{0};
 };
 
 std::optional<std::int64_t> parse_diagnostic_int64(
@@ -179,6 +182,30 @@ std::optional<std::string> parse_diagnostic_text(
     );
 }
 
+std::optional<std::pair<int, int>> parse_diagnostic_dimensions(
+    const std::string &message,
+    const std::string_view key
+) {
+    const auto value = parse_diagnostic_text(message, key);
+    if (!value.has_value()) {
+        return std::nullopt;
+    }
+
+    const auto separator = value->find('x');
+    if (separator == std::string::npos) {
+        return std::nullopt;
+    }
+
+    try {
+        return std::pair<int, int>{
+            std::stoi(value->substr(0, separator)),
+            std::stoi(value->substr(separator + 1))
+        };
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
 std::vector<SubtitleScheduleDiagnostic> collect_subtitle_schedule_diagnostics(
     const CollectingObserver &observer
 ) {
@@ -192,10 +219,12 @@ std::vector<SubtitleScheduleDiagnostic> collect_subtitle_schedule_diagnostics(
         const auto output_pts = parse_diagnostic_int64(message.message, "output_pts=");
         const auto segment_relative_us = parse_diagnostic_int64(message.message, "segment_relative_us=");
         const auto subtitle_timestamp_us = parse_diagnostic_int64(message.message, "subtitle_timestamp_us=");
+        const auto destination = parse_diagnostic_dimensions(message.message, "destination=");
         if (!segment_name.has_value() ||
             !output_pts.has_value() ||
             !segment_relative_us.has_value() ||
-            !subtitle_timestamp_us.has_value()) {
+            !subtitle_timestamp_us.has_value() ||
+            !destination.has_value()) {
             continue;
         }
 
@@ -203,7 +232,9 @@ std::vector<SubtitleScheduleDiagnostic> collect_subtitle_schedule_diagnostics(
             .segment_name = *segment_name,
             .output_pts = *output_pts,
             .segment_relative_timestamp_microseconds = *segment_relative_us,
-            .subtitle_timestamp_microseconds = *subtitle_timestamp_us
+            .subtitle_timestamp_microseconds = *subtitle_timestamp_us,
+            .destination_width = destination->first,
+            .destination_height = destination->second
         });
     }
 
@@ -583,7 +614,8 @@ int assert_subtitle_render_schedule_diagnostics(
     const std::size_t output_frame_offset,
     const std::size_t expected_frame_count,
     const std::int64_t segment_start_microseconds,
-    const std::string_view context
+    const std::string_view context,
+    const std::optional<std::pair<int, int>> expected_destination_dimensions = std::nullopt
 ) {
     if (summary.streaming_runtime.subtitle_diagnostics_mode == "off") {
         return fail(std::string(context) + " did not run with subtitle frame diagnostics enabled.");
@@ -637,6 +669,15 @@ int assert_subtitle_render_schedule_diagnostics(
             return fail(
                 std::string(context) +
                 " used a subtitle render timestamp that did not match the segment-relative main clock."
+            );
+        }
+
+        if (expected_destination_dimensions.has_value() &&
+            (diagnostics[index].destination_width != expected_destination_dimensions->first ||
+             diagnostics[index].destination_height != expected_destination_dimensions->second)) {
+            return fail(
+                std::string(context) +
+                " rendered subtitles on a canvas that did not match the resized output dimensions."
             );
         }
     }
@@ -1829,6 +1870,23 @@ int run_timeline_resize_burn_in_assertion(
         return fail("Unexpected main-relative resized timeline subtitle frame counts.");
     }
 
+    if (!summary.inspected_input_info.primary_video_stream.has_value() ||
+        summary.inspected_input_info.primary_video_stream->width != 320 ||
+        summary.inspected_input_info.primary_video_stream->height != 180) {
+        return fail("Resized timeline subtitle job rewrote the native main source dimensions.");
+    }
+
+    if (!summary.encoded_media_summary.output_info.primary_video_stream.has_value() ||
+        summary.encoded_media_summary.output_info.primary_video_stream->width != 160 ||
+        summary.encoded_media_summary.output_info.primary_video_stream->height != 90) {
+        return fail("Resized timeline subtitle job did not encode the requested 160x90 output dimensions.");
+    }
+
+    if (!observer_logs_contain_text(observer, "intro segment normalized toward the main output: raster 320x180 -> 160x90") ||
+        !observer_logs_contain_text(observer, "outro segment normalized toward the main output: raster 320x180 -> 160x90")) {
+        return fail("Resized timeline subtitle job did not normalize intro/outro toward the resized output dimensions.");
+    }
+
     const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
     if (!burned_output_decode.succeeded()) {
         return fail("Resized timeline subtitle output decode failed unexpectedly.");
@@ -1851,7 +1909,8 @@ int run_timeline_resize_burn_in_assertion(
             main_frame_offset,
             main_frame_count,
             summary.timeline_summary.segments[1].start_microseconds,
-            "Main-relative resized timeline subtitle render scheduling"
+            "Main-relative resized timeline subtitle render scheduling",
+            std::pair<int, int>{160, 90}
         );
         if (schedule_result != 0) {
             return schedule_result;

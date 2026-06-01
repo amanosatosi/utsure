@@ -1145,6 +1145,7 @@ Implemented now:
   * Kept thumbnail/pre-roll, intro, main, and outro as independently processed streaming segments in the existing pipeline.
   * Main subtitles remain tied only to main segment time; thumbnail/pre-roll, intro, and outro never render the main subtitle file.
   * Main subtitle render sessions still use the final output canvas dimensions, so resize presets and ASS positioning stay aligned with encoded output.
+  * Decoded source dimensions and final output dimensions are separate: resize must not make decoder validation expect resized dimensions from native decoded frames.
   * Added diagnostics, gated by the existing subtitle diagnostics mode, for segment name, output timestamp, segment-relative timestamp, and subtitle timestamp passed to the renderer.
   * Defined the current subtitle clock after trim/cadence normalization as the normalized main-segment output PTS rebased to zero; this keeps duplicated frames and cadence-normalized frames deterministic until a future source-frame-clock contract is introduced.
 

@@ -46,11 +46,18 @@ struct TimelineSegmentPlan final {
     }
 };
 
+struct TimelineOutputVideoShape final {
+    int width{0};
+    int height{0};
+    media::Rational sample_aspect_ratio{1, 1};
+};
+
 struct TimelinePlan final {
     std::vector<TimelineSegmentPlan> segments{};
     std::size_t main_segment_index{0};
     media::Rational output_video_time_base{};
     media::Rational output_frame_rate{};
+    std::optional<TimelineOutputVideoShape> output_video_shape{};
     std::optional<media::AudioStreamInfo> output_audio_stream{};
 };
 
