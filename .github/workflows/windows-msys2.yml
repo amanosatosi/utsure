@@ -26,6 +26,7 @@ jobs:
       UTSURE_PYINSTALLER_VERSION: "6.19.0"
       UTSURE_LIBASSMOD_REF: "88a338192faf50505eb4cedfe7d1320265f1081f"
       UTSURE_PORTABLE_BUNDLE_NAME: encoder-windows-x64-portable
+      UTSURE_CTEST_ARGS: "-LE slow"
 
     defaults:
       run:

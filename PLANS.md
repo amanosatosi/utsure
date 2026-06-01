@@ -127,6 +127,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The M25 implementation assumes `thumbnail.*` matching is case-insensitive on the file stem and supports common FFmpeg-readable still formats (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tif`, `.tiff`); manually chosen thumbnail images may differ from final output dimensions when they share the output aspect ratio and can be normalized safely.
 - The current M32 slice is limited to main-subtitle timing correctness in the streaming burn-in path: main subtitles render only on main-segment frames, subtitle render timestamps are main-video-relative, thumbnail/intro/outro frames do not receive main subtitles, and the obsolete full-output subtitle timing mode is rejected instead of silently changing user intent.
 - The current M33 slice investigated strict segmented intermediate recombine and intentionally deferred it. Implemented now: segment-local clocks inside the existing streaming pipeline, plus diagnostics for segment name, output timestamp, segment-relative timestamp, and subtitle timestamp. Not implemented now: strict intermediate render/recombine. Future intermediate recombine work must preserve output geometry/cadence/audio shape, silence generation, selected main audio, non-ASCII paths, deterministic temporary cleanup, and CI coverage before replacing the current muxer.
+- The current test-suite cleanup slice introduces CTest labels: `unit`, `integration`, `media`, `slow`, `stress`, `smoke`, and `regression`. Normal Windows CI now runs `ctest -LE slow`, preserving unit/light integration/media smoke coverage while moving explicitly labeled slow media regressions out of the default path.
 
 ## Architecture direction
 
@@ -1160,6 +1161,31 @@ Future intermediate recombine plan:
   * Burn main subtitles only into the main intermediate using main-video-relative timestamps and final output dimensions, including `\img` asset registration.
   * Concatenate only verified-compatible intermediates, then produce the final requested codec/container output without duplicating or dropping audio.
   * Keep the current segment-local streaming path until the intermediate path has focused CI coverage for timing, resize, `\img`, audio selection, non-ASCII paths, cleanup, cancellation, and partial-output removal.
+
+### Test-suite tiering and CI cleanup
+
+Status: Started; first labeling slice implemented
+
+Tier policy:
+  * `unit`: no full encode/decode pipeline dependency; should stay in every normal CI run.
+  * `integration`: exercises core seams or job orchestration; lightweight cases stay in normal CI.
+  * `media`: touches generated media, FFmpeg/FFMS2/libassmod, or encoded output inspection.
+  * `smoke`: essential invariant coverage kept in normal CI, including main-relative subtitle timing, resize dimensions, thumbnail/intro/outro subtitle exclusion, selected audio behavior, CRC/output naming helpers, and `\img` asset resolution.
+  * `slow`: expensive media regressions excluded from normal CI by `ctest -LE slow`.
+  * `stress`: repeated/long subtitle burn-in isolation paths; also labeled `slow media regression`.
+  * `regression`: focused cases retained for manual or future scheduled/nightly runs.
+
+Implemented first step:
+  * Added reusable CTest regex-label helpers and labels for core/app tests.
+  * Labeled subtitle burn-in stress variants and nonessential heavy media regressions as `slow media regression`; stress variants also carry `stress`.
+  * Updated the Windows MSYS2 workflow to run normal CI with `UTSURE_CTEST_ARGS="-LE slow"`.
+  * Kept essential media smoke coverage in the normal run, including H.264 burn-in, `\img` burn-in, timeline subtitle timing, resized timeline subtitle timing, and resized thumbnail pre-roll.
+
+Next cleanup steps:
+  * Add a scheduled or manual full-media workflow that runs all labels, including `slow`.
+  * Add `ctest --print-labels` or an equivalent CI log summary so label coverage is visible in Actions.
+  * Continue replacing broad encode regressions with seam/unit tests for normalization decisions where possible, keeping one small encode smoke test for each critical pipeline path.
+  * Keep improving media-test failure logs so expected/actual counts, output dimensions, job error/hint, output paths, and first/last diagnostics are visible on the first CI run.
 
 ## Immediate next milestone
 

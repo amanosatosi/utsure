@@ -60,3 +60,6 @@ add_test(
 )
 
 set_tests_properties(utsure.app.ui_font PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+utsure_label_tests_matching("^utsure\\.app\\.settings\\." unit smoke)
+utsure_label_tests_matching("^utsure\\.app\\.ui_font$" integration smoke)
