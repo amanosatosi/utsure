@@ -1753,13 +1753,20 @@ int run_timeline_resize_burn_in_assertion(
         .observer = &observer
     });
     if (!burned_job_result.succeeded()) {
-        return fail("Resized timeline subtitle burn-in job failed unexpectedly.");
+        return fail("Main-relative resized timeline subtitle burn-in job failed unexpectedly.");
     }
 
     const auto &summary = *burned_job_result.encode_job_summary;
+    if (summary.timeline_summary.segments.size() != 3 ||
+        summary.timeline_summary.segments[0].subtitles_enabled ||
+        !summary.timeline_summary.segments[1].subtitles_enabled ||
+        summary.timeline_summary.segments[2].subtitles_enabled) {
+        return fail("Resized timeline subtitle scope did not stay on the main segment.");
+    }
+
     if (summary.timeline_summary.output_video_frame_count != 96 ||
         summary.subtitled_video_frame_count != 11) {
-        return fail("Unexpected resized timeline subtitle frame counts.");
+        return fail("Unexpected main-relative resized timeline subtitle frame counts.");
     }
 
     const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
@@ -1784,7 +1791,7 @@ int run_timeline_resize_burn_in_assertion(
             main_frame_offset,
             main_frame_count,
             summary.timeline_summary.segments[1].start_microseconds,
-            "Resized timeline subtitle render scheduling"
+            "Main-relative resized timeline subtitle render scheduling"
         );
         if (schedule_result != 0) {
             return schedule_result;

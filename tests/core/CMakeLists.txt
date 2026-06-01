@@ -1459,7 +1459,7 @@ add_test(
             "${UTSURE_TIMELINE_INTRO_FILE}"
             "${UTSURE_SAMPLE_MEDIA_FILE}"
             "${UTSURE_TIMELINE_OUTRO_FILE}"
-            "${UTSURE_SUBTITLE_OUTPUT_TIMELINE_SAMPLE_FILE}"
+            "${UTSURE_SUBTITLE_SAMPLE_FILE}"
             "${UTSURE_TEST_MEDIA_DIR}/timeline-resize-subtitle-burn-h264.mp4"
 )
 utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.timeline.resize.h264)
