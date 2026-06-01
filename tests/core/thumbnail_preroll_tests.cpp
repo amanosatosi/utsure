@@ -65,7 +65,10 @@ int run_parse_assertion() {
     return 0;
 }
 
-int run_resolve_assertion(const std::filesystem::path &subtitle_path) {
+int run_resolve_assertion(
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &large_thumbnail_path
+) {
     const auto result = utsure::core::subtitles::ThumbnailPrerollResolver::resolve(
         utsure::core::subtitles::ThumbnailPrerollResolveRequest{
             .enabled = true,
@@ -105,6 +108,24 @@ int run_resolve_assertion(const std::filesystem::path &subtitle_path) {
         return fail("Thumbnail resolver did not accept a same-aspect thumbnail that can be normalized to the output size.");
     }
 
+    const auto large_downscale_result = utsure::core::subtitles::ThumbnailPrerollResolver::resolve(
+        utsure::core::subtitles::ThumbnailPrerollResolveRequest{
+            .enabled = true,
+            .subtitle_path = subtitle_path,
+            .explicit_image_path = large_thumbnail_path,
+            .explicit_overlay_ass_path = large_thumbnail_path.parent_path() / "thumbnail.ass",
+            .required_width = 960,
+            .required_height = 540
+        }
+    );
+
+    if (!large_downscale_result.has_assets() ||
+        large_downscale_result.decision != utsure::core::subtitles::ThumbnailPrerollDecisionCode::ready ||
+        large_downscale_result.diagnostics.empty() ||
+        !contains_text(large_downscale_result.diagnostics.front(), "normalized thumbnail source from 1920x1080 to 960x540")) {
+        return fail("Thumbnail resolver did not accept the 1920x1080 to 960x540 thumbnail normalization case.");
+    }
+
     const auto mismatch_result = utsure::core::subtitles::ThumbnailPrerollResolver::resolve(
         utsure::core::subtitles::ThumbnailPrerollResolveRequest{
             .enabled = true,
@@ -126,6 +147,7 @@ int run_resolve_assertion(const std::filesystem::path &subtitle_path) {
     std::cout << "thumbnail.resolve.image=thumbnail.png\n";
     std::cout << "thumbnail.resolve.overlay=thumbnail.ass\n";
     std::cout << "thumbnail.resolve.downscale=accepted\n";
+    std::cout << "thumbnail.resolve.large_downscale=accepted\n";
     std::cout << "thumbnail.resolve.aspect_mismatch=rejected\n";
     return 0;
 }
@@ -134,7 +156,7 @@ int run_resolve_assertion(const std::filesystem::path &subtitle_path) {
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        return fail("Usage: utsure_core_thumbnail_preroll_tests [--parse|--resolve <subtitle.ass>]");
+        return fail("Usage: utsure_core_thumbnail_preroll_tests [--parse|--resolve <subtitle.ass> <large-thumbnail.png>]");
     }
 
     const std::string_view mode(argv[1]);
@@ -143,11 +165,11 @@ int main(int argc, char *argv[]) {
     }
 
     if (mode == "--resolve") {
-        if (argc != 3) {
-            return fail("Usage: utsure_core_thumbnail_preroll_tests --resolve <subtitle.ass>");
+        if (argc != 4) {
+            return fail("Usage: utsure_core_thumbnail_preroll_tests --resolve <subtitle.ass> <large-thumbnail.png>");
         }
 
-        return run_resolve_assertion(argv[2]);
+        return run_resolve_assertion(argv[2], argv[3]);
     }
 
     return fail("Unknown thumbnail pre-roll test mode.");

@@ -1001,10 +1001,10 @@ Current slice status:
   * Completed: wired encode-job settings and preflight validation so thumbnail assets are checked before encode, source-audio copy falls back when pre-roll adds a generated segment, and encode reports preserve thumbnail state.
   * Completed: added streaming pre-roll preparation that decodes and normalizes the thumbnail still to final output dimensions, renders the editable same-stem ASS overlay through libassmod using a temporary edited ASS copy, and emits exactly two video frames before any intro/main/outro segment.
   * Completed: replaced the Special-tab placeholder with thin Qt controls for enabling thumbnail pre-roll, auto-selecting same-folder assets, manually selecting an image, and editing/resetting the `utsure_data` title text without saving back to the source overlay file.
-  * Completed: added focused CI tests for ASS parsing/replacement, asset resolution including same-aspect resize normalization, preflight thumbnail validation, and encode-job output frame-count behavior.
+  * Completed: added focused CI tests for ASS parsing/replacement, asset resolution including 1920x1080 -> 960x540 and 320x180 -> 160x90 same-aspect resize normalization, preflight thumbnail validation, and encode-job output frame-count behavior.
 
 Validation:
-  * Added focused core tests for asset discovery, same-aspect thumbnail normalization, `utsure_data` ASS text parsing/replacement, preflight validation, and pre-roll output frame-count behavior.
+  * Added focused core tests for asset discovery, same-aspect thumbnail normalization including the 1920x1080 -> 960x540 user case, `utsure_data` ASS text parsing/replacement, preflight validation, and pre-roll output frame-count behavior.
   * Local compile/test execution remains reserved for GitHub Actions; local validation for this slice was limited to focused code inspection, stale-symbol searches, and `git diff --check`.
 
 ### M27 JSON settings and reliable output naming
