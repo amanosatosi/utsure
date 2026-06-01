@@ -1465,6 +1465,20 @@ add_test(
 utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.timeline.resize.h264)
 
 add_test(
+    NAME utsure.core.subtitles.burn_in.timeline.thumbnail_preroll.resize.h264
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_DIAGNOSTICS=frame
+        UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
+        utsure_core_subtitle_burn_in_tests --timeline-thumbnail-resize-h264
+            "${UTSURE_TIMELINE_INTRO_FILE}"
+            "${UTSURE_SAMPLE_MEDIA_FILE}"
+            "${UTSURE_TIMELINE_OUTRO_FILE}"
+            "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+            "${UTSURE_TEST_MEDIA_DIR}/timeline-thumbnail-resize-subtitle-burn-h264.mp4"
+)
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.timeline.thumbnail_preroll.resize.h264)
+
+add_test(
     NAME utsure.core.subtitles.burn_in.stress.copied_serialized.h264
     COMMAND "${CMAKE_COMMAND}" -E env
         UTSURE_SUBTITLE_BITMAP_MODE=copied

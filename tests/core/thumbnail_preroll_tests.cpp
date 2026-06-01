@@ -78,7 +78,7 @@ int run_resolve_assertion(const std::filesystem::path &subtitle_path) {
     );
 
     if (!result.has_assets()) {
-        return fail("Thumbnail resolver did not select the same-resolution thumbnail.* and thumbnail.ass assets.");
+        return fail("Thumbnail resolver did not select the thumbnail.* and thumbnail.ass assets.");
     }
 
     if (result.assets->image_path.filename().string() != "thumbnail.png" ||
@@ -87,25 +87,46 @@ int run_resolve_assertion(const std::filesystem::path &subtitle_path) {
         return fail("Thumbnail resolver selected unexpected assets or title text.");
     }
 
+    const auto downscale_result = utsure::core::subtitles::ThumbnailPrerollResolver::resolve(
+        utsure::core::subtitles::ThumbnailPrerollResolveRequest{
+            .enabled = true,
+            .subtitle_path = subtitle_path,
+            .explicit_image_path = std::nullopt,
+            .explicit_overlay_ass_path = std::nullopt,
+            .required_width = 160,
+            .required_height = 90
+        }
+    );
+
+    if (!downscale_result.has_assets() ||
+        downscale_result.decision != utsure::core::subtitles::ThumbnailPrerollDecisionCode::ready ||
+        downscale_result.diagnostics.empty() ||
+        !contains_text(downscale_result.diagnostics.front(), "normalized thumbnail source from 320x180 to 160x90")) {
+        return fail("Thumbnail resolver did not accept a same-aspect thumbnail that can be normalized to the output size.");
+    }
+
     const auto mismatch_result = utsure::core::subtitles::ThumbnailPrerollResolver::resolve(
         utsure::core::subtitles::ThumbnailPrerollResolveRequest{
             .enabled = true,
             .subtitle_path = subtitle_path,
             .explicit_image_path = std::nullopt,
             .explicit_overlay_ass_path = std::nullopt,
-            .required_width = 640,
-            .required_height = 360
+            .required_width = 160,
+            .required_height = 100
         }
     );
 
     if (mismatch_result.has_assets() ||
-        mismatch_result.decision != utsure::core::subtitles::ThumbnailPrerollDecisionCode::no_accepted_thumbnail) {
-        return fail("Thumbnail resolver accepted a thumbnail.* image with the wrong dimensions.");
+        mismatch_result.decision != utsure::core::subtitles::ThumbnailPrerollDecisionCode::no_accepted_thumbnail ||
+        mismatch_result.diagnostics.empty() ||
+        !contains_text(mismatch_result.diagnostics.front(), "does not match the final output aspect ratio")) {
+        return fail("Thumbnail resolver did not clearly reject an aspect-mismatched thumbnail.");
     }
 
     std::cout << "thumbnail.resolve.image=thumbnail.png\n";
     std::cout << "thumbnail.resolve.overlay=thumbnail.ass\n";
-    std::cout << "thumbnail.resolve.mismatch=rejected\n";
+    std::cout << "thumbnail.resolve.downscale=accepted\n";
+    std::cout << "thumbnail.resolve.aspect_mismatch=rejected\n";
     return 0;
 }
 

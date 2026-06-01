@@ -123,8 +123,8 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M24 slice also permits one narrow user-reported main-segment SAR follow-up, limited to accepting harmless decoded-frame sample-aspect-ratio metadata disagreements from the main source while preserving the inspected main output SAR for subtitle setup and encoded frame metadata.
 - Runtime anomaly policy note: harmless no-op cases are skipped, recoverable normalization and reduced-fidelity fallbacks continue with diagnostics, clearly unsupported setups fail in preflight when they can be detected early, and only unsafe/corrupt runtime states remain encode-stopping failures.
 - The earlier M24 subtitle render scheduling hardening pass added per-frame render diagnostics and worker coverage; M32 now supersedes the output-timeline timestamp policy for main subtitles with a main-video-relative subtitle clock.
-- The current M25 slice is limited to thumbnail pre-roll: auto-discovering a same-resolution `thumbnail.*` image beside the selected subtitle, loading the matching same-stem `.ass` overlay such as `thumbnail.ass`, exposing the `utsure_data` actor line text for per-job editing without modifying the original ASS file, rendering the edited overlay through libassmod onto the thumbnail image, and prepending the resulting still as the first two video frames before any intro/main/outro content.
-- The M25 implementation assumes `thumbnail.*` matching is case-insensitive on the file stem and supports common FFmpeg-readable still formats (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tif`, `.tiff`); manually chosen thumbnail images are accepted only when their decoded video dimensions match the main source resolution.
+- The current M25 slice is limited to thumbnail pre-roll: auto-discovering a `thumbnail.*` image beside the selected subtitle, loading the matching same-stem `.ass` overlay such as `thumbnail.ass`, exposing the `utsure_data` actor line text for per-job editing without modifying the original ASS file, normalizing the thumbnail image to final output dimensions, rendering the edited overlay through libassmod onto the normalized thumbnail image, and prepending the resulting still as the first two video frames before any intro/main/outro content.
+- The M25 implementation assumes `thumbnail.*` matching is case-insensitive on the file stem and supports common FFmpeg-readable still formats (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tif`, `.tiff`); manually chosen thumbnail images may differ from final output dimensions when they share the output aspect ratio and can be normalized safely.
 - The current M32 slice is limited to main-subtitle timing correctness in the streaming burn-in path: main subtitles render only on main-segment frames, subtitle render timestamps are main-video-relative, thumbnail/intro/outro frames do not receive main subtitles, and the obsolete full-output subtitle timing mode is rejected instead of silently changing user intent.
 - The current M33 slice investigated strict segmented intermediate recombine and intentionally deferred it. Implemented now: segment-local clocks inside the existing streaming pipeline, plus diagnostics for segment name, output timestamp, segment-relative timestamp, and subtitle timestamp. Not implemented now: strict intermediate render/recombine. Future intermediate recombine work must preserve output geometry/cadence/audio shape, silence generation, selected main audio, non-ASCII paths, deterministic temporary cleanup, and CI coverage before replacing the current muxer.
 
@@ -991,20 +991,20 @@ Status: Implemented; awaiting external validation
 
 Scope:
   * Discover thumbnail pre-roll assets from the selected subtitle folder when the feature is enabled: `thumbnail.*` still image plus a same-stem ASS overlay such as `thumbnail.ass`.
-  * Accept the thumbnail image only when its decoded dimensions exactly match the main source video dimensions.
+  * Accept exact-size thumbnail images and same-aspect thumbnail images that can be normalized to the final output dimensions.
   * Parse the same-stem ASS overlay for the `utsure_data` actor/name event and expose that event text, including ASS override tags, as editable per-job data.
-  * Render the editable title overlay through the existing libassmod subtitle renderer onto the selected thumbnail image without modifying the original ASS overlay.
+  * Render the editable title overlay through the existing libassmod subtitle renderer onto the final-size thumbnail frame without modifying the original ASS overlay.
   * Insert the rendered thumbnail still as exactly the first two output video frames, before intro/main/outro content, preserving main-source output cadence and existing codec quality defaults.
 
 Current slice status:
-  * Completed: added core thumbnail asset resolution for same-resolution `thumbnail.*` images, matching same-stem ASS overlays, and `utsure_data` ASS text extraction/replacement while preserving override tags.
+  * Completed: added core thumbnail asset resolution for exact-size or same-aspect normalizable `thumbnail.*` images, matching same-stem ASS overlays, and `utsure_data` ASS text extraction/replacement while preserving override tags.
   * Completed: wired encode-job settings and preflight validation so thumbnail assets are checked before encode, source-audio copy falls back when pre-roll adds a generated segment, and encode reports preserve thumbnail state.
-  * Completed: added streaming pre-roll preparation that decodes the thumbnail still, renders the editable same-stem ASS overlay through libassmod using a temporary edited ASS copy, and emits exactly two video frames before any intro/main/outro segment.
+  * Completed: added streaming pre-roll preparation that decodes and normalizes the thumbnail still to final output dimensions, renders the editable same-stem ASS overlay through libassmod using a temporary edited ASS copy, and emits exactly two video frames before any intro/main/outro segment.
   * Completed: replaced the Special-tab placeholder with thin Qt controls for enabling thumbnail pre-roll, auto-selecting same-folder assets, manually selecting an image, and editing/resetting the `utsure_data` title text without saving back to the source overlay file.
-  * Completed: added focused CI tests for ASS parsing/replacement, asset resolution, preflight thumbnail validation, and encode-job output frame-count behavior.
+  * Completed: added focused CI tests for ASS parsing/replacement, asset resolution including same-aspect resize normalization, preflight thumbnail validation, and encode-job output frame-count behavior.
 
 Validation:
-  * Added focused core tests for asset discovery, `utsure_data` ASS text parsing/replacement, preflight validation, and pre-roll output frame-count behavior.
+  * Added focused core tests for asset discovery, same-aspect thumbnail normalization, `utsure_data` ASS text parsing/replacement, preflight validation, and pre-roll output frame-count behavior.
   * Local compile/test execution remains reserved for GitHub Actions; local validation for this slice was limited to focused code inspection, stale-symbol searches, and `git diff --check`.
 
 ### M27 JSON settings and reliable output naming

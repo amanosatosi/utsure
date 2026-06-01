@@ -1,6 +1,7 @@
 #include "streaming_transcode_pipeline.hpp"
 
 #include "ffmpeg_media_support.hpp"
+#include "utsure/core/filesystem/path_format.hpp"
 #include "utsure/core/media/media_decoder.hpp"
 #include "transcode_threading.hpp"
 #include "../runtime_anomaly_policy.hpp"
@@ -4826,7 +4827,8 @@ PreparedThumbnailPrerollFrame prepare_thumbnail_preroll_frame(
     }
 
     if (!resolve_result.has_assets()) {
-        throw std::runtime_error(
+        throw runtime_policy::RuntimeAnomalyError(
+            runtime_policy::RuntimeAnomalyClass::unsupported_early,
             "Thumbnail pre-roll could not resolve usable assets. " + resolve_result.decision_summary
         );
     }
@@ -4839,8 +4841,8 @@ PreparedThumbnailPrerollFrame prepare_thumbnail_preroll_frame(
             .video_pixel_format = NormalizedVideoPixelFormat::rgba8,
             .audio_sample_format = NormalizedAudioSampleFormat::f32_planar,
             .audio_block_samples = 1024,
-            .video_max_width = 0,
-            .video_max_height = 0
+            .video_max_width = video_output_plan.width,
+            .video_max_height = video_output_plan.height
         }
     );
     if (!frame_result.succeeded()) {
@@ -4852,11 +4854,12 @@ PreparedThumbnailPrerollFrame prepare_thumbnail_preroll_frame(
 
     auto thumbnail_frame = std::move(*frame_result.video_frame);
     if (thumbnail_frame.width != video_output_plan.width || thumbnail_frame.height != video_output_plan.height) {
-        throw std::runtime_error(
-            "Thumbnail pre-roll decoded image size changed unexpectedly: " +
+        throw runtime_policy::RuntimeAnomalyError(
+            runtime_policy::RuntimeAnomalyClass::unsupported_early,
+            "Thumbnail pre-roll could not normalize the selected thumbnail image to the final output size: decoded " +
             std::to_string(thumbnail_frame.width) + "x" + std::to_string(thumbnail_frame.height) +
             ", expected " + std::to_string(video_output_plan.width) + "x" +
-            std::to_string(video_output_plan.height) + "."
+            std::to_string(video_output_plan.height) + ". Use a thumbnail with the same aspect ratio as the output."
         );
     }
 
@@ -4917,8 +4920,8 @@ PreparedThumbnailPrerollFrame prepare_thumbnail_preroll_frame(
 
     emit_runtime_log(
         log_callback,
-        "Thumbnail pre-roll prepared from '" + assets.image_path.lexically_normal().string() +
-            "' with overlay '" + assets.overlay_ass_path.lexically_normal().string() + "'."
+        "Thumbnail pre-roll prepared from '" + filesystem::path_to_utf8_string(assets.image_path.lexically_normal()) +
+            "' with overlay '" + filesystem::path_to_utf8_string(assets.overlay_ass_path.lexically_normal()) + "'."
     );
 
     return PreparedThumbnailPrerollFrame{

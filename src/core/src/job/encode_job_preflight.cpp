@@ -431,14 +431,34 @@ void validate_thumbnail_preroll(
     }
 
     const auto &video_stream = *main_segment_info.primary_video_stream;
+    const auto resize_result = calculate_resize_dimensions(
+        ResizeSourceDimensions{
+            .width = video_stream.width,
+            .height = video_stream.height,
+            .sample_aspect_ratio = video_stream.sample_aspect_ratio
+        },
+        job.output.resize
+    );
+    if (!resize_result.succeeded()) {
+        append_issue(
+            issues,
+            EncodeJobPreflightIssueSeverity::error,
+            EncodeJobPreflightIssueCode::thumbnail_validation_failed,
+            "Thumbnail pre-roll validation could not resolve the final output dimensions.",
+            resize_result.error_message
+        );
+        return;
+    }
+
+    const auto output_dimensions = *resize_result.dimensions;
     const auto resolve_result = subtitles::ThumbnailPrerollResolver::resolve(subtitles::ThumbnailPrerollResolveRequest{
         .enabled = true,
         .auto_select = job.thumbnail_preroll->auto_select,
         .subtitle_path = job.subtitles->subtitle_path,
         .explicit_image_path = job.thumbnail_preroll->image_path,
         .explicit_overlay_ass_path = job.thumbnail_preroll->overlay_ass_path,
-        .required_width = video_stream.width,
-        .required_height = video_stream.height
+        .required_width = output_dimensions.width,
+        .required_height = output_dimensions.height
     });
 
     if (!resolve_result.has_assets()) {
@@ -449,7 +469,7 @@ void validate_thumbnail_preroll(
             EncodeJobPreflightIssueCode::thumbnail_validation_failed,
             resolve_result.decision_summary,
             diagnostics.empty()
-                ? "Place a same-resolution thumbnail.* image and matching thumbnail.ass with a utsure_data dialogue line beside the selected subtitle."
+                ? "Place a thumbnail.* image that matches the final output aspect ratio and a matching thumbnail.ass with a utsure_data dialogue line beside the selected subtitle."
                 : diagnostics
         );
     }

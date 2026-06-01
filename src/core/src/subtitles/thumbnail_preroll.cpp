@@ -1,5 +1,6 @@
 #include "utsure/core/subtitles/thumbnail_preroll.hpp"
 
+#include "utsure/core/filesystem/path_format.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 
 #include <algorithm>
@@ -354,7 +355,21 @@ std::vector<std::filesystem::path> find_thumbnail_candidates(const std::filesyst
     return candidates;
 }
 
-bool image_dimensions_match(
+bool dimensions_have_same_aspect_ratio(
+    const int left_width,
+    const int left_height,
+    const int right_width,
+    const int right_height
+) {
+    if (left_width <= 0 || left_height <= 0 || right_width <= 0 || right_height <= 0) {
+        return false;
+    }
+
+    return static_cast<long long>(left_width) * static_cast<long long>(right_height) ==
+        static_cast<long long>(right_width) * static_cast<long long>(left_height);
+}
+
+bool image_dimensions_are_usable(
     const std::filesystem::path &image_path,
     const int required_width,
     const int required_height,
@@ -362,7 +377,7 @@ bool image_dimensions_match(
 ) {
     if (required_width <= 0 || required_height <= 0) {
         if (diagnostic != nullptr) {
-            *diagnostic = "thumbnail dimensions could not be checked because the main video size is unknown.";
+            *diagnostic = "thumbnail dimensions could not be checked because the final output size is unknown.";
         }
         return false;
     }
@@ -384,13 +399,43 @@ bool image_dimensions_match(
 
     const auto &video_stream = *inspection_result.media_source_info->primary_video_stream;
     if (video_stream.width == required_width && video_stream.height == required_height) {
+        if (diagnostic != nullptr) {
+            *diagnostic = "thumbnail candidate '" + filesystem::path_to_utf8_string(image_path.lexically_normal()) +
+                "' already matches " + std::to_string(required_width) + "x" +
+                std::to_string(required_height) + ".";
+        }
+        return true;
+    }
+
+    if (dimensions_have_same_aspect_ratio(
+            video_stream.width,
+            video_stream.height,
+            required_width,
+            required_height)) {
+        if (video_stream.width < required_width || video_stream.height < required_height) {
+            if (diagnostic != nullptr) {
+                *diagnostic = "thumbnail candidate '" + filesystem::path_to_utf8_string(image_path.lexically_normal()) +
+                    "' is " + std::to_string(video_stream.width) + "x" +
+                    std::to_string(video_stream.height) + ", which is smaller than the final output size " +
+                    std::to_string(required_width) + "x" + std::to_string(required_height) + ".";
+            }
+            return false;
+        }
+
+        if (diagnostic != nullptr) {
+            *diagnostic = "thumbnail candidate '" + filesystem::path_to_utf8_string(image_path.lexically_normal()) +
+                "' normalized thumbnail source from " + std::to_string(video_stream.width) + "x" +
+                std::to_string(video_stream.height) + " to " + std::to_string(required_width) + "x" +
+                std::to_string(required_height) + ".";
+        }
         return true;
     }
 
     if (diagnostic != nullptr) {
-        *diagnostic = "thumbnail candidate '" + image_path.lexically_normal().string() + "' is " +
+        *diagnostic = "thumbnail candidate '" + filesystem::path_to_utf8_string(image_path.lexically_normal()) + "' is " +
             std::to_string(video_stream.width) + "x" + std::to_string(video_stream.height) +
-            ", expected " + std::to_string(required_width) + "x" + std::to_string(required_height) + ".";
+            ", which does not match the final output aspect ratio " + std::to_string(required_width) +
+            "x" + std::to_string(required_height) + ".";
     }
     return false;
 }
@@ -497,14 +542,15 @@ ThumbnailPrerollResolveResult ThumbnailPrerollResolver::resolve(
     std::optional<std::filesystem::path> selected_image_path{};
     if (request.explicit_image_path.has_value() && !request.explicit_image_path->empty()) {
         std::string diagnostic{};
-        if (!image_dimensions_match(*request.explicit_image_path, request.required_width, request.required_height, &diagnostic)) {
+        if (!image_dimensions_are_usable(*request.explicit_image_path, request.required_width, request.required_height, &diagnostic)) {
             diagnostics.push_back(std::move(diagnostic));
             return make_result(
                 ThumbnailPrerollDecisionCode::no_accepted_thumbnail,
-                "Thumbnail pre-roll rejected the manually selected image because it does not match the main video size.",
+                "Thumbnail pre-roll rejected the manually selected image because it cannot be normalized to the final output size.",
                 std::move(diagnostics)
             );
         }
+        diagnostics.push_back(std::move(diagnostic));
         selected_image_path = request.explicit_image_path->lexically_normal();
     } else if (!request.auto_select) {
         return make_result(
@@ -514,7 +560,8 @@ ThumbnailPrerollResolveResult ThumbnailPrerollResolver::resolve(
     } else {
         for (const auto &candidate : find_thumbnail_candidates(subtitle_directory)) {
             std::string diagnostic{};
-            if (image_dimensions_match(candidate, request.required_width, request.required_height, &diagnostic)) {
+            if (image_dimensions_are_usable(candidate, request.required_width, request.required_height, &diagnostic)) {
+                diagnostics.push_back(std::move(diagnostic));
                 selected_image_path = candidate;
                 break;
             }
@@ -525,7 +572,7 @@ ThumbnailPrerollResolveResult ThumbnailPrerollResolver::resolve(
     if (!selected_image_path.has_value()) {
         return make_result(
             ThumbnailPrerollDecisionCode::no_accepted_thumbnail,
-            "Thumbnail pre-roll did not find a same-resolution thumbnail.* image beside the selected subtitle.",
+            "Thumbnail pre-roll did not find a thumbnail.* image beside the selected subtitle that can be normalized to the final output size.",
             std::move(diagnostics)
         );
     }

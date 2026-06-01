@@ -2049,6 +2049,126 @@ int run_timeline_resize_burn_in_assertion(
     return 0;
 }
 
+int run_timeline_thumbnail_resize_burn_in_assertion(
+    const std::filesystem::path &intro_path,
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &outro_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &burned_output_path
+) {
+    CollectingObserver observer{};
+    const EncodeJob burned_job{
+        .input = {
+            .intro_source_path = intro_path,
+            .main_source_path = main_path,
+            .outro_source_path = outro_path
+        },
+        .subtitles = utsure::core::job::EncodeJobSubtitleSettings{
+            .subtitle_path = subtitle_path,
+            .format_hint = "ass"
+        },
+        .thumbnail_preroll = utsure::core::job::EncodeJobThumbnailPrerollSettings{
+            .enabled = true
+        },
+        .output = {
+            .output_path = burned_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            },
+            .resize = {
+                .mode = utsure::core::job::EncodeResizeMode::target_height,
+                .target_height = 90,
+                .allow_upscale = false
+            }
+        }
+    };
+
+    const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!burned_job_result.succeeded()) {
+        dump_encode_job_failure_diagnostics(
+            "Resized thumbnail pre-roll timeline subtitle burn-in job failed unexpectedly",
+            burned_job_result,
+            observer,
+            burned_output_path
+        );
+        return fail("Resized thumbnail pre-roll timeline subtitle burn-in job failed unexpectedly.");
+    }
+
+    const auto &summary = *burned_job_result.encode_job_summary;
+    constexpr std::int64_t kExpectedTotalFrameCount = 98;
+    constexpr std::size_t kExpectedBitmapPositiveDiagnosticCount = 11U;
+    if (summary.timeline_summary.segments.size() != 3 ||
+        summary.timeline_summary.segments[0].subtitles_enabled ||
+        !summary.timeline_summary.segments[1].subtitles_enabled ||
+        summary.timeline_summary.segments[2].subtitles_enabled) {
+        return fail("Resized thumbnail pre-roll timeline subtitle scope did not stay on the main segment.");
+    }
+
+    const auto schedule_diagnostics = collect_subtitle_schedule_diagnostics(observer);
+    const auto bitmap_positive_diagnostics = count_bitmap_positive_subtitle_diagnostics(schedule_diagnostics);
+    if (summary.timeline_summary.output_video_frame_count != kExpectedTotalFrameCount ||
+        schedule_diagnostics.size() != static_cast<std::size_t>(summary.timeline_summary.segments[1].video_frame_count) ||
+        bitmap_positive_diagnostics != kExpectedBitmapPositiveDiagnosticCount) {
+        dump_subtitle_schedule_frame_count_diagnostics(
+            "Unexpected resized thumbnail pre-roll timeline subtitle diagnostic frame counts",
+            summary,
+            observer,
+            kExpectedTotalFrameCount,
+            static_cast<std::int64_t>(kExpectedBitmapPositiveDiagnosticCount)
+        );
+        return fail("Unexpected resized thumbnail pre-roll timeline subtitle diagnostic frame counts.");
+    }
+
+    if (!observer_logs_contain_text(observer, "normalized thumbnail source from 320x180 to 160x90")) {
+        return fail("Resized thumbnail pre-roll did not log thumbnail normalization to the final output size.");
+    }
+
+    const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
+    if (!burned_output_decode.succeeded()) {
+        return fail("Resized thumbnail pre-roll timeline subtitle output decode failed unexpectedly.");
+    }
+
+    if (assert_decoded_output(*burned_output_decode.decoded_media_source, static_cast<std::size_t>(kExpectedTotalFrameCount), true) != 0 ||
+        assert_decoded_video_dimensions(*burned_output_decode.decoded_media_source, 160, 90, "Resized thumbnail pre-roll timeline subtitle output") != 0) {
+        return 1;
+    }
+
+    const auto main_frame_offset =
+        2U + static_cast<std::size_t>(summary.timeline_summary.segments[0].video_frame_count);
+    const auto main_frame_count =
+        static_cast<std::size_t>(summary.timeline_summary.segments[1].video_frame_count);
+    if (summary.streaming_runtime.subtitle_diagnostics_mode != "off") {
+        const auto schedule_result = assert_subtitle_render_schedule_diagnostics(
+            observer,
+            summary,
+            *burned_output_decode.decoded_media_source,
+            main_frame_offset,
+            main_frame_count,
+            summary.timeline_summary.segments[1].start_microseconds,
+            "Resized thumbnail pre-roll main-segment subtitle render scheduling",
+            std::pair<int, int>{160, 90}
+        );
+        if (schedule_result != 0) {
+            return schedule_result;
+        }
+    }
+
+    const auto observer_result = assert_observer_flow(observer, 3, 1);
+    if (observer_result != 0) {
+        return observer_result;
+    }
+
+    std::cout << "timeline.thumbnail_resize.output_dimensions=160x90\n";
+    std::cout << "timeline.thumbnail_resize.normalized_thumbnail=yes\n";
+    std::cout << "timeline.thumbnail_resize.render_schedule=main_relative\n";
+    return 0;
+}
+
 int run_stress_burn_in_assertion(
     const std::filesystem::path &sample_path,
     const std::filesystem::path &subtitle_path,
@@ -2171,6 +2291,7 @@ int main(int argc, char *argv[]) {
             "--timeline-h264 <intro> <main> <outro> <subtitle> <plain-output> <burned-output>|"
             "--timeline-thumbnail-h264 <intro> <main> <outro> <subtitle> <burned-output>|"
             "--timeline-resize-h264 <intro> <main> <outro> <subtitle> <burned-output>|"
+            "--timeline-thumbnail-resize-h264 <intro> <main> <outro> <subtitle> <burned-output>|"
             "--timeline-full-rejected <intro> <main> <outro> <subtitle> <plain-output> <burned-output>]"
         );
     }
@@ -2313,6 +2434,16 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--timeline-resize-h264" && argc == 7) {
         return run_timeline_resize_burn_in_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4]),
+            std::filesystem::path(argv[5]),
+            std::filesystem::path(argv[6])
+        );
+    }
+
+    if (mode == "--timeline-thumbnail-resize-h264" && argc == 7) {
+        return run_timeline_thumbnail_resize_burn_in_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3]),
             std::filesystem::path(argv[4]),
