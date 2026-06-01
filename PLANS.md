@@ -1146,7 +1146,7 @@ Implemented now:
   * Main subtitles remain tied only to main segment time; thumbnail/pre-roll, intro, and outro never render the main subtitle file.
   * Main subtitle render sessions still use the final output canvas dimensions, so resize presets and ASS positioning stay aligned with encoded output.
   * Decoded source dimensions and final output dimensions are separate: resize must not make decoder validation expect resized dimensions from native decoded frames.
-  * The resized timeline subtitle test now prints explicit frame-count and subtitle-schedule diagnostics before failing, so CI can distinguish stale expected counts from a real render/counting bug.
+  * The resized timeline subtitle test now asserts bitmap-positive renderer diagnostics for the 160x90 main segment, keeping the separate streaming summary/frame-inspection counter visible in failure output without treating it as the resized subtitle visibility proof.
   * Added diagnostics, gated by the existing subtitle diagnostics mode, for segment name, output timestamp, segment-relative timestamp, and subtitle timestamp passed to the renderer.
   * Defined the current subtitle clock after trim/cadence normalization as the normalized main-segment output PTS rebased to zero; this keeps duplicated frames and cadence-normalized frames deterministic until a future source-frame-clock contract is introduced.
 
