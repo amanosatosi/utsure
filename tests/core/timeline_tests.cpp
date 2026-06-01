@@ -474,18 +474,14 @@ int assert_subtitle_scope(
         .subtitles_present = true,
         .subtitle_timing_mode = SubtitleTimingMode::full_output_timeline
     });
-    if (!full_timeline_result.succeeded()) {
-        return fail("Full-timeline subtitle-scope assembly failed unexpectedly.");
-    }
-
-    if (!full_timeline_result.timeline_plan->segments[0].subtitles_enabled ||
-        !full_timeline_result.timeline_plan->segments[1].subtitles_enabled ||
-        !full_timeline_result.timeline_plan->segments[2].subtitles_enabled) {
-        return fail("Full-output subtitle scope did not enable every segment.");
+    if (full_timeline_result.succeeded() ||
+        !full_timeline_result.error.has_value() ||
+        full_timeline_result.error->message.find("Full-output subtitle timing") == std::string::npos) {
+        return fail("Full-output subtitle scope was not rejected explicitly.");
     }
 
     std::cout << "subtitle.scope.main_only=intro:no,main:yes,outro:no\n";
-    std::cout << "subtitle.scope.full_output=intro:yes,main:yes,outro:yes\n";
+    std::cout << "subtitle.scope.full_output=rejected\n";
     return 0;
 }
 

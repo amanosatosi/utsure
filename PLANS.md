@@ -36,6 +36,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M29 libassmod `\img` asset registration implemented; awaiting GitHub Actions validation.
 - [x] M30 Bundled Pyidaungsu UI font fallback and configurable app UI font implemented; awaiting GitHub Actions validation.
 - [x] M31 Encoding profiles, resize presets, and audio track selection implemented; awaiting GitHub Actions validation.
+- [x] M32 Urgent subtitle/video sync correctness fix implemented; awaiting GitHub Actions validation.
 
 ## Active assumptions
 
@@ -120,9 +121,10 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M24 slice also permits one narrow user-reported desktop responsiveness follow-up, limited to keeping FontCollector as the primary ASS render font-preparation path while preventing GUI-thread queue-start stalls and avoiding repeated FontCollector runs for unchanged subtitles within the same app session.
 - The current M24 slice also permits one narrow user-reported main-segment SAR follow-up, limited to accepting harmless decoded-frame sample-aspect-ratio metadata disagreements from the main source while preserving the inspected main output SAR for subtitle setup and encoded frame metadata.
 - Runtime anomaly policy note: harmless no-op cases are skipped, recoverable normalization and reduced-fidelity fallbacks continue with diagnostics, clearly unsupported setups fail in preflight when they can be detected early, and only unsafe/corrupt runtime states remain encode-stopping failures.
-- The M24 subtitle render scheduling hardening follow-up completed: subtitle-enabled output frames now invoke composition at the encoded frame's output presentation timestamp, with regression coverage for transform/move timing and existing bitmap safety failures preserved.
+- The earlier M24 subtitle render scheduling hardening pass added per-frame render diagnostics and worker coverage; M32 now supersedes the output-timeline timestamp policy for main subtitles with a main-video-relative subtitle clock.
 - The current M25 slice is limited to thumbnail pre-roll: auto-discovering a same-resolution `thumbnail.*` image beside the selected subtitle, loading the matching same-stem `.ass` overlay such as `thumbnail.ass`, exposing the `utsure_data` actor line text for per-job editing without modifying the original ASS file, rendering the edited overlay through libassmod onto the thumbnail image, and prepending the resulting still as the first two video frames before any intro/main/outro content.
 - The M25 implementation assumes `thumbnail.*` matching is case-insensitive on the file stem and supports common FFmpeg-readable still formats (`.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tif`, `.tiff`); manually chosen thumbnail images are accepted only when their decoded video dimensions match the main source resolution.
+- The current M32 slice is limited to main-subtitle timing correctness in the streaming burn-in path: main subtitles render only on main-segment frames, subtitle render timestamps are main-video-relative, thumbnail/intro/outro frames do not receive main subtitles, and the obsolete full-output subtitle timing mode is rejected instead of silently changing user intent.
 
 ## Architecture direction
 
@@ -1114,6 +1116,20 @@ Completed:
   * Tiny follow-up after commit `c38526caa5b62968a070f3a1e26b2bd684da1621`: Source/no-resize keeps exact source dimensions and SAR, while target-height resize uses a separate encoded-output validation path that guarantees even dimensions; audio auto-selection remains decodable-track-first, with safe undecodable Copy source tracks available only through explicit manual selection.
   * Resize policy cleanup: 540p remains exact half-height 1080p output (`960x540` for 16:9), and odd custom target heights now round down to the nearest even encoder-safe height instead of exceeding the requested maximum.
 
+### M32 Urgent subtitle/video sync correctness fix
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Replace output-timeline-derived subtitle render timestamps in the streaming burn-in path with a segment-aware main-video-relative subtitle clock.
+  * Keep main subtitles disabled for thumbnail pre-roll, intro, and outro frames.
+  * Preserve main-only behavior and resize/subtitle canvas behavior at final output dimensions.
+  * Reject explicit full-output subtitle timing requests because they conflict with the current invariant and must not be silently treated as main-only.
+
+Validation:
+  * Added focused tests for main-only scheduling, intro/pre-roll offset handling, thumbnail+10s intro combined offsets, outro exclusion, full-output timing rejection, and resize canvas dimensions.
+  * Local compile/test execution remains reserved for GitHub Actions; local validation for this slice was limited to stale-symbol searches, code-path inspection, and `git diff --check`.
+
 ## Immediate next milestone
 
-Re-run GitHub Actions for M27/M28/M29/M30/M31 validation, then resume pending M24/M25 external validation work.
+Re-run GitHub Actions for M27/M28/M29/M30/M31/M32 validation, then resume pending M24/M25 external validation work.

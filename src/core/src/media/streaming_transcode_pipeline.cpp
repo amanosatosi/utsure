@@ -3528,6 +3528,26 @@ ResolvedVideoFrameTiming resolve_video_frame_timing_for_segment(
     };
 }
 
+std::optional<std::int64_t> resolve_main_subtitle_timestamp_microseconds(
+    const timeline::TimelineSegmentPlan &segment_plan,
+    const ResolvedVideoFrameTiming &timing,
+    const Rational &output_video_time_base,
+    const std::int64_t segment_output_start_pts
+) {
+    if (!segment_plan.subtitles_enabled || segment_plan.kind != timeline::TimelineSegmentKind::main) {
+        return std::nullopt;
+    }
+
+    const auto segment_relative_pts = timing.output_pts - segment_output_start_pts;
+    if (segment_relative_pts < 0) {
+        throw std::runtime_error(
+            "The main segment produced a subtitle render timestamp before the main video start."
+        );
+    }
+
+    return rescale_to_microseconds(segment_relative_pts, output_video_time_base);
+}
+
 SegmentProcessResult process_segment(
     const timeline::TimelinePlan &timeline_plan,
     const timeline::TimelineSegmentPlan &segment_plan,
@@ -4090,10 +4110,12 @@ SegmentProcessResult process_segment(
         if (video_frame_processor) {
             std::optional<std::int64_t> subtitle_timestamp_microseconds{};
             if (segment_uses_subtitle_path) {
-                // ASS effects are time-dependent even when the active event set is unchanged.
-                // Always advance the renderer with the encoded frame's output timestamp.
-                subtitle_timestamp_microseconds =
-                    rescale_to_microseconds(timing.output_pts, timeline_plan.output_video_time_base);
+                subtitle_timestamp_microseconds = resolve_main_subtitle_timestamp_microseconds(
+                    segment_plan,
+                    timing,
+                    timeline_plan.output_video_time_base,
+                    segment_output_start_pts
+                );
             }
 
             while (video_frame_processor->outstanding_count() >= video_frame_processor->max_in_flight()) {

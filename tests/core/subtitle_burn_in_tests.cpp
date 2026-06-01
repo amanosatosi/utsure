@@ -403,15 +403,32 @@ int assert_decoded_output(
     return 0;
 }
 
+int assert_decoded_video_dimensions(
+    const DecodedMediaSource &decoded_output,
+    const int expected_width,
+    const int expected_height,
+    const std::string_view context
+) {
+    for (const auto &frame : decoded_output.video_frames) {
+        if (frame.width != expected_width || frame.height != expected_height) {
+            return fail(std::string(context) + " decoded a frame with unexpected output dimensions.");
+        }
+    }
+
+    return 0;
+}
+
 int assert_observer_flow(
     const CollectingObserver &observer,
-    const int expected_decode_steps
+    const int expected_decode_steps,
+    const int expected_thumbnail_steps = 0
 ) {
     if (observer.progress_updates.empty()) {
         return fail("The subtitle burn-in observer did not receive any progress updates.");
     }
 
-    const int expected_total_steps = 1 + expected_decode_steps + 1 + 1 + 1;
+    const int expected_total_steps = 1 + expected_decode_steps + 1 + expected_thumbnail_steps + 1 + 1;
+    const int expected_subtitle_stage_count = 1 + expected_thumbnail_steps;
     int subtitle_stage_count = 0;
 
     if (observer.progress_updates.front().stage != EncodeJobStage::assembling_timeline ||
@@ -429,8 +446,8 @@ int assert_observer_flow(
         }
     }
 
-    if (subtitle_stage_count != 1) {
-        return fail("The subtitle burn-in observer did not report the subtitle stage exactly once.");
+    if (subtitle_stage_count != expected_subtitle_stage_count) {
+        return fail("The subtitle burn-in observer did not report the expected subtitle preparation stage count.");
     }
 
     for (const auto &log_message : observer.log_messages) {
@@ -481,6 +498,7 @@ int assert_subtitle_render_schedule_diagnostics(
     const DecodedMediaSource &decoded_output,
     const std::size_t output_frame_offset,
     const std::size_t expected_frame_count,
+    const std::int64_t segment_start_microseconds,
     const std::string_view context
 ) {
     if (summary.streaming_runtime.subtitle_diagnostics_mode == "off") {
@@ -501,12 +519,13 @@ int assert_subtitle_render_schedule_diagnostics(
 
     for (std::size_t index = 0; index < expected_frame_count; ++index) {
         const auto expected_timestamp =
-            decoded_output.video_frames[output_frame_offset + index].timestamp.start_microseconds;
+            decoded_output.video_frames[output_frame_offset + index].timestamp.start_microseconds -
+            segment_start_microseconds;
         const auto actual_timestamp = diagnostics[index].subtitle_timestamp_microseconds;
         if (std::llabs(actual_timestamp - expected_timestamp) > 1) {
             return fail(
                 std::string(context) +
-                " used a subtitle render timestamp that did not match the encoded output frame timestamp."
+                " used a subtitle render timestamp that did not match the segment-relative main clock."
             );
         }
     }
@@ -1183,6 +1202,7 @@ int run_render_schedule_assertion(
         *burned_output_decode.decoded_media_source,
         0U,
         expected_frame_count,
+        0,
         "Subtitle render scheduling"
     );
     if (schedule_result != 0) {
@@ -1192,7 +1212,7 @@ int run_render_schedule_assertion(
     std::cout << "schedule.subtitle_path=" << format_path_leaf(subtitle_path) << '\n';
     std::cout << "schedule.output_frames=" << summary.timeline_summary.output_video_frame_count << '\n';
     std::cout << "schedule.render_calls=" << expected_frame_count << '\n';
-    std::cout << "schedule.timestamps=output_pts\n";
+    std::cout << "schedule.timestamps=main_relative\n";
     return 0;
 }
 
@@ -1404,17 +1424,18 @@ int run_timeline_burn_in_assertion(
         return 1;
     }
 
+    const auto main_frame_offset =
+        static_cast<std::size_t>(summary.timeline_summary.segments[0].video_frame_count);
+    const auto main_frame_count =
+        static_cast<std::size_t>(summary.timeline_summary.segments[1].video_frame_count);
     if (summary.streaming_runtime.subtitle_diagnostics_mode != "off") {
-        const auto main_frame_offset =
-            static_cast<std::size_t>(summary.timeline_summary.segments[0].video_frame_count);
-        const auto main_frame_count =
-            static_cast<std::size_t>(summary.timeline_summary.segments[1].video_frame_count);
         const auto schedule_result = assert_subtitle_render_schedule_diagnostics(
             observer,
             summary,
             *burned_output_decode.decoded_media_source,
             main_frame_offset,
             main_frame_count,
+            summary.timeline_summary.segments[1].start_microseconds,
             "Timeline main-segment subtitle render scheduling"
         );
         if (schedule_result != 0) {
@@ -1432,8 +1453,8 @@ int run_timeline_burn_in_assertion(
         return fail("Timeline subtitle burn-in did not alter any main-segment frames.");
     }
 
-    if (!frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 24U)) {
-        return fail("Timeline subtitle burn-in did not change the first main-segment frame.");
+    if (!frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, main_frame_offset + 24U)) {
+        return fail("Timeline subtitle burn-in did not change the main-segment frame at the ASS event time.");
     }
 
     const auto observer_result = assert_observer_flow(observer, 3);
@@ -1453,15 +1474,15 @@ int run_timeline_burn_in_assertion(
 
     std::cout << "timeline.intro.frame0.changed=no\n";
     std::cout << "timeline.main.changed=yes\n";
-    std::cout << "timeline.outro.scope=not_asserted_after_encode\n";
+    std::cout << "timeline.outro.scope=diagnostics_only\n";
     std::cout << "timeline.subtitled_frames=" << summary.subtitled_video_frame_count << '\n';
     if (summary.streaming_runtime.subtitle_diagnostics_mode != "off") {
-        std::cout << "timeline.render_schedule=output_pts\n";
+        std::cout << "timeline.render_schedule=main_relative\n";
     }
     return 0;
 }
 
-int run_timeline_full_output_burn_in_assertion(
+int run_timeline_full_output_rejection_assertion(
     const std::filesystem::path &intro_path,
     const std::filesystem::path &main_path,
     const std::filesystem::path &outro_path,
@@ -1469,24 +1490,9 @@ int run_timeline_full_output_burn_in_assertion(
     const std::filesystem::path &plain_output_path,
     const std::filesystem::path &burned_output_path
 ) {
+    (void)plain_output_path;
     CollectingObserver observer{};
-    const EncodeJob plain_job{
-        .input = {
-            .intro_source_path = intro_path,
-            .main_source_path = main_path,
-            .outro_source_path = outro_path
-        },
-        .output = {
-            .output_path = plain_output_path,
-            .video = {
-                .codec = OutputVideoCodec::h264,
-                .preset = "medium",
-                .crf = 23
-            }
-        }
-    };
-
-    const EncodeJob burned_job{
+    const EncodeJob rejected_job{
         .input = {
             .intro_source_path = intro_path,
             .main_source_path = main_path,
@@ -1507,48 +1513,210 @@ int run_timeline_full_output_burn_in_assertion(
         }
     };
 
-    const EncodeJobResult plain_job_result = EncodeJobRunner::run(plain_job);
+    const EncodeJobResult result = EncodeJobRunner::run(rejected_job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (result.succeeded()) {
+        return fail("Full-output timeline subtitle timing succeeded even though it violates main-only subtitle scope.");
+    }
+
+    if (!result.error.has_value() || !contains_text(result.error->message, "Full-output subtitle timing")) {
+        return fail("Full-output timeline subtitle timing did not report the expected rejection reason.");
+    }
+
+    std::cout << "timeline.full_output.rejected=yes\n";
+    std::cout << "timeline.full_output.reason=main_subtitle_scope\n";
+    return 0;
+}
+
+int run_timeline_thumbnail_preroll_burn_in_assertion(
+    const std::filesystem::path &intro_path,
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &outro_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &burned_output_path
+) {
+    CollectingObserver observer{};
+    const EncodeJob burned_job{
+        .input = {
+            .intro_source_path = intro_path,
+            .main_source_path = main_path,
+            .outro_source_path = outro_path
+        },
+        .subtitles = utsure::core::job::EncodeJobSubtitleSettings{
+            .subtitle_path = subtitle_path,
+            .format_hint = "ass"
+        },
+        .thumbnail_preroll = utsure::core::job::EncodeJobThumbnailPrerollSettings{
+            .enabled = true
+        },
+        .output = {
+            .output_path = burned_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            }
+        }
+    };
+
     const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job, EncodeJobRunOptions{
         .decode_normalization_policy = {},
         .observer = &observer
     });
-    if (!plain_job_result.succeeded() || !burned_job_result.succeeded()) {
-        return fail("Full-output timeline subtitle burn-in jobs failed unexpectedly.");
+    if (!burned_job_result.succeeded()) {
+        return fail("Thumbnail pre-roll timeline subtitle burn-in job failed unexpectedly.");
     }
 
     const auto &summary = *burned_job_result.encode_job_summary;
     if (summary.timeline_summary.segments.size() != 3 ||
-        !summary.timeline_summary.segments[0].subtitles_enabled ||
+        summary.timeline_summary.segments[0].subtitles_enabled ||
         !summary.timeline_summary.segments[1].subtitles_enabled ||
-        !summary.timeline_summary.segments[2].subtitles_enabled) {
-        return fail("Full-output timeline subtitle scope did not enable every segment.");
+        summary.timeline_summary.segments[2].subtitles_enabled) {
+        return fail("Thumbnail pre-roll timeline subtitle scope did not stay on the main segment.");
     }
 
-    if (summary.subtitled_video_frame_count != 11) {
-        return fail("Unexpected count of subtitled video frames for the full-output timeline burn-in path.");
+    if (summary.timeline_summary.output_video_frame_count != 314 ||
+        summary.subtitled_video_frame_count != 13) {
+        return fail("Unexpected thumbnail pre-roll timeline subtitle frame counts.");
     }
 
-    if (summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
-        return fail("Full-output subtitle burn-in jobs should report non-zero subtitle composition time.");
-    }
-
-    const MediaDecodeResult plain_output_decode = MediaDecoder::decode(plain_output_path);
     const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
-    if (!plain_output_decode.succeeded() || !burned_output_decode.succeeded()) {
-        return fail("Full-output timeline subtitle output decode failed unexpectedly.");
+    if (!burned_output_decode.succeeded()) {
+        return fail("Thumbnail pre-roll timeline subtitle output decode failed unexpectedly.");
     }
 
-    if (assert_decoded_output(*plain_output_decode.decoded_media_source, 96U, true) != 0 ||
-        assert_decoded_output(*burned_output_decode.decoded_media_source, 96U, true) != 0) {
+    if (assert_decoded_output(*burned_output_decode.decoded_media_source, 314U, true) != 0) {
         return 1;
     }
 
-    if (!frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U)) {
-        return fail("Full-output timeline subtitle burn-in did not change the first intro frame.");
+    const auto main_frame_offset =
+        2U + static_cast<std::size_t>(summary.timeline_summary.segments[0].video_frame_count);
+    const auto main_frame_count =
+        static_cast<std::size_t>(summary.timeline_summary.segments[1].video_frame_count);
+    if (summary.timeline_summary.segments[1].start_microseconds <= 10000000) {
+        return fail("Thumbnail pre-roll plus the 10 second intro did not move the main segment start after the intro boundary.");
+    }
+    const auto first_main_subtitle_frame_output_us =
+        burned_output_decode.decoded_media_source->video_frames[main_frame_offset + 24U].timestamp.start_microseconds;
+    if (first_main_subtitle_frame_output_us < 11000000) {
+        return fail("The 1 second ASS event was scheduled before the 10 second intro had elapsed.");
     }
 
-    if (!any_frame_changed_in_range(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U, 11U)) {
-        return fail("Full-output timeline subtitle burn-in did not alter the expected opening frame range.");
+    if (summary.streaming_runtime.subtitle_diagnostics_mode != "off") {
+        const auto schedule_result = assert_subtitle_render_schedule_diagnostics(
+            observer,
+            summary,
+            *burned_output_decode.decoded_media_source,
+            main_frame_offset,
+            main_frame_count,
+            summary.timeline_summary.segments[1].start_microseconds,
+            "Thumbnail pre-roll timeline subtitle render scheduling"
+        );
+        if (schedule_result != 0) {
+            return schedule_result;
+        }
+    }
+
+    const auto observer_result = assert_observer_flow(observer, 3, 1);
+    if (observer_result != 0) {
+        return observer_result;
+    }
+
+    const auto runtime_result = assert_subtitle_runtime_visibility(
+        observer,
+        summary,
+        current_subtitle_bitmap_mode(),
+        current_subtitle_composition_mode()
+    );
+    if (runtime_result != 0) {
+        return runtime_result;
+    }
+
+    std::cout << "timeline.thumbnail_preroll.output_frames=" << summary.timeline_summary.output_video_frame_count << '\n';
+    std::cout << "timeline.thumbnail_preroll.subtitled_frames=" << summary.subtitled_video_frame_count << '\n';
+    std::cout << "timeline.thumbnail_preroll.intro_seconds=10\n";
+    std::cout << "timeline.thumbnail_preroll.first_main_subtitle_output_us="
+              << first_main_subtitle_frame_output_us << '\n';
+    std::cout << "timeline.thumbnail_preroll.render_schedule=main_relative\n";
+    return 0;
+}
+
+int run_timeline_resize_burn_in_assertion(
+    const std::filesystem::path &intro_path,
+    const std::filesystem::path &main_path,
+    const std::filesystem::path &outro_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &burned_output_path
+) {
+    CollectingObserver observer{};
+    const EncodeJob burned_job{
+        .input = {
+            .intro_source_path = intro_path,
+            .main_source_path = main_path,
+            .outro_source_path = outro_path
+        },
+        .subtitles = utsure::core::job::EncodeJobSubtitleSettings{
+            .subtitle_path = subtitle_path,
+            .format_hint = "ass"
+        },
+        .output = {
+            .output_path = burned_output_path,
+            .video = {
+                .codec = OutputVideoCodec::h264,
+                .preset = "medium",
+                .crf = 23
+            },
+            .resize = {
+                .mode = utsure::core::job::EncodeResizeMode::target_height,
+                .target_height = 90,
+                .allow_upscale = false
+            }
+        }
+    };
+
+    const EncodeJobResult burned_job_result = EncodeJobRunner::run(burned_job, EncodeJobRunOptions{
+        .decode_normalization_policy = {},
+        .observer = &observer
+    });
+    if (!burned_job_result.succeeded()) {
+        return fail("Resized timeline subtitle burn-in job failed unexpectedly.");
+    }
+
+    const auto &summary = *burned_job_result.encode_job_summary;
+    if (summary.timeline_summary.output_video_frame_count != 96 ||
+        summary.subtitled_video_frame_count != 11) {
+        return fail("Unexpected resized timeline subtitle frame counts.");
+    }
+
+    const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
+    if (!burned_output_decode.succeeded()) {
+        return fail("Resized timeline subtitle output decode failed unexpectedly.");
+    }
+
+    if (assert_decoded_output(*burned_output_decode.decoded_media_source, 96U, true) != 0 ||
+        assert_decoded_video_dimensions(*burned_output_decode.decoded_media_source, 160, 90, "Resized timeline subtitle output") != 0) {
+        return 1;
+    }
+
+    const auto main_frame_offset =
+        static_cast<std::size_t>(summary.timeline_summary.segments[0].video_frame_count);
+    const auto main_frame_count =
+        static_cast<std::size_t>(summary.timeline_summary.segments[1].video_frame_count);
+    if (summary.streaming_runtime.subtitle_diagnostics_mode != "off") {
+        const auto schedule_result = assert_subtitle_render_schedule_diagnostics(
+            observer,
+            summary,
+            *burned_output_decode.decoded_media_source,
+            main_frame_offset,
+            main_frame_count,
+            summary.timeline_summary.segments[1].start_microseconds,
+            "Resized timeline subtitle render scheduling"
+        );
+        if (schedule_result != 0) {
+            return schedule_result;
+        }
     }
 
     const auto observer_result = assert_observer_flow(observer, 3);
@@ -1566,9 +1734,8 @@ int run_timeline_full_output_burn_in_assertion(
         return runtime_result;
     }
 
-    std::cout << "timeline.full_output.frame0.changed=yes\n";
-    std::cout << "timeline.full_output.subtitled_frames=" << summary.subtitled_video_frame_count << '\n';
-    std::cout << "timeline.full_output.segment_scope=intro:yes,main:yes,outro:yes\n";
+    std::cout << "timeline.resize.output_dimensions=160x90\n";
+    std::cout << "timeline.resize.render_schedule=main_relative\n";
     return 0;
 }
 
@@ -1692,7 +1859,9 @@ int main(int argc, char *argv[]) {
             "--trimmed-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--stress-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--timeline-h264 <intro> <main> <outro> <subtitle> <plain-output> <burned-output>|"
-            "--timeline-full-h264 <intro> <main> <outro> <subtitle> <plain-output> <burned-output>]"
+            "--timeline-thumbnail-h264 <intro> <main> <outro> <subtitle> <burned-output>|"
+            "--timeline-resize-h264 <intro> <main> <outro> <subtitle> <burned-output>|"
+            "--timeline-full-rejected <intro> <main> <outro> <subtitle> <plain-output> <burned-output>]"
         );
     }
 
@@ -1811,14 +1980,34 @@ int main(int argc, char *argv[]) {
         );
     }
 
-    if (mode == "--timeline-full-h264" && argc == 8) {
-        return run_timeline_full_output_burn_in_assertion(
+    if (mode == "--timeline-full-rejected" && argc == 8) {
+        return run_timeline_full_output_rejection_assertion(
             std::filesystem::path(argv[2]),
             std::filesystem::path(argv[3]),
             std::filesystem::path(argv[4]),
             std::filesystem::path(argv[5]),
             std::filesystem::path(argv[6]),
             std::filesystem::path(argv[7])
+        );
+    }
+
+    if (mode == "--timeline-thumbnail-h264" && argc == 7) {
+        return run_timeline_thumbnail_preroll_burn_in_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4]),
+            std::filesystem::path(argv[5]),
+            std::filesystem::path(argv[6])
+        );
+    }
+
+    if (mode == "--timeline-resize-h264" && argc == 7) {
+        return run_timeline_resize_burn_in_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4]),
+            std::filesystem::path(argv[5]),
+            std::filesystem::path(argv[6])
         );
     }
 

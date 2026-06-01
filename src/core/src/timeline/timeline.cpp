@@ -251,6 +251,14 @@ TimelineAssemblyResult TimelineAssembler::assemble(const TimelineAssemblyRequest
         validate_video_stream_presence(TimelineSegmentKind::main, main_segment_info);
         validate_main_source_trim(request, main_segment_info);
 
+        if (request.subtitles_present &&
+            request.subtitle_timing_mode == SubtitleTimingMode::full_output_timeline) {
+            return make_assembly_error(
+                "Full-output subtitle timing is no longer supported.",
+                "Main subtitles are always timed relative to the main video and are not rendered on thumbnail, intro, or outro frames."
+            );
+        }
+
         const auto main_video_stream = *main_segment_info.primary_video_stream;
         if (!rational_is_positive(main_video_stream.average_frame_rate)) {
             return make_assembly_error(
@@ -295,8 +303,7 @@ TimelineAssemblyResult TimelineAssembler::assemble(const TimelineAssemblyRequest
                 .kind = TimelineSegmentKind::intro,
                 .source_path = *intro_path,
                 .inspected_source_info = intro_info,
-                .subtitles_enabled = request.subtitles_present &&
-                    request.subtitle_timing_mode == SubtitleTimingMode::full_output_timeline
+                .subtitles_enabled = false
             });
         }
 
@@ -328,8 +335,7 @@ TimelineAssemblyResult TimelineAssembler::assemble(const TimelineAssemblyRequest
                 .kind = TimelineSegmentKind::outro,
                 .source_path = *outro_path,
                 .inspected_source_info = outro_info,
-                .subtitles_enabled = request.subtitles_present &&
-                    request.subtitle_timing_mode == SubtitleTimingMode::full_output_timeline
+                .subtitles_enabled = false
             });
         }
 

@@ -5,6 +5,7 @@ set(UTSURE_SAMPLE_MEDIA_FILE "${UTSURE_TEST_MEDIA_DIR}/inspection-sample.avi")
 set(UTSURE_PREVIEW_SESSION_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/preview-session-sample.mp4")
 set(UTSURE_MEMORY_HEAVY_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/memory-heavy-main.mp4")
 set(UTSURE_TIMELINE_INTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-intro.avi")
+set(UTSURE_TIMELINE_LONG_INTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-long-intro.avi")
 set(UTSURE_TIMELINE_OUTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-outro.avi")
 set(UTSURE_TIMELINE_BAD_FPS_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-bad-fps.avi")
 set(UTSURE_TIMELINE_NORMALIZED_INTRO_FILE "${UTSURE_TEST_MEDIA_DIR}/timeline-normalized-intro.mp4")
@@ -217,6 +218,19 @@ add_custom_command(
         -pix_fmt yuv420p
         -c:a pcm_s16le
         "${UTSURE_TIMELINE_INTRO_FILE}"
+    VERBATIM
+)
+
+add_custom_command(
+    OUTPUT "${UTSURE_TIMELINE_LONG_INTRO_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "color=c=red:size=320x180:rate=24"
+        -f lavfi -i "sine=frequency=600:sample_rate=48000:duration=10"
+        -t 10
+        -c:v rawvideo
+        -pix_fmt yuv420p
+        -c:a pcm_s16le
+        "${UTSURE_TIMELINE_LONG_INTRO_FILE}"
     VERBATIM
 )
 
@@ -452,6 +466,7 @@ add_custom_target(
         "${UTSURE_PREVIEW_SESSION_SAMPLE_FILE}"
         "${UTSURE_MEMORY_HEAVY_MAIN_FILE}"
         "${UTSURE_TIMELINE_INTRO_FILE}"
+        "${UTSURE_TIMELINE_LONG_INTRO_FILE}"
         "${UTSURE_TIMELINE_OUTRO_FILE}"
         "${UTSURE_TIMELINE_BAD_FPS_FILE}"
         "${UTSURE_TIMELINE_NORMALIZED_INTRO_FILE}"
@@ -1407,8 +1422,8 @@ add_test(
 utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.timeline.h264)
 
 add_test(
-    NAME utsure.core.subtitles.burn_in.timeline.full_output.h264
-    COMMAND utsure_core_subtitle_burn_in_tests --timeline-full-h264
+    NAME utsure.core.subtitles.burn_in.timeline.full_output.rejected
+    COMMAND utsure_core_subtitle_burn_in_tests --timeline-full-rejected
         "${UTSURE_TIMELINE_INTRO_FILE}"
         "${UTSURE_SAMPLE_MEDIA_FILE}"
         "${UTSURE_TIMELINE_OUTRO_FILE}"
@@ -1416,7 +1431,35 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/timeline-full-subtitle-plain-h264.mp4"
         "${UTSURE_TEST_MEDIA_DIR}/timeline-full-subtitle-burn-h264.mp4"
 )
-utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.timeline.full_output.h264)
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.timeline.full_output.rejected)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.timeline.thumbnail_preroll.h264
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_DIAGNOSTICS=frame
+        UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
+        utsure_core_subtitle_burn_in_tests --timeline-thumbnail-h264
+            "${UTSURE_TIMELINE_LONG_INTRO_FILE}"
+            "${UTSURE_SAMPLE_MEDIA_FILE}"
+            "${UTSURE_TIMELINE_OUTRO_FILE}"
+            "${UTSURE_SUBTITLE_OUTPUT_TIMELINE_SAMPLE_FILE}"
+            "${UTSURE_TEST_MEDIA_DIR}/timeline-thumbnail-subtitle-burn-h264.mp4"
+)
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.timeline.thumbnail_preroll.h264)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.timeline.resize.h264
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_DIAGNOSTICS=frame
+        UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
+        utsure_core_subtitle_burn_in_tests --timeline-resize-h264
+            "${UTSURE_TIMELINE_INTRO_FILE}"
+            "${UTSURE_SAMPLE_MEDIA_FILE}"
+            "${UTSURE_TIMELINE_OUTRO_FILE}"
+            "${UTSURE_SUBTITLE_OUTPUT_TIMELINE_SAMPLE_FILE}"
+            "${UTSURE_TEST_MEDIA_DIR}/timeline-resize-subtitle-burn-h264.mp4"
+)
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.timeline.resize.h264)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.stress.copied_serialized.h264
