@@ -1398,11 +1398,14 @@ utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.h265)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.trimmed.h264
-    COMMAND utsure_core_subtitle_burn_in_tests --trimmed-h264
-        "${UTSURE_SAMPLE_MEDIA_FILE}"
-        "${UTSURE_SUBTITLE_SAMPLE_FILE}"
-        "${UTSURE_TEST_MEDIA_DIR}/subtitle-trimmed-plain-h264.mp4"
-        "${UTSURE_TEST_MEDIA_DIR}/subtitle-trimmed-burn-h264.mp4"
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_DIAGNOSTICS=frame
+        UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
+        utsure_core_subtitle_burn_in_tests --trimmed-h264
+            "${UTSURE_SAMPLE_MEDIA_FILE}"
+            "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-trimmed-plain-h264.mp4"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-trimmed-burn-h264.mp4"
 )
 utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.trimmed.h264)
 

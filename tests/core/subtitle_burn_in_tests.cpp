@@ -547,6 +547,23 @@ int assert_subtitle_render_schedule_diagnostics(
         return fail(std::string(context) + " expected more decoded output frames than the output contains.");
     }
 
+    if (std::llabs(diagnostics.front().segment_relative_timestamp_microseconds) > 1 ||
+        std::llabs(diagnostics.front().subtitle_timestamp_microseconds) > 1) {
+        return fail(
+            std::string(context) +
+            " did not start the main-segment subtitle clock near zero."
+        );
+    }
+
+    if (segment_start_microseconds > 0 &&
+        diagnostics.front().subtitle_timestamp_microseconds >=
+            decoded_output.video_frames[output_frame_offset].timestamp.start_microseconds) {
+        return fail(
+            std::string(context) +
+            " included pre-main output time in the first main subtitle timestamp."
+        );
+    }
+
     for (std::size_t index = 0; index < expected_frame_count; ++index) {
         const auto expected_timestamp =
             decoded_output.video_frames[output_frame_offset + index].timestamp.start_microseconds -
@@ -1358,6 +1375,21 @@ int run_trimmed_main_burn_in_assertion(
     if (!contains_text(report, "job.input.main_trim.in_us=250000") ||
         !contains_text(report, "job.input.main_trim.out_us=1250000")) {
         return fail("The trimmed subtitle burn-in report did not include the trim range.");
+    }
+
+    if (summary.streaming_runtime.subtitle_diagnostics_mode != "off") {
+        const auto schedule_result = assert_subtitle_render_schedule_diagnostics(
+            observer,
+            summary,
+            *burned_output_decode.decoded_media_source,
+            0U,
+            static_cast<std::size_t>(summary.timeline_summary.output_video_frame_count),
+            0,
+            "Trimmed main subtitle render scheduling"
+        );
+        if (schedule_result != 0) {
+            return schedule_result;
+        }
     }
 
     const auto observer_result = assert_observer_flow(observer, 1);

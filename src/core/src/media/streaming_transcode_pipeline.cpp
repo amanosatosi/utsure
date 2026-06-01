@@ -3542,6 +3542,9 @@ std::optional<std::int64_t> resolve_main_subtitle_timestamp_microseconds(
         return std::nullopt;
     }
 
+    // Main subtitles are defined on the normalized main-segment output clock. At this point
+    // main frames have already been mapped onto the final output cadence, so subtracting the
+    // segment start removes thumbnail/intro time without falling back to the full output timeline.
     const auto segment_relative_pts = timing.output_pts - segment_output_start_pts;
     if (segment_relative_pts < 0) {
         throw std::runtime_error(
