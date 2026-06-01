@@ -121,6 +121,7 @@ struct SubtitleScheduleDiagnostic final {
     std::int64_t output_pts{0};
     std::int64_t segment_relative_timestamp_microseconds{0};
     std::int64_t subtitle_timestamp_microseconds{0};
+    std::int64_t bitmap_count{0};
     int destination_width{0};
     int destination_height{0};
 };
@@ -219,11 +220,13 @@ std::vector<SubtitleScheduleDiagnostic> collect_subtitle_schedule_diagnostics(
         const auto output_pts = parse_diagnostic_int64(message.message, "output_pts=");
         const auto segment_relative_us = parse_diagnostic_int64(message.message, "segment_relative_us=");
         const auto subtitle_timestamp_us = parse_diagnostic_int64(message.message, "subtitle_timestamp_us=");
+        const auto bitmap_count = parse_diagnostic_int64(message.message, "bitmap_count=");
         const auto destination = parse_diagnostic_dimensions(message.message, "destination=");
         if (!segment_name.has_value() ||
             !output_pts.has_value() ||
             !segment_relative_us.has_value() ||
             !subtitle_timestamp_us.has_value() ||
+            !bitmap_count.has_value() ||
             !destination.has_value()) {
             continue;
         }
@@ -233,6 +236,7 @@ std::vector<SubtitleScheduleDiagnostic> collect_subtitle_schedule_diagnostics(
             .output_pts = *output_pts,
             .segment_relative_timestamp_microseconds = *segment_relative_us,
             .subtitle_timestamp_microseconds = *subtitle_timestamp_us,
+            .bitmap_count = *bitmap_count,
             .destination_width = destination->first,
             .destination_height = destination->second
         });
@@ -246,6 +250,87 @@ std::vector<SubtitleScheduleDiagnostic> collect_subtitle_schedule_diagnostics(
         }
     );
     return diagnostics;
+}
+
+void dump_subtitle_schedule_frame_count_diagnostics(
+    const std::string_view context,
+    const EncodeJobSummary &summary,
+    const CollectingObserver &observer,
+    const std::int64_t expected_total_frame_count,
+    const std::int64_t expected_subtitled_frame_count
+) {
+    const auto diagnostics = collect_subtitle_schedule_diagnostics(observer);
+    const auto active_diagnostic_count = std::count_if(
+        diagnostics.begin(),
+        diagnostics.end(),
+        [](const SubtitleScheduleDiagnostic &diagnostic) {
+            return diagnostic.bitmap_count > 0;
+        }
+    );
+
+    std::cerr << context << ".\n";
+    std::cerr << "diagnostic.frame_count.expected.total=" << expected_total_frame_count << '\n';
+    std::cerr << "diagnostic.frame_count.actual.total=" << summary.timeline_summary.output_video_frame_count << '\n';
+    std::cerr << "diagnostic.frame_count.expected.subtitle_diagnostics=";
+    if (summary.timeline_summary.segments.size() > 1U) {
+        std::cerr << summary.timeline_summary.segments[1].video_frame_count << '\n';
+    } else {
+        std::cerr << "unknown\n";
+    }
+    std::cerr << "diagnostic.frame_count.actual.subtitle_diagnostics=" << diagnostics.size() << '\n';
+    std::cerr << "diagnostic.frame_count.expected.subtitled=" << expected_subtitled_frame_count << '\n';
+    std::cerr << "diagnostic.frame_count.actual.subtitled=" << summary.subtitled_video_frame_count << '\n';
+    std::cerr << "diagnostic.frame_count.actual.bitmap_positive_diagnostics=" << active_diagnostic_count << '\n';
+
+    if (summary.timeline_summary.segments.size() > 1U) {
+        const auto main_start = summary.timeline_summary.segments[1].start_microseconds;
+        const auto main_end = main_start + summary.timeline_summary.segments[1].duration_microseconds;
+        std::cerr << "diagnostic.main_segment.expected_range_us=" << main_start << ".." << main_end << '\n';
+        std::cerr << "diagnostic.main_segment.expected_frames="
+                  << summary.timeline_summary.segments[1].video_frame_count << '\n';
+    }
+
+    if (!diagnostics.empty()) {
+        const auto &first = diagnostics.front();
+        const auto &last = diagnostics.back();
+        std::cerr << "diagnostic.subtitle.first.output_pts=" << first.output_pts << '\n';
+        std::cerr << "diagnostic.subtitle.last.output_pts=" << last.output_pts << '\n';
+        std::cerr << "diagnostic.subtitle.first.subtitle_timestamp_us="
+                  << first.subtitle_timestamp_microseconds << '\n';
+        std::cerr << "diagnostic.subtitle.last.subtitle_timestamp_us="
+                  << last.subtitle_timestamp_microseconds << '\n';
+        std::cerr << "diagnostic.subtitle.first.segment_relative_us="
+                  << first.segment_relative_timestamp_microseconds << '\n';
+        std::cerr << "diagnostic.subtitle.last.segment_relative_us="
+                  << last.segment_relative_timestamp_microseconds << '\n';
+        std::cerr << "diagnostic.subtitle.first.destination="
+                  << first.destination_width << 'x' << first.destination_height << '\n';
+        std::cerr << "diagnostic.subtitle.last.destination="
+                  << last.destination_width << 'x' << last.destination_height << '\n';
+    }
+
+    const auto dump_sample = [](const char *label, const std::size_t index, const SubtitleScheduleDiagnostic &diagnostic) {
+        std::cerr << "diagnostic.subtitle." << label << '[' << index << "]="
+                  << "segment=" << diagnostic.segment_name
+                  << ",output_pts=" << diagnostic.output_pts
+                  << ",segment_relative_us=" << diagnostic.segment_relative_timestamp_microseconds
+                  << ",subtitle_timestamp_us=" << diagnostic.subtitle_timestamp_microseconds
+                  << ",destination=" << diagnostic.destination_width << 'x' << diagnostic.destination_height
+                  << ",bitmap_count=" << diagnostic.bitmap_count
+                  << ",subtitle_visible=" << (diagnostic.bitmap_count > 0 ? "yes" : "no")
+                  << '\n';
+    };
+
+    const std::size_t leading_count = std::min<std::size_t>(3U, diagnostics.size());
+    for (std::size_t index = 0; index < leading_count; ++index) {
+        dump_sample("first", index, diagnostics[index]);
+    }
+
+    const std::size_t trailing_count = std::min<std::size_t>(3U, diagnostics.size());
+    const std::size_t trailing_begin = diagnostics.size() - trailing_count;
+    for (std::size_t index = trailing_begin; index < diagnostics.size(); ++index) {
+        dump_sample("last", index - trailing_begin, diagnostics[index]);
+    }
 }
 
 void dump_encode_job_failure_diagnostics(
@@ -1858,6 +1943,11 @@ int run_timeline_resize_burn_in_assertion(
     }
 
     const auto &summary = *burned_job_result.encode_job_summary;
+    constexpr std::int64_t kExpectedTotalFrameCount = 96;
+    // subtitle-burn-sample.ass is active on the main timeline for [0 us, 450000 us).
+    // At the sample's 24 fps cadence this covers the first 11 main frames:
+    // 0, 41666, ..., 416666 us. The 458333 us frame is outside the event.
+    constexpr std::int64_t kExpectedSubtitledFrameCount = 11;
     if (summary.timeline_summary.segments.size() != 3 ||
         summary.timeline_summary.segments[0].subtitles_enabled ||
         !summary.timeline_summary.segments[1].subtitles_enabled ||
@@ -1865,8 +1955,15 @@ int run_timeline_resize_burn_in_assertion(
         return fail("Resized timeline subtitle scope did not stay on the main segment.");
     }
 
-    if (summary.timeline_summary.output_video_frame_count != 96 ||
-        summary.subtitled_video_frame_count != 11) {
+    if (summary.timeline_summary.output_video_frame_count != kExpectedTotalFrameCount ||
+        summary.subtitled_video_frame_count != kExpectedSubtitledFrameCount) {
+        dump_subtitle_schedule_frame_count_diagnostics(
+            "Unexpected main-relative resized timeline subtitle frame counts",
+            summary,
+            observer,
+            kExpectedTotalFrameCount,
+            kExpectedSubtitledFrameCount
+        );
         return fail("Unexpected main-relative resized timeline subtitle frame counts.");
     }
 
