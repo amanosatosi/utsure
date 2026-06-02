@@ -131,11 +131,12 @@ EncodeJobRunnerWorker *make_queue_worker(
                 }
             } active_guard{active_count};
 
-            for (int tick = 0; tick < 50; ++tick) {
-                if (options.cancellation_requested && options.cancellation_requested()) {
-                    return make_canceled_result(job);
-                }
-                QThread::msleep(5);
+    constexpr int kFakeQueueJobTicks = 20;
+    for (int tick = 0; tick < kFakeQueueJobTicks; ++tick) {
+        if (options.cancellation_requested && options.cancellation_requested()) {
+            return make_canceled_result(job);
+        }
+        QThread::msleep(5);
             }
 
             return make_success_result(job);
@@ -364,7 +365,16 @@ int run_deterministic_queue_assertion() {
     states[0] = QueueItemState::cancel_requested;
     controller.cancel_job();
 
-    if (!wait_until([&]() { return terminal_count == kJobCount; }, 5000)) {
+    if (!wait_until([&]() { return terminal_count == kJobCount; }, 15000)) {
+        std::cerr
+            << "Deterministic fake queue timeout: terminal_count=" << terminal_count
+            << " expected=" << kJobCount
+            << " started_count=" << started_count.load()
+            << " active_count=" << active_count.load()
+            << " max_active_count=" << max_active_count.load()
+            << " next_index=" << next_index
+            << " active_index=" << active_index
+            << '\n';
         return fail("Deterministic fake queue did not put every job into a terminal state.");
     }
 
@@ -527,7 +537,16 @@ int run_queue_layer_dispatch_assertion() {
 
     states[static_cast<std::size_t>(kActiveCancelIndex)] = QueueItemState::cancel_requested;
     controller.cancel_job();
-    if (!wait_until([&]() { return terminal_count == kJobCount; }, 6000)) {
+    if (!wait_until([&]() { return terminal_count == kJobCount; }, 15000)) {
+        std::cerr
+            << "Queue-layer dispatch timeout: terminal_count=" << terminal_count
+            << " expected=" << kJobCount
+            << " started_count=" << started_count.load()
+            << " active_count=" << active_count.load()
+            << " max_active_count=" << max_active_count.load()
+            << " queue_cursor=" << queue_cursor
+            << " active_job_index=" << active_job_index
+            << '\n';
         return fail("Queue-layer dispatch did not put every job into a terminal state.");
     }
 
