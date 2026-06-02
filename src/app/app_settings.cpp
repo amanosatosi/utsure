@@ -243,7 +243,25 @@ std::vector<AppSettings::EncodingProfile> encoding_profiles_from_json(const QJso
             profiles.push_back(std::move(*profile));
         }
     }
-    return profiles.empty() ? defaults : profiles;
+    if (profiles.empty()) {
+        return defaults;
+    }
+    for (const auto &default_profile : defaults) {
+        if (default_profile.name != "Default" && default_profile.name != "Low Size") {
+            continue;
+        }
+        const auto duplicate_name = std::find_if(
+            profiles.begin(),
+            profiles.end(),
+            [&](const AppSettings::EncodingProfile &existing) {
+                return existing.name.compare(default_profile.name, Qt::CaseInsensitive) == 0;
+            }
+        );
+        if (duplicate_name == profiles.end()) {
+            profiles.push_back(default_profile);
+        }
+    }
+    return profiles;
 }
 
 QJsonObject ui_font_to_json(const AppSettings::UiFontSettings &settings) {
@@ -544,6 +562,32 @@ void AppSettings::remember_encode_choices(const LastUsedEncodeChoices &choices) 
 
 std::vector<AppSettings::EncodingProfile> AppSettings::default_encoding_profiles() {
     return {
+        EncodingProfile{
+            .name = "Default",
+            .encode = LastUsedEncodeChoices{
+                .codec = utsure::core::media::OutputVideoCodec::h265,
+                .preset = "fast",
+                .crf = 22,
+                .audio_mode = utsure::core::media::AudioOutputMode::encode_aac,
+                .audio_bitrate_kbps = 128
+            },
+            .resize = utsure::core::job::EncodeResizeSettings{}
+        },
+        EncodingProfile{
+            .name = "Low Size",
+            .encode = LastUsedEncodeChoices{
+                .codec = utsure::core::media::OutputVideoCodec::h264,
+                .preset = "veryslow",
+                .crf = 30,
+                .audio_mode = utsure::core::media::AudioOutputMode::encode_aac,
+                .audio_bitrate_kbps = 128
+            },
+            .resize = utsure::core::job::EncodeResizeSettings{
+                .mode = utsure::core::job::EncodeResizeMode::target_height,
+                .target_height = 540,
+                .allow_upscale = false
+            }
+        },
         EncodingProfile{
             .name = "H.264 1080p Compatibility",
             .encode = LastUsedEncodeChoices{

@@ -9,6 +9,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -54,6 +55,20 @@ QByteArray read_file_bytes(const QString &path) {
         return {};
     }
     return file.readAll();
+}
+
+const AppSettings::EncodingProfile *find_profile(
+    const std::vector<AppSettings::EncodingProfile> &profiles,
+    const QString &name
+) {
+    const auto profile = std::find_if(
+        profiles.begin(),
+        profiles.end(),
+        [&](const AppSettings::EncodingProfile &candidate) {
+            return candidate.name.compare(name, Qt::CaseInsensitive) == 0;
+        }
+    );
+    return profile == profiles.end() ? nullptr : &*profile;
 }
 
 void touch_file(const std::filesystem::path &path) {
@@ -181,6 +196,7 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
     }
 
     const auto loaded = AppSettings::load(config_path);
+    const auto *roundtrip_profile = find_profile(loaded.settings.encoding_profiles, "HEVC 540p Data Saver");
     if (!loaded.warning.isEmpty() ||
         loaded.settings.last_used.codec != utsure::core::media::OutputVideoCodec::h264 ||
         loaded.settings.last_used.preset != "slow" ||
@@ -194,11 +210,12 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
         loaded.settings.ui_font.family != "Pyidaungsu" ||
         loaded.settings.ui_font.point_size != 12 ||
         !loaded.settings.ui_font.use_bundled_myanmar_fallback ||
-        loaded.settings.encoding_profiles.size() != 1U ||
-        loaded.settings.encoding_profiles.front().name != "HEVC 540p Data Saver" ||
-        loaded.settings.encoding_profiles.front().resize.mode != utsure::core::job::EncodeResizeMode::target_height ||
-        loaded.settings.encoding_profiles.front().resize.target_height != 540 ||
-        loaded.settings.encoding_profiles.front().encode.audio_bitrate_kbps != 128 ||
+        roundtrip_profile == nullptr ||
+        roundtrip_profile->resize.mode != utsure::core::job::EncodeResizeMode::target_height ||
+        roundtrip_profile->resize.target_height != 540 ||
+        roundtrip_profile->encode.audio_bitrate_kbps != 128 ||
+        find_profile(loaded.settings.encoding_profiles, "Default") == nullptr ||
+        find_profile(loaded.settings.encoding_profiles, "Low Size") == nullptr ||
         loaded.settings.last_used_profile != "HEVC 540p Data Saver" ||
         !loaded.settings.toshi_mode_enabled ||
         loaded.settings.sequence_counter_value("bdrip|show") != 12) {
@@ -211,6 +228,64 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
     }
 
     std::cout << "settings.roundtrip=ok\n";
+    return 0;
+}
+
+int assert_required_encoding_profiles_are_available(const std::filesystem::path &root) {
+    const auto defaults = AppSettings::default_encoding_profiles();
+    const auto *default_profile = find_profile(defaults, "Default");
+    const auto *low_size_profile = find_profile(defaults, "Low Size");
+    if (default_profile == nullptr ||
+        default_profile->encode.codec != utsure::core::media::OutputVideoCodec::h265 ||
+        default_profile->encode.crf != 22 ||
+        default_profile->encode.preset != "fast" ||
+        default_profile->encode.audio_mode != utsure::core::media::AudioOutputMode::encode_aac ||
+        default_profile->encode.audio_bitrate_kbps != 128 ||
+        default_profile->resize.mode != utsure::core::job::EncodeResizeMode::source ||
+        low_size_profile == nullptr ||
+        low_size_profile->encode.codec != utsure::core::media::OutputVideoCodec::h264 ||
+        low_size_profile->encode.crf != 30 ||
+        low_size_profile->encode.preset != "veryslow" ||
+        low_size_profile->encode.audio_mode != utsure::core::media::AudioOutputMode::encode_aac ||
+        low_size_profile->encode.audio_bitrate_kbps != 128 ||
+        low_size_profile->resize.mode != utsure::core::job::EncodeResizeMode::target_height ||
+        low_size_profile->resize.target_height != 540) {
+        return fail("Required compact encoding profiles are missing or have unexpected defaults.");
+    }
+
+    const QString config_path = path_to_qstring(root / "preserve-profiles" / "settings.json");
+    QDir().mkpath(QFileInfo(config_path).absolutePath());
+    QJsonObject root_object;
+    root_object.insert("version", 1);
+    root_object.insert("encodingProfiles", QJsonArray{
+        QJsonObject{
+            {"name", "Default"},
+            {"video", QJsonObject{{"codec", "h264"}, {"preset", "slow"}, {"crf", 35}}},
+            {"audio", QJsonObject{{"mode", "aac"}, {"bitrateKbps", 256}}},
+            {"resize", QJsonObject{{"mode", "targetHeight"}, {"height", 480}}}
+        }
+    });
+    QFile file(config_path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        return fail("Could not prepare required-profile preservation fixture.");
+    }
+    file.write(QJsonDocument(root_object).toJson(QJsonDocument::Indented));
+    file.close();
+
+    const auto loaded = AppSettings::load(config_path);
+    const auto *preserved_default = find_profile(loaded.settings.encoding_profiles, "Default");
+    const auto *loaded_low_size = find_profile(loaded.settings.encoding_profiles, "Low Size");
+    if (preserved_default == nullptr ||
+        preserved_default->encode.codec != utsure::core::media::OutputVideoCodec::h264 ||
+        preserved_default->encode.crf != 35 ||
+        preserved_default->encode.audio_bitrate_kbps != 256 ||
+        preserved_default->resize.target_height != 480 ||
+        loaded_low_size == nullptr ||
+        loaded.settings.encoding_profiles.size() != 2U) {
+        return fail("Loading existing profiles did not preserve same-name profiles while adding missing required defaults.");
+    }
+
+    std::cout << "settings.required_profiles=ok\n";
     return 0;
 }
 
@@ -516,6 +591,10 @@ int main(int argc, char *argv[]) {
     }
 
     if (assert_encode_choices_round_trip(root) != 0) {
+        return 1;
+    }
+
+    if (assert_required_encoding_profiles_are_available(root) != 0) {
         return 1;
     }
 

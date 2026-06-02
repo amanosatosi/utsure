@@ -182,6 +182,8 @@ private:
     void update_selected_profile();
     void rename_selected_profile();
     void delete_selected_profile();
+    void handle_profile_combo_activated(int index);
+    void show_profile_context_menu(const QPoint &position);
 
     void choose_output_path();
     void restore_selected_job_auto_output_path();
@@ -361,11 +363,6 @@ private:
     QSpinBox *crf_spin_box_{nullptr};
     QComboBox *resize_preset_combo_{nullptr};
     QComboBox *profile_combo_{nullptr};
-    QPushButton *profile_apply_button_{nullptr};
-    QPushButton *profile_save_button_{nullptr};
-    QPushButton *profile_update_button_{nullptr};
-    QPushButton *profile_rename_button_{nullptr};
-    QPushButton *profile_delete_button_{nullptr};
     QComboBox *audio_format_combo_{nullptr};
     QComboBox *audio_quality_combo_{nullptr};
     QComboBox *audio_track_combo_{nullptr};

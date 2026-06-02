@@ -74,6 +74,7 @@
 #include <QToolButton>
 #include <QThreadPool>
 #include <QUrl>
+#include <QVariant>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -116,6 +117,9 @@ struct PathFieldWidgets final {
 };
 
 Q_LOGGING_CATEGORY(previewPlaybackLog, "utsure.preview.playback")
+
+constexpr int kProfileCustomData = -1;
+constexpr int kProfileSaveCurrentData = -2;
 
 struct ProcessMemorySnapshot final {
     std::uint64_t rss_bytes{0};
@@ -1672,25 +1676,33 @@ QLabel#PreviewTimeBadge {
     auto *encode_tab_layout = new QVBoxLayout(encode_tab_content);
     encode_tab_layout->setContentsMargins(8, 8, 8, 8);
     encode_tab_layout->setSpacing(8);
+    auto *encode_top_row = new QHBoxLayout();
+    encode_top_row->setContentsMargins(0, 0, 0, 0);
+    encode_top_row->setSpacing(8);
+
+    auto *profile_group = new QGroupBox("Profiles", encode_tab_content);
+    auto *profile_layout = new QVBoxLayout(profile_group);
+    profile_combo_ = new QComboBox(profile_group);
+    profile_combo_->setContextMenuPolicy(Qt::CustomContextMenu);
+    profile_combo_->setToolTip("Select a saved profile, or right-click an active saved profile to update, rename, or remove it.");
+    profile_layout->addWidget(profile_combo_);
+    encode_top_row->addWidget(profile_group, 2);
+
+    auto *resolution_group = new QGroupBox("Resolution", encode_tab_content);
+    auto *resolution_layout = new QFormLayout(resolution_group);
+    resize_preset_combo_ = new QComboBox(resolution_group);
+    resize_preset_combo_->addItem("Source", 0);
+    resize_preset_combo_->addItem("1080p", 1080);
+    resize_preset_combo_->addItem("720p", 720);
+    resize_preset_combo_->addItem("540p", 540);
+    resize_preset_combo_->addItem("480p", 480);
+    resolution_layout->addRow("Output", resize_preset_combo_);
+    encode_top_row->addWidget(resolution_group, 1);
+    encode_tab_layout->addLayout(encode_top_row);
+
     auto *encode_settings_row = new QHBoxLayout();
     encode_settings_row->setContentsMargins(0, 0, 0, 0);
     encode_settings_row->setSpacing(8);
-
-    auto *profile_group = new QGroupBox("Encoding Profile", encode_tab_content);
-    auto *profile_layout = new QGridLayout(profile_group);
-    profile_combo_ = new QComboBox(profile_group);
-    profile_apply_button_ = new QPushButton("Apply", profile_group);
-    profile_save_button_ = new QPushButton("Save As", profile_group);
-    profile_update_button_ = new QPushButton("Update", profile_group);
-    profile_rename_button_ = new QPushButton("Rename", profile_group);
-    profile_delete_button_ = new QPushButton("Delete", profile_group);
-    profile_layout->addWidget(profile_combo_, 0, 0, 1, 3);
-    profile_layout->addWidget(profile_apply_button_, 0, 3);
-    profile_layout->addWidget(profile_save_button_, 1, 0);
-    profile_layout->addWidget(profile_update_button_, 1, 1);
-    profile_layout->addWidget(profile_rename_button_, 1, 2);
-    profile_layout->addWidget(profile_delete_button_, 1, 3);
-    encode_tab_layout->addWidget(profile_group);
 
     auto *video_group = new QGroupBox("Video", encode_tab_content);
     auto *video_layout = new QFormLayout(video_group);
@@ -1711,16 +1723,9 @@ QLabel#PreviewTimeBadge {
     });
     crf_spin_box_ = new QSpinBox(video_group);
     crf_spin_box_->setRange(0, 51);
-    resize_preset_combo_ = new QComboBox(video_group);
-    resize_preset_combo_->addItem("Source", 0);
-    resize_preset_combo_->addItem("1080p", 1080);
-    resize_preset_combo_->addItem("720p", 720);
-    resize_preset_combo_->addItem("540p", 540);
-    resize_preset_combo_->addItem("480p", 480);
     video_layout->addRow("Codec", video_codec_combo_);
     video_layout->addRow("CRF", crf_spin_box_);
     video_layout->addRow("Preset", preset_combo_);
-    video_layout->addRow("Resize", resize_preset_combo_);
 
     auto *audio_group = new QGroupBox("Audio", encode_tab_content);
     auto *audio_layout = new QFormLayout(audio_group);
@@ -1742,13 +1747,6 @@ QLabel#PreviewTimeBadge {
     audio_layout->addRow("Format", audio_format_combo_);
     audio_layout->addRow("Quality", audio_quality_combo_);
     audio_layout->addRow("Track", audio_track_combo_);
-    auto *audio_note = new QLabel(
-        "Japanese audio is selected automatically when detected. Manual track choices stay with the job.",
-        audio_group
-    );
-    audio_note->setObjectName("MutedNote");
-    audio_note->setWordWrap(true);
-    audio_layout->addRow(audio_note);
 
     auto *output_naming_group = new QGroupBox("Output Naming", encode_tab_content);
     auto *output_naming_layout = new QFormLayout(output_naming_group);
@@ -2023,11 +2021,8 @@ QLabel#PreviewTimeBadge {
     connect(settings_button_, &QToolButton::clicked, this, &MainWindow::show_settings_dialog);
     connect(info_button_, &QToolButton::clicked, this, &MainWindow::show_info_dialog);
     connect(parallel_button_, &QToolButton::clicked, this, &MainWindow::show_parallel_settings_dialog);
-    connect(profile_apply_button_, &QPushButton::clicked, this, &MainWindow::apply_selected_profile);
-    connect(profile_save_button_, &QPushButton::clicked, this, &MainWindow::save_current_settings_as_profile);
-    connect(profile_update_button_, &QPushButton::clicked, this, &MainWindow::update_selected_profile);
-    connect(profile_rename_button_, &QPushButton::clicked, this, &MainWindow::rename_selected_profile);
-    connect(profile_delete_button_, &QPushButton::clicked, this, &MainWindow::delete_selected_profile);
+    connect(profile_combo_, qOverload<int>(&QComboBox::activated), this, &MainWindow::handle_profile_combo_activated);
+    connect(profile_combo_, &QComboBox::customContextMenuRequested, this, &MainWindow::show_profile_context_menu);
     connect(start_button_, &QToolButton::clicked, this, &MainWindow::start_encode_queue);
     connect(stop_button_, &QToolButton::clicked, this, &MainWindow::stop_encode_queue);
     connect(same_as_input_check_, &QCheckBox::toggled, this, &MainWindow::handle_same_as_input_toggled);
@@ -2149,6 +2144,8 @@ QString MainWindow::window_structure_summary() const {
         "- Queue row: batch queue table plus selected-job details summary\n"
         "- Output strip: output path, auto-name action, and Same as input toggle\n"
         "- Left tabs: Main, Encode, Special, and global Logs, with automatic subtitle selection under Main and custom output naming under Encode\n"
+        "- Encode tab: compact Profiles and Resolution row above side-by-side Video and Audio groups\n"
+        "- Encode tab Video group: Codec, CRF, and encoder speed Preset; Audio group: Format, Quality, and Track\n"
         "- Right tabs: transport-controlled Preview with trim timeline plus selected-task log"
     );
 }
@@ -3032,13 +3029,66 @@ void MainWindow::refresh_profile_combo() {
 
     const QSignalBlocker blocker(profile_combo_);
     profile_combo_->clear();
-    for (const auto &profile : app_settings_.encoding_profiles) {
-        profile_combo_->addItem(profile.name);
+
+    const auto current_resize_settings = [this]() {
+        const int resize_height = resize_preset_combo_ == nullptr ? 0 : resize_preset_combo_->currentData().toInt();
+        return resize_height > 0
+            ? utsure::core::job::EncodeResizeSettings{
+                .mode = utsure::core::job::EncodeResizeMode::target_height,
+                .target_height = resize_height,
+                .allow_upscale = false
+            }
+            : utsure::core::job::EncodeResizeSettings{};
+    };
+    const auto resize_equals = [](const utsure::core::job::EncodeResizeSettings &left,
+                                  const utsure::core::job::EncodeResizeSettings &right) {
+        return left.mode == right.mode &&
+            left.target_height == right.target_height &&
+            left.allow_upscale == right.allow_upscale;
+    };
+
+    const AppSettings::LastUsedEncodeChoices current_choices{
+        .codec = video_codec_combo_ == nullptr
+            ? app_settings_.last_used.codec
+            : static_cast<utsure::core::media::OutputVideoCodec>(video_codec_combo_->currentData().toInt()),
+        .preset = preset_combo_ == nullptr ? app_settings_.last_used.preset : preset_combo_->currentText().trimmed(),
+        .crf = crf_spin_box_ == nullptr ? app_settings_.last_used.crf : crf_spin_box_->value(),
+        .audio_mode = audio_format_combo_ == nullptr
+            ? app_settings_.last_used.audio_mode
+            : static_cast<utsure::core::media::AudioOutputMode>(audio_format_combo_->currentData().toInt()),
+        .audio_bitrate_kbps = audio_quality_combo_ == nullptr
+            ? app_settings_.last_used.audio_bitrate_kbps
+            : audio_quality_combo_->currentData().toInt()
+    };
+    const auto resize = current_resize_settings();
+
+    int matching_profile_index = -1;
+    for (int index = 0; index < static_cast<int>(app_settings_.encoding_profiles.size()); ++index) {
+        const auto &profile = app_settings_.encoding_profiles[static_cast<std::size_t>(index)];
+        profile_combo_->addItem(profile.name, index);
+        if (matching_profile_index < 0 &&
+            profile.encode.codec == current_choices.codec &&
+            profile.encode.preset == current_choices.preset &&
+            profile.encode.crf == current_choices.crf &&
+            profile.encode.audio_mode == current_choices.audio_mode &&
+            profile.encode.audio_bitrate_kbps == current_choices.audio_bitrate_kbps &&
+            resize_equals(profile.resize, resize)) {
+            matching_profile_index = index;
+        }
     }
-    const int last_used_index = profile_combo_->findText(app_settings_.last_used_profile, Qt::MatchFixedString);
-    if (last_used_index >= 0) {
-        profile_combo_->setCurrentIndex(last_used_index);
+
+    if (matching_profile_index >= 0) {
+        const int combo_index = profile_combo_->findData(matching_profile_index);
+        if (combo_index >= 0) {
+            profile_combo_->setCurrentIndex(combo_index);
+        }
+        return;
     }
+
+    profile_combo_->insertItem(0, "Custom", kProfileCustomData);
+    profile_combo_->insertSeparator(1);
+    profile_combo_->addItem("Save current settings as profile...", kProfileSaveCurrentData);
+    profile_combo_->setCurrentIndex(0);
 }
 
 void MainWindow::apply_selected_profile() {
@@ -3046,26 +3096,20 @@ void MainWindow::apply_selected_profile() {
         return;
     }
 
-    const QString profile_name = profile_combo_->currentText().trimmed();
-    const auto profile = std::find_if(
-        app_settings_.encoding_profiles.begin(),
-        app_settings_.encoding_profiles.end(),
-        [&](const AppSettings::EncodingProfile &candidate) {
-            return candidate.name == profile_name;
-        }
-    );
-    if (profile == app_settings_.encoding_profiles.end()) {
+    const int profile_index = profile_combo_->currentData().toInt();
+    if (profile_index < 0 || profile_index >= static_cast<int>(app_settings_.encoding_profiles.size())) {
         return;
     }
 
+    const auto &profile = app_settings_.encoding_profiles[static_cast<std::size_t>(profile_index)];
     auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
-    job.video_codec = profile->encode.codec;
-    job.video_preset = profile->encode.preset;
-    job.video_crf = profile->encode.crf;
-    job.audio_mode = profile->encode.audio_mode;
-    job.audio_bitrate_kbps = profile->encode.audio_bitrate_kbps;
-    job.resize = profile->resize;
-    app_settings_.last_used_profile = profile->name;
+    job.video_codec = profile.encode.codec;
+    job.video_preset = profile.encode.preset;
+    job.video_crf = profile.encode.crf;
+    job.audio_mode = profile.encode.audio_mode;
+    job.audio_bitrate_kbps = profile.encode.audio_bitrate_kbps;
+    job.resize = profile.resize;
+    app_settings_.last_used_profile = profile.name;
     persist_last_used_encode_choices_from_job(job);
 
     QString save_error;
@@ -3078,6 +3122,55 @@ void MainWindow::apply_selected_profile() {
         apply_generated_output_path(selected_job_index_, false);
     }
     refresh_all_views();
+}
+
+void MainWindow::handle_profile_combo_activated(const int index) {
+    if (profile_combo_ == nullptr || index < 0 || index >= profile_combo_->count()) {
+        return;
+    }
+
+    const QVariant profile_item_data = profile_combo_->itemData(index);
+    if (!profile_item_data.isValid()) {
+        refresh_profile_combo();
+        return;
+    }
+
+    const int profile_data = profile_item_data.toInt();
+    if (profile_data == kProfileSaveCurrentData) {
+        save_current_settings_as_profile();
+        refresh_profile_combo();
+        return;
+    }
+    if (profile_data >= 0) {
+        profile_combo_->setCurrentIndex(index);
+        apply_selected_profile();
+        return;
+    }
+    refresh_profile_combo();
+}
+
+void MainWindow::show_profile_context_menu(const QPoint &position) {
+    if (profile_combo_ == nullptr) {
+        return;
+    }
+
+    const int profile_index = profile_combo_->currentData().toInt();
+    if (profile_index < 0 || profile_index >= static_cast<int>(app_settings_.encoding_profiles.size())) {
+        return;
+    }
+
+    QMenu menu(this);
+    auto *update_action = menu.addAction("Update");
+    auto *rename_action = menu.addAction("Rename");
+    auto *remove_action = menu.addAction("Remove");
+    const QAction *selected_action = menu.exec(profile_combo_->mapToGlobal(position));
+    if (selected_action == update_action) {
+        update_selected_profile();
+    } else if (selected_action == rename_action) {
+        rename_selected_profile();
+    } else if (selected_action == remove_action) {
+        delete_selected_profile();
+    }
 }
 
 void MainWindow::save_current_settings_as_profile() {
@@ -3132,18 +3225,12 @@ void MainWindow::update_selected_profile() {
         return;
     }
 
-    const QString name = profile_combo_->currentText().trimmed();
-    auto profile = std::find_if(
-        app_settings_.encoding_profiles.begin(),
-        app_settings_.encoding_profiles.end(),
-        [&](const AppSettings::EncodingProfile &candidate) {
-            return candidate.name == name;
-        }
-    );
-    if (profile == app_settings_.encoding_profiles.end()) {
+    const int profile_index = profile_combo_->currentData().toInt();
+    if (profile_index < 0 || profile_index >= static_cast<int>(app_settings_.encoding_profiles.size())) {
         return;
     }
 
+    auto profile = app_settings_.encoding_profiles.begin() + profile_index;
     sync_selected_job_from_editor();
     const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
     profile->encode = AppSettings::LastUsedEncodeChoices{
@@ -3159,6 +3246,7 @@ void MainWindow::update_selected_profile() {
     if (!app_settings_.save(app_settings_path_, &save_error)) {
         persist_app_settings_warning("update profile", save_error);
     }
+    refresh_profile_combo();
 }
 
 void MainWindow::rename_selected_profile() {
@@ -3166,18 +3254,13 @@ void MainWindow::rename_selected_profile() {
         return;
     }
 
-    const QString old_name = profile_combo_->currentText().trimmed();
-    auto profile = std::find_if(
-        app_settings_.encoding_profiles.begin(),
-        app_settings_.encoding_profiles.end(),
-        [&](const AppSettings::EncodingProfile &candidate) {
-            return candidate.name == old_name;
-        }
-    );
-    if (profile == app_settings_.encoding_profiles.end()) {
+    const int profile_index = profile_combo_->currentData().toInt();
+    if (profile_index < 0 || profile_index >= static_cast<int>(app_settings_.encoding_profiles.size())) {
         return;
     }
 
+    auto profile = app_settings_.encoding_profiles.begin() + profile_index;
+    const QString old_name = profile->name;
     bool accepted = false;
     const QString new_name = QInputDialog::getText(
         this,
@@ -3207,17 +3290,12 @@ void MainWindow::delete_selected_profile() {
         return;
     }
 
-    const QString name = profile_combo_->currentText().trimmed();
-    app_settings_.encoding_profiles.erase(
-        std::remove_if(
-            app_settings_.encoding_profiles.begin(),
-            app_settings_.encoding_profiles.end(),
-            [&](const AppSettings::EncodingProfile &profile) {
-                return profile.name == name;
-            }
-        ),
-        app_settings_.encoding_profiles.end()
-    );
+    const int profile_index = profile_combo_->currentData().toInt();
+    if (profile_index < 0 || profile_index >= static_cast<int>(app_settings_.encoding_profiles.size())) {
+        return;
+    }
+
+    app_settings_.encoding_profiles.erase(app_settings_.encoding_profiles.begin() + profile_index);
     if (app_settings_.encoding_profiles.empty()) {
         app_settings_.encoding_profiles = AppSettings::default_encoding_profiles();
     }
@@ -5030,6 +5108,7 @@ void MainWindow::apply_automatic_thumbnail_selection(
 
 void MainWindow::refresh_all_views() {
     refresh_queue_table();
+    refresh_profile_combo();
     refresh_editor_state();
     refresh_selected_job_details();
     refresh_selected_job_preview();
@@ -5122,11 +5201,6 @@ void MainWindow::refresh_editor_state() {
     crf_spin_box_->setEnabled(editable);
     resize_preset_combo_->setEnabled(editable);
     profile_combo_->setEnabled(editable && !app_settings_.encoding_profiles.empty());
-    profile_apply_button_->setEnabled(editable && profile_combo_->count() > 0);
-    profile_save_button_->setEnabled(editable);
-    profile_update_button_->setEnabled(editable && profile_combo_->count() > 0);
-    profile_rename_button_->setEnabled(editable && profile_combo_->count() > 0);
-    profile_delete_button_->setEnabled(editable && profile_combo_->count() > 1);
     audio_format_combo_->setEnabled(editable);
     audio_quality_combo_->setEnabled(audio_quality_enabled);
     audio_track_combo_->setEnabled(editable);

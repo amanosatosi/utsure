@@ -1245,6 +1245,21 @@ Next steps:
   * Add a scheduled/manual serialized-subtitle parallel run with `UTSURE_SERIALIZE_SUBTITLE_SETUP=1` if CI time allows.
   * Continue refining actual worker-count reporting if the streaming pipeline exposes explicit worker-count overrides.
 
+### M35 Encode tab profile/resolution layout cleanup
+
+Status: Completed
+
+Scope:
+  * Make the Encode tab more compact by replacing the large Encoding Profile group with side-by-side Profiles and Resolution sections.
+  * Move resolution out of the Video group, keep Video and Audio side by side, and remove the noisy audio auto-selection note.
+  * Keep encode pipeline, queue scheduling, parallel scheduling, subtitle rendering, and actual encoder behavior unchanged.
+
+Implemented:
+  * Preserve user profiles while ensuring compact built-in defaults exist.
+  * Convert always-visible profile buttons into combo selection and context-menu actions.
+  * Add focused app-settings tests for required profile defaults and same-name profile preservation.
+  * Update the app structure smoke summary to describe the compact Profiles/Resolution row and revised Video/Audio groups.
+
 ## Immediate next milestone
 
-Re-run GitHub Actions for M27/M28/M29/M30/M31/M32/M33 validation, then continue M34 parallel stress validation.
+Re-run GitHub Actions for M27/M28/M29/M30/M31/M32/M33/M34/M35 validation.
