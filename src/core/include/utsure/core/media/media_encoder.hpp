@@ -26,6 +26,7 @@ struct TranscodeThreadingSettings final {
     std::optional<int> decoder_thread_count_override{};
     std::optional<int> encoder_thread_count_override{};
     std::optional<std::uint32_t> logical_core_count_override{};
+    bool allow_ffmpeg_auto_threads{false};
 };
 
 struct VideoEncodeSettings final {

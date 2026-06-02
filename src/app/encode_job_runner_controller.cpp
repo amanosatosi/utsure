@@ -31,7 +31,6 @@ EncodeJobRunnerController::EncodeJobRunnerController(QObject *parent) : QObject(
     worker_ = new EncodeJobRunnerWorker();
     worker_->moveToThread(&worker_thread_);
 
-    connect(&worker_thread_, &QThread::finished, worker_, &QObject::deleteLater);
     connect(worker_, &EncodeJobRunnerWorker::progress_changed, this, &EncodeJobRunnerController::progress_changed);
     connect(worker_, &EncodeJobRunnerWorker::log_message, this, &EncodeJobRunnerController::log_message);
     connect(
@@ -45,22 +44,51 @@ EncodeJobRunnerController::EncodeJobRunnerController(QObject *parent) : QObject(
 }
 
 EncodeJobRunnerController::~EncodeJobRunnerController() {
+    shutting_down_ = true;
+    if (worker_ != nullptr) {
+        disconnect(worker_, nullptr, this, nullptr);
+        worker_->request_cancel();
+    }
+
+    state_ = RunnerState::finishing;
+    if (worker_ != nullptr && worker_thread_.isRunning()) {
+        QMetaObject::invokeMethod(
+            worker_,
+            []() {},
+            Qt::BlockingQueuedConnection
+        );
+        QThread *controller_thread = QThread::currentThread();
+        QMetaObject::invokeMethod(
+            worker_,
+            [worker = worker_, controller_thread]() {
+                worker->moveToThread(controller_thread);
+            },
+            Qt::BlockingQueuedConnection
+        );
+    }
     worker_thread_.quit();
     worker_thread_.wait();
+    if (worker_ != nullptr) {
+        delete worker_;
+        worker_ = nullptr;
+    }
+    state_ = RunnerState::finished;
 }
 
 bool EncodeJobRunnerController::is_running() const noexcept {
-    return running_;
+    return state_ == RunnerState::running ||
+        state_ == RunnerState::cancel_requested ||
+        state_ == RunnerState::finishing;
 }
 
 void EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &job) {
-    if (running_ || worker_ == nullptr) {
+    if (is_running() || worker_ == nullptr || shutting_down_) {
         return;
     }
 
     worker_->clear_cancel_request();
     worker_thread_.setPriority(map_thread_priority(job.execution.process_priority));
-    running_ = true;
+    state_ = RunnerState::running;
     emit running_changed(true);
     emit progress_changed(utsure::core::job::EncodeJobProgress{
         .stage = utsure::core::job::EncodeJobStage::assembling_timeline,
@@ -84,10 +112,11 @@ void EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &jo
 }
 
 void EncodeJobRunnerController::cancel_job() noexcept {
-    if (!running_ || worker_ == nullptr) {
+    if (!is_running() || worker_ == nullptr || state_ == RunnerState::cancel_requested) {
         return;
     }
 
+    state_ = RunnerState::cancel_requested;
     worker_->request_cancel();
     emit log_message("[warning] Cancel requested for the active encode job.");
 }
@@ -99,8 +128,14 @@ void EncodeJobRunnerController::handle_worker_finished(
     const QString &details_text,
     const QString &output_path
 ) {
-    running_ = false;
+    if (shutting_down_) {
+        state_ = RunnerState::finished;
+        return;
+    }
+
+    state_ = RunnerState::finished;
     worker_thread_.setPriority(QThread::NormalPriority);
     emit running_changed(false);
     emit job_finished(succeeded, canceled, status_text, details_text, output_path);
+    state_ = RunnerState::idle;
 }

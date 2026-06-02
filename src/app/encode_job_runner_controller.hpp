@@ -32,6 +32,14 @@ signals:
     );
 
 private:
+    enum class RunnerState {
+        idle,
+        running,
+        cancel_requested,
+        finishing,
+        finished
+    };
+
     void handle_worker_finished(
         bool succeeded,
         bool canceled,
@@ -42,5 +50,6 @@ private:
 
     QThread worker_thread_{};
     EncodeJobRunnerWorker *worker_{nullptr};
-    bool running_{false};
+    RunnerState state_{RunnerState::idle};
+    bool shutting_down_{false};
 };

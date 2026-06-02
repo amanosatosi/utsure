@@ -1555,9 +1555,22 @@ add_test(
 )
 utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.stress.direct_worker.h264)
 
+add_test(
+    NAME utsure.core.subtitles.burn_in.sequential_stability.h264
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
+        utsure_core_subtitle_burn_in_tests --sequential-stability-h264
+            "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
+            "${UTSURE_SUBTITLE_STRESS_SAMPLE_FILE}"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-sequential-stability-1-h264.mp4"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-sequential-stability-2-h264.mp4"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-sequential-stability-3-h264.mp4"
+)
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.sequential_stability.h264)
+
 utsure_label_tests_matching("^utsure\\.core\\.(output_naming|resize|audio_stream_selection|source_import_paths|batch_parallelism|subtitle_auto_selection|thumbnail_preroll|subtitle_renderer|subtitle_bitmap_compositor|libassmod_subtitle_adapter)" unit smoke)
 utsure_label_tests_matching("^utsure\\.core\\.(media|job\\.encode|job\\.preflight|timeline|subtitles\\.burn_in|subtitles\\.image_assets|subtitles\\.font_recovery)" integration media)
-utsure_label_tests_matching("^utsure\\.core\\.subtitles\\.burn_in\\.(h264|img_asset\\.h264|timeline\\.h264|timeline\\.resize\\.h264|timeline\\.thumbnail_preroll\\.resize\\.h264)$" smoke)
+utsure_label_tests_matching("^utsure\\.core\\.subtitles\\.burn_in\\.(h264|img_asset\\.h264|timeline\\.h264|timeline\\.resize\\.h264|timeline\\.thumbnail_preroll\\.resize\\.h264|sequential_stability\\.h264)$" smoke)
 utsure_label_tests_matching("^utsure\\.core\\.media\\.(inspection|decode|encode)\\." smoke)
 utsure_label_tests_matching("^utsure\\.core\\.job\\.(encode|preflight)\\." smoke)
 utsure_label_tests_matching("^utsure\\.core\\.subtitles\\.burn_in\\.(h265|gradient\\.h264|empty_bitmap_effect\\.h264|schedule\\..*\\.h264)$" slow media regression)

@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QString>
 #include <atomic>
+#include <optional>
 
 class EncodeJobRunnerWorker final
     : public QObject,
@@ -17,6 +18,7 @@ public:
     void run_job(const utsure::core::job::EncodeJob &job);
     void request_cancel() noexcept;
     void clear_cancel_request() noexcept;
+    [[nodiscard]] bool is_active() const noexcept;
 
     void on_progress(const utsure::core::job::EncodeJobProgress &progress) override;
     void on_log(const utsure::core::job::EncodeJobLogMessage &message) override;
@@ -34,6 +36,9 @@ signals:
 
 private:
     [[nodiscard]] bool cancel_requested() const noexcept;
+    [[nodiscard]] QString format_last_progress_context() const;
 
     std::atomic_bool cancel_requested_{false};
+    std::atomic_bool active_{false};
+    std::optional<utsure::core::job::EncodeJobProgress> last_progress_{};
 };

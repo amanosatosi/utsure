@@ -35,10 +35,13 @@ media::streaming::PipelineQueueLimits resolve_pipeline_queue_limits(const Encode
     return queue_limits;
 }
 
-media::streaming::StreamingRuntimeBehavior resolve_runtime_behavior(const EncodeJob &job) {
+media::streaming::StreamingRuntimeBehavior resolve_runtime_behavior(
+    const EncodeJob &job,
+    const media::streaming::PipelineQueueLimits &queue_limits
+) {
     return media::streaming::resolve_streaming_runtime_behavior(
         job.execution.threading,
-        resolve_pipeline_queue_limits(job)
+        queue_limits
     );
 }
 
@@ -487,8 +490,11 @@ std::string format_encode_log_message(const EncodeJob &job) {
         ", and audio mode '" + std::string(media::to_string(job.output.audio.mode)) + "'.";
 }
 
-std::string format_encode_runtime_log_message(const EncodeJob &job) {
-    const auto runtime_behavior = resolve_runtime_behavior(job);
+std::string format_encode_runtime_log_message(
+    const EncodeJob &job,
+    const media::streaming::PipelineQueueLimits &queue_limits
+) {
+    const auto runtime_behavior = resolve_runtime_behavior(job, queue_limits);
     return "Encoding runtime request: CPU mode " +
         std::string(media::to_string(job.execution.threading.cpu_usage_mode)) +
         ", encoder threads " +
@@ -663,10 +669,39 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             "Timeline assembled with " + std::to_string(timeline_plan.segments.size()) + " segment(s)."
         );
 
+        auto effective_job = job;
+        auto queue_limits = working_set_guard::bound_queue_limits(
+            timeline_plan,
+            effective_job.subtitles,
+            normalization_policy,
+            resolve_pipeline_queue_limits(effective_job)
+        );
+        if (const auto original_queue_limits = resolve_pipeline_queue_limits(effective_job);
+            queue_limits.video_frame_queue_depth != original_queue_limits.video_frame_queue_depth) {
+            if (!effective_job.execution.threading.decoder_thread_count_override.has_value()) {
+                effective_job.execution.threading.decoder_thread_count_override = 1;
+            }
+            if (!effective_job.execution.threading.encoder_thread_count_override.has_value()) {
+                effective_job.execution.threading.encoder_thread_count_override = 1;
+            }
+            if (!effective_job.execution.threading.logical_core_count_override.has_value()) {
+                effective_job.execution.threading.logical_core_count_override = 2U;
+            }
+            notify_log(
+                telemetry,
+                EncodeJobLogLevel::warning,
+                "Reduced streaming video queue depth from " +
+                    std::to_string(original_queue_limits.video_frame_queue_depth) + " to " +
+                    std::to_string(queue_limits.video_frame_queue_depth) +
+                    " frame(s) after memory-budget estimation."
+            );
+        }
+
         if (const auto working_set_failure = working_set_guard::check(
                 timeline_plan,
-                job.subtitles,
-                normalization_policy
+                effective_job.subtitles,
+                normalization_policy,
+                queue_limits
             ); working_set_failure.has_value()) {
             return make_error(
                 job,
@@ -705,7 +740,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             notify_log(telemetry, EncodeJobLogLevel::info, format_segment_log_message(segment_plan.kind, segment_plan.source_path));
         }
 
-        if (job.subtitles.has_value()) {
+        if (effective_job.subtitles.has_value()) {
             notify_progress(
                 telemetry,
                 EncodeJobStage::burning_in_subtitles,
@@ -722,7 +757,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             }
         }
 
-        if (job.thumbnail_preroll.has_value() && job.thumbnail_preroll->enabled) {
+        if (effective_job.thumbnail_preroll.has_value() && effective_job.thumbnail_preroll->enabled) {
             notify_progress(
                 telemetry,
                 EncodeJobStage::burning_in_subtitles,
@@ -753,12 +788,12 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
         notify_log(
             telemetry,
             EncodeJobLogLevel::info,
-            format_encode_log_message(job)
+            format_encode_log_message(effective_job)
         );
         notify_log(
             telemetry,
             EncodeJobLogLevel::info,
-            format_encode_runtime_log_message(job)
+            format_encode_runtime_log_message(effective_job, queue_limits)
         );
         notify_progress(
             telemetry,
@@ -769,12 +804,12 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
         const auto streaming_result = media::streaming::StreamingTranscoder::transcode(
             media::streaming::StreamingTranscodeRequest{
                 .timeline_plan = &timeline_plan,
-                .subtitle_settings = &job.subtitles,
-                .thumbnail_preroll_settings = &job.thumbnail_preroll,
-                .media_encode_request = build_media_encode_request(job),
+                .subtitle_settings = &effective_job.subtitles,
+                .thumbnail_preroll_settings = &effective_job.thumbnail_preroll,
+                .media_encode_request = build_media_encode_request(effective_job),
                 .normalization_policy = normalization_policy,
                 .subtitle_renderer = subtitle_renderer.get(),
-                .queue_limits = resolve_pipeline_queue_limits(job),
+                .queue_limits = queue_limits,
                 .progress_callback = [&telemetry](const media::streaming::StreamingEncodeProgress &progress) {
                     notify_encode_progress(telemetry, progress);
                 },
@@ -797,9 +832,9 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
         }
 
         auto completed_summary = *streaming_result.summary;
-        auto completed_job = job;
+        auto completed_job = effective_job;
         std::vector<std::string> completion_warnings{};
-        if (job.output.append_crc32_suffix) {
+        if (effective_job.output.append_crc32_suffix) {
             const Crc32FinalizeResult crc_result = finalize_crc32_suffix(
                 telemetry,
                 completed_summary.encoded_media_summary.output_path

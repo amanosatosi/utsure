@@ -37,15 +37,18 @@ inline int sanitize_thread_override(const std::optional<int> thread_count_overri
 
 inline int resolve_requested_ffmpeg_thread_count_impl(
     const CpuUsageMode mode,
+    const bool allow_ffmpeg_auto_threads,
     const std::uint32_t logical_core_count
 ) noexcept {
     switch (mode) {
     case CpuUsageMode::auto_select:
-        // `0` asks FFmpeg or the encoder backend to pick a default. That keeps Auto mode aligned with
-        // codec-specific heuristics while Conservative/Aggressive remain explicit and predictable.
-        return 0;
+        if (allow_ffmpeg_auto_threads) {
+            return 0;
+        }
+        // Auto is the long-running GUI/batch default, so keep it explicit and bounded.
+        return std::clamp(static_cast<int>(logical_core_count / 2U), 1, 4);
     case CpuUsageMode::conservative:
-        return std::max(1, static_cast<int>(logical_core_count / 2U));
+        return std::clamp(static_cast<int>(logical_core_count / 2U), 1, 3);
     case CpuUsageMode::aggressive:
         return std::max(1, static_cast<int>(logical_core_count > 0U ? (logical_core_count - 1U) : 1U));
     default:
@@ -56,10 +59,13 @@ inline int resolve_requested_ffmpeg_thread_count_impl(
 inline int resolve_requested_ffmpeg_thread_count_impl(
     const CpuUsageMode mode,
     const std::optional<int> thread_count_override,
+    const bool allow_ffmpeg_auto_threads,
     const std::uint32_t logical_core_count
 ) noexcept {
     const int explicit_override = sanitize_thread_override(thread_count_override);
-    return explicit_override > 0 ? explicit_override : resolve_requested_ffmpeg_thread_count_impl(mode, logical_core_count);
+    return explicit_override > 0
+        ? explicit_override
+        : resolve_requested_ffmpeg_thread_count_impl(mode, allow_ffmpeg_auto_threads, logical_core_count);
 }
 
 inline int choose_codec_thread_type(const AVCodec &codec) noexcept {
@@ -86,6 +92,7 @@ inline CodecThreadingSelection choose_decoder_threading(
             : resolve_requested_ffmpeg_thread_count_impl(
                 settings.cpu_usage_mode,
                 std::nullopt,
+                settings.allow_ffmpeg_auto_threads,
                 logical_core_count
             ),
         .thread_type = choose_codec_thread_type(decoder)
@@ -104,6 +111,7 @@ inline CodecThreadingSelection choose_encoder_threading(
             : resolve_requested_ffmpeg_thread_count_impl(
                 settings.cpu_usage_mode,
                 std::nullopt,
+                settings.allow_ffmpeg_auto_threads,
                 logical_core_count
             ),
         .thread_type = choose_codec_thread_type(encoder)
@@ -147,15 +155,7 @@ inline std::size_t choose_video_processing_worker_count(
         return std::clamp<std::size_t>(std::max<std::uint32_t>(2U, available_logical_core_count / 4U), 1U, 4U);
     case CpuUsageMode::auto_select:
     default:
-        if (available_logical_core_count >= 12U) {
-            return 3U;
-        }
-
-        if (available_logical_core_count >= 8U) {
-            return 2U;
-        }
-
-        return 1U;
+        return available_logical_core_count >= 8U ? 2U : 1U;
     }
 }
 

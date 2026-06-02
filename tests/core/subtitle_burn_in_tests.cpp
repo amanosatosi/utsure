@@ -2272,6 +2272,85 @@ int run_stress_burn_in_assertion(
     return 0;
 }
 
+int run_sequential_stability_assertion(
+    const std::filesystem::path &sample_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &first_output_path,
+    const std::filesystem::path &second_output_path,
+    const std::filesystem::path &third_output_path
+) {
+    const std::array<std::filesystem::path, 3> outputs{
+        first_output_path,
+        second_output_path,
+        third_output_path
+    };
+
+    std::int64_t previous_frame_count = -1;
+    for (std::size_t index = 0; index < outputs.size(); ++index) {
+        CollectingObserver observer{};
+        const EncodeJob job{
+            .input = {
+                .main_source_path = sample_path
+            },
+            .subtitles = utsure::core::job::EncodeJobSubtitleSettings{
+                .subtitle_path = subtitle_path,
+                .format_hint = "ass"
+            },
+            .output = {
+                .output_path = outputs[index],
+                .video = {
+                    .codec = OutputVideoCodec::h264,
+                    .preset = "ultrafast",
+                    .crf = 28
+                }
+            },
+            .execution = {
+                .threading = {
+                    .cpu_usage_mode = utsure::core::media::CpuUsageMode::auto_select
+                },
+                .video_frame_queue_depth_override = 12U
+            }
+        };
+
+        const EncodeJobResult result = EncodeJobRunner::run(job, EncodeJobRunOptions{
+            .decode_normalization_policy = {},
+            .observer = &observer
+        });
+        if (!result.succeeded()) {
+            return fail("A sequential subtitle stability encode failed unexpectedly.");
+        }
+
+        const auto &summary = *result.encode_job_summary;
+        if (summary.streaming_runtime.selected_video_decoder_thread_count == 0 ||
+            summary.streaming_runtime.selected_video_encoder_thread_count == 0 ||
+            summary.streaming_runtime.subtitle_processing_worker_count != 1U ||
+            summary.streaming_runtime.video_frame_queue_depth > 12U ||
+            summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
+            return fail("Sequential stability encode did not use the expected bounded runtime.");
+        }
+
+        if (!observer_logs_contain_text(observer, "Segment start: name=main") ||
+            !observer_logs_contain_text(observer, "Streaming frame checkpoint: segment=main") ||
+            !observer_logs_contain_text(observer, "Mux stage end: output finalized")) {
+            return fail("Sequential stability encode did not emit the expected long-run diagnostics.");
+        }
+
+        const MediaDecodeResult output_decode = MediaDecoder::decode(outputs[index]);
+        if (!output_decode.succeeded() || output_decode.decoded_media_source->video_frames.empty()) {
+            return fail("Sequential stability output did not decode after encode.");
+        }
+
+        const auto frame_count = summary.encoded_media_summary.encoded_video_frame_count;
+        if (previous_frame_count >= 0 && frame_count != previous_frame_count) {
+            return fail("Sequential stability encodes produced inconsistent frame counts.");
+        }
+        previous_frame_count = frame_count;
+    }
+
+    std::cout << "sequential_stability.jobs=3\n";
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
@@ -2288,6 +2367,7 @@ int main(int argc, char *argv[]) {
             "--h265 <input> <subtitle> <plain-output> <burned-output>|"
             "--trimmed-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--stress-h264 <input> <subtitle> <plain-output> <burned-output>|"
+            "--sequential-stability-h264 <input> <subtitle> <out1> <out2> <out3>|"
             "--timeline-h264 <intro> <main> <outro> <subtitle> <plain-output> <burned-output>|"
             "--timeline-thumbnail-h264 <intro> <main> <outro> <subtitle> <burned-output>|"
             "--timeline-resize-h264 <intro> <main> <outro> <subtitle> <burned-output>|"
@@ -2397,6 +2477,16 @@ int main(int argc, char *argv[]) {
             std::filesystem::path(argv[3]),
             std::filesystem::path(argv[4]),
             std::filesystem::path(argv[5])
+        );
+    }
+
+    if (mode == "--sequential-stability-h264" && argc == 7) {
+        return run_sequential_stability_assertion(
+            std::filesystem::path(argv[2]),
+            std::filesystem::path(argv[3]),
+            std::filesystem::path(argv[4]),
+            std::filesystem::path(argv[5]),
+            std::filesystem::path(argv[6])
         );
     }
 

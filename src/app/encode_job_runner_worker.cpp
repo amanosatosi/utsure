@@ -82,6 +82,14 @@ void throw_if_canceled(const bool cancel_requested) {
 EncodeJobRunnerWorker::EncodeJobRunnerWorker(QObject *parent) : QObject(parent) {}
 
 void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
+    active_.store(true);
+    last_progress_.reset();
+    struct ActiveGuard final {
+        std::atomic_bool &active;
+        ~ActiveGuard() {
+            active.store(false);
+        }
+    } active_guard{active_};
     try {
         const auto result = utsure::core::job::EncodeJobRunner::run(job, utsure::core::job::EncodeJobRunOptions{
             .decode_normalization_policy = {},
@@ -114,7 +122,8 @@ void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
         const QString details = QString("Main source: %1\nOutput: %2\nProblem: %3")
             .arg(main_source_path)
             .arg(output_path)
-            .arg(to_qstring(exception.what()));
+            .arg(to_qstring(exception.what())) +
+            format_last_progress_context();
         emit job_finished(false, false, problem, details, output_path);
     } catch (...) {
         const auto main_source_path = path_to_qstring(job.input.main_source_path);
@@ -122,7 +131,8 @@ void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
         const QString problem = QString("Encode failed: The encode worker caught an unknown runtime failure.");
         const QString details = QString("Main source: %1\nOutput: %2\nProblem: Unknown non-standard exception.")
             .arg(main_source_path)
-            .arg(output_path);
+            .arg(output_path) +
+            format_last_progress_context();
         emit job_finished(false, false, problem, details, output_path);
     }
 }
@@ -139,8 +149,29 @@ bool EncodeJobRunnerWorker::cancel_requested() const noexcept {
     return cancel_requested_.load();
 }
 
+bool EncodeJobRunnerWorker::is_active() const noexcept {
+    return active_.load();
+}
+
+QString EncodeJobRunnerWorker::format_last_progress_context() const {
+    if (!last_progress_.has_value()) {
+        return {};
+    }
+
+    QString details = QString("\nLast progress: stage=%1")
+        .arg(to_qstring(utsure::core::job::to_string(last_progress_->stage)));
+    if (last_progress_->encoded_video_frames.has_value()) {
+        details += QString(", encoded_frames=%1").arg(QString::number(*last_progress_->encoded_video_frames));
+    }
+    if (last_progress_->encoded_video_duration_us.has_value()) {
+        details += QString(", encoded_duration_us=%1").arg(QString::number(*last_progress_->encoded_video_duration_us));
+    }
+    return details;
+}
+
 void EncodeJobRunnerWorker::on_progress(const utsure::core::job::EncodeJobProgress &progress) {
     throw_if_canceled(cancel_requested());
+    last_progress_ = progress;
     emit progress_changed(progress);
 }
 

@@ -57,8 +57,11 @@ struct PipelineMemoryBudget final {
     std::uint64_t normalized_rgba_frame_bytes{0};
     std::uint64_t subtitle_scratch_bytes{0};
     std::uint64_t encoder_yuv420_frame_bytes{0};
+    std::uint64_t encoder_overhead_bytes{0};
     std::uint64_t normalized_audio_block_bytes{0};
     std::uint64_t audio_encoder_carry_bytes{0};
+    std::uint64_t subtitle_session_cache_bytes{0};
+    std::uint64_t worker_scratch_bytes{0};
     std::uint64_t estimated_peak_bytes{0};
 };
 

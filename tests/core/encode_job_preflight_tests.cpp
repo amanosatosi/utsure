@@ -149,7 +149,8 @@ int run_valid_preview_assertion(
     }
 
     const auto preview_text = format_encode_job_preview(preview);
-    if (!contains_text(preview_text, "Encoding runtime: encoder threads auto (") ||
+    if (!contains_text(preview_text, "Encoding runtime: encoder threads ") ||
+        contains_text(preview_text, "FFmpeg auto threads") ||
         !contains_text(preview_text, "video queue 70 frames") ||
         !contains_text(preview_text, "priority Below Normal")) {
         return fail("The valid preflight preview text did not include the expected runtime details.");
@@ -345,7 +346,9 @@ int run_streaming_memory_budget_assertion(
         return fail("Unexpected preview resolution for the streaming-memory job.");
     }
 
-    if (preview.video_frame_queue_depth != 70 || !contains_text(preview.encoder_threading_summary, "auto (")) {
+    if (preview.video_frame_queue_depth != 70 ||
+        !contains_text(preview.encoder_threading_summary, "auto (") ||
+        contains_text(preview.encoder_threading_summary, "FFmpeg auto threads")) {
         return fail("Unexpected streaming-memory preview runtime summary.");
     }
 

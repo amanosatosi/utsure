@@ -61,5 +61,35 @@ add_test(
 
 set_tests_properties(utsure.app.ui_font PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+qt_add_executable(utsure_app_encode_job_runner_lifecycle_tests
+    encode_job_runner_lifecycle_tests.cpp
+    "${CMAKE_SOURCE_DIR}/src/app/encode_job_runner_controller.cpp"
+    "${CMAKE_SOURCE_DIR}/src/app/encode_job_runner_controller.hpp"
+    "${CMAKE_SOURCE_DIR}/src/app/encode_job_runner_worker.cpp"
+    "${CMAKE_SOURCE_DIR}/src/app/encode_job_runner_worker.hpp"
+    "${CMAKE_SOURCE_DIR}/src/app/encode_job_progress_qt_types.hpp"
+)
+
+target_include_directories(utsure_app_encode_job_runner_lifecycle_tests
+    PRIVATE
+        "${CMAKE_SOURCE_DIR}/src/app"
+)
+
+target_link_libraries(utsure_app_encode_job_runner_lifecycle_tests
+    PRIVATE
+        Qt6::Core
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_app_encode_job_runner_lifecycle_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_app_encode_job_runner_lifecycle_tests)
+
+add_test(
+    NAME utsure.app.encode_job_runner.lifecycle
+    COMMAND utsure_app_encode_job_runner_lifecycle_tests
+)
+
 utsure_label_tests_matching("^utsure\\.app\\.settings\\." unit smoke)
 utsure_label_tests_matching("^utsure\\.app\\.ui_font$" integration smoke)
+utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.lifecycle$" integration smoke)

@@ -110,6 +110,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M24 slice also permits one narrow user-requested preview-navigation follow-up, limited to decoupling manual preview browsing from the selected trim markers so users can keep refining `IN/OUT` after setting them, while preserving trim jump buttons and export trim behavior.
 - The current M24 slice also permits one narrow user-requested preview-control follow-up, limited to reducing preview seek/play startup latency with smaller synchronous preview windows and lighter audio preroll, plus a timestamp-badge jump dialog for timecode and frame entry, without changing encode behavior or broader layout structure.
 - The current M24 slice also permits one narrow user-requested preview-stability follow-up, limited to hardening repeated FFMS2 preview seeks against session-state churn and tightening preview playback A/V start alignment without changing encode behavior or broader desktop layout structure.
+- The current M24 slice now also includes a long-run encode crash-hardening pass, limited to streaming subtitle-path diagnostics, bounded default memory/thread behavior, Qt encode-worker shutdown safety, and cheap sequential stability coverage; explicit speed-change regression coverage remains pending until a core encode speed setting exists.
 - The CMake AddressSanitizer option remains available for future manual or scheduled CLANG64 validation, but the separate subtitle sanitizer CI job has been removed to keep normal CI simpler.
 - The current M24 CI slice now also includes bumping the Windows GitHub Actions JavaScript actions to Node 24-compatible releases, with a temporary `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` override during validation.
 - The current M24 CI slice also permits one narrow user-requested cache follow-up, limited to temporarily disabling the FFmpeg GitHub Actions cache in the Windows workflow and leaving an explicit reminder to re-enable it on or after May 1, 2026, without changing unrelated build/test behavior.
@@ -1161,6 +1162,26 @@ Future intermediate recombine plan:
   * Burn main subtitles only into the main intermediate using main-video-relative timestamps and final output dimensions, including `\img` asset registration.
   * Concatenate only verified-compatible intermediates, then produce the final requested codec/container output without duplicating or dropping audio.
   * Keep the current segment-local streaming path until the intermediate path has focused CI coverage for timing, resize, `\img`, audio selection, non-ASCII paths, cleanup, cancellation, and partial-output removal.
+
+### M24 Long-run encode crash hardening
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Add long-run diagnostics to the streaming subtitle burn-in path without changing codec quality defaults.
+  * Bound default GUI/batch memory and thread behavior; keep aggressive/FFmpeg-auto behavior opt-in.
+  * Harden Qt encode-runner cancellation/destruction so app close cannot delete a worker while `run_job` is active.
+  * Add cheap sequential subtitle burn-in stability and app lifecycle coverage for CI.
+
+Completed:
+  * Added segment/frame checkpoints, stage start/end logs, queue depths, codec/resolution/thread/worker summaries, memory-budget logs, and Windows RSS/peak RSS sampling every 300 encoded frames.
+  * Added final streaming failure context with last stage, segment, frame, PTS, output path, codec, resolution, queue depths, FFmpeg thread counts, and worker counts.
+  * Expanded working-set estimates for encoder lookahead/thread overhead, subtitle sessions/font/image caches, and worker scratch, then reduced video queue depth automatically before failing the guard.
+  * Changed default Auto FFmpeg threading from backend auto (`thread_count=0`) to a small explicit cap, with `allow_ffmpeg_auto_threads` available for deliberate opt-in.
+  * Kept subtitle composition serialized by default and worker-local composition behind the existing environment opt-in.
+  * Reworked `EncodeJobRunnerController` to use explicit lifecycle states and to request cancel, wait for worker-thread unwind, then stop/delete the worker during destruction.
+  * Added app runner lifecycle coverage and a three-job sequential subtitle burn-in stability smoke test.
+  * Did not add speed-change test coverage because the current core job model does not expose a speed-change setting.
 
 ### Test-suite tiering and CI cleanup
 

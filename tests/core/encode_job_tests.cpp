@@ -680,7 +680,8 @@ int assert_runtime_visibility(
         return fail("The encode-job report did not include the expected runtime settings.");
     }
 
-    if (!observer_logs_contain_text(observer, "Encoding runtime request: CPU mode auto, encoder threads auto (") ||
+    if (!observer_logs_contain_text(observer, "Encoding runtime request: CPU mode auto, encoder threads ") ||
+        observer_logs_contain_text(observer, "encoder threads FFmpeg auto threads") ||
         !observer_logs_contain_text(observer, "subtitle workers 1") ||
         !observer_logs_contain_text(observer, "video queue 70 frames") ||
         !observer_logs_contain_text(observer, "subtitle bitmap mode direct") ||
@@ -762,8 +763,8 @@ int run_threading_mode_selection_assertion() {
         8U
     );
 
-    if (conservative_count != 4) {
-        return fail("Conservative CPU mode did not resolve to half of the synthetic logical core count.");
+    if (conservative_count != 3) {
+        return fail("Conservative CPU mode did not resolve to the capped conservative thread count.");
     }
 
     if (aggressive_count != 7) {
@@ -774,8 +775,8 @@ int run_threading_mode_selection_assertion() {
         return fail("Aggressive CPU mode did not select more FFmpeg threads than Conservative mode.");
     }
 
-    if (auto_count != 0) {
-        return fail("Auto CPU mode should leave FFmpeg thread count selection to the backend.");
+    if (auto_count != 4) {
+        return fail("Auto CPU mode should use the safer capped FFmpeg thread count by default.");
     }
 
     const auto final_metrics = calculate_final_encode_metrics(
@@ -800,7 +801,7 @@ int run_threading_mode_selection_assertion() {
         return fail("Final encode metrics did not guard against zero elapsed time.");
     }
 
-    std::cout << "threading.auto=0\n";
+    std::cout << "threading.auto=" << auto_count << '\n';
     std::cout << "threading.conservative=" << conservative_count << '\n';
     std::cout << "threading.aggressive=" << aggressive_count << '\n';
     std::cout << "metrics.average_efps=" << *final_metrics.average_efps << '\n';

@@ -50,6 +50,10 @@ target_link_libraries(utsure_encoder_core
         utsure::x265
 )
 
+if(WIN32)
+    target_link_libraries(utsure_encoder_core PRIVATE psapi)
+endif()
+
 target_compile_definitions(utsure_encoder_core
     PRIVATE
         UTSURE_PROJECT_VERSION="${PROJECT_VERSION}"

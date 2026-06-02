@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <algorithm>
 #include <iomanip>
 #include <limits>
 #include <optional>
@@ -21,6 +22,7 @@ struct WorkingSetLimitFailure final {
 };
 
 inline constexpr std::uint64_t kMaxEstimatedPeakBytes = 3ULL * 1024ULL * 1024ULL * 1024ULL;
+inline constexpr std::size_t kMinimumVideoFrameQueueDepth = 8U;
 
 namespace detail {
 
@@ -44,7 +46,8 @@ inline std::string format_bytes(const std::uint64_t bytes) {
 inline std::optional<WorkingSetLimitFailure> check(
     const timeline::TimelinePlan &timeline_plan,
     const std::optional<EncodeJobSubtitleSettings> &subtitle_settings,
-    const media::DecodeNormalizationPolicy &normalization_policy
+    const media::DecodeNormalizationPolicy &normalization_policy,
+    const media::streaming::PipelineQueueLimits &queue_limits = media::streaming::kDefaultPipelineQueueLimits
 ) {
     if (timeline_plan.segments.empty() || timeline_plan.main_segment_index >= timeline_plan.segments.size()) {
         return std::nullopt;
@@ -53,7 +56,7 @@ inline std::optional<WorkingSetLimitFailure> check(
     const auto pipeline_budget = media::streaming::build_memory_budget(
         timeline_plan,
         normalization_policy,
-        media::streaming::kDefaultPipelineQueueLimits,
+        queue_limits,
         subtitle_settings.has_value()
     );
     if (!pipeline_budget.has_value()) {
@@ -77,6 +80,32 @@ inline std::optional<WorkingSetLimitFailure> check(
             "Lower the resolution, reduce the pipeline queue depths, or raise the safety limit "
             "only after verifying that the target system has enough memory headroom."
     };
+}
+
+inline media::streaming::PipelineQueueLimits bound_queue_limits(
+    const timeline::TimelinePlan &timeline_plan,
+    const std::optional<EncodeJobSubtitleSettings> &subtitle_settings,
+    const media::DecodeNormalizationPolicy &normalization_policy,
+    media::streaming::PipelineQueueLimits queue_limits
+) {
+    while (queue_limits.video_frame_queue_depth > kMinimumVideoFrameQueueDepth) {
+        const auto budget = media::streaming::build_memory_budget(
+            timeline_plan,
+            normalization_policy,
+            queue_limits,
+            subtitle_settings.has_value()
+        );
+        if (!budget.has_value() || budget->estimated_peak_bytes <= kMaxEstimatedPeakBytes) {
+            break;
+        }
+
+        queue_limits.video_frame_queue_depth = std::max(
+            kMinimumVideoFrameQueueDepth,
+            queue_limits.video_frame_queue_depth / 2U
+        );
+    }
+
+    return queue_limits;
 }
 
 }  // namespace utsure::core::job::working_set_guard
