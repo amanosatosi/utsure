@@ -155,9 +155,13 @@ bool EncodeJobRunnerController::is_running() const noexcept {
         state_ == RunnerState::finishing;
 }
 
-std::size_t EncodeJobRunnerController::quarantined_worker_count_for_tests() noexcept {
+std::size_t EncodeJobRunnerController::quarantined_worker_count() noexcept {
     const std::lock_guard lock(quarantined_encode_workers_mutex());
     return quarantined_encode_workers().size();
+}
+
+std::size_t EncodeJobRunnerController::quarantined_worker_count_for_tests() noexcept {
+    return quarantined_worker_count();
 }
 
 bool EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &job) {

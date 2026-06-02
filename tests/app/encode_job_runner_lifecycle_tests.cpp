@@ -1,6 +1,7 @@
 #include "encode_job_runner_controller.hpp"
 #include "encode_job_runner_worker.hpp"
 
+#include "utsure/core/job/batch_parallelism.hpp"
 #include "utsure/core/job/encode_job.hpp"
 
 #include <QCoreApplication>
@@ -12,12 +13,19 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <psapi.h>
+#endif
 
 namespace {
 
@@ -30,7 +38,55 @@ using utsure::core::job::EncodeJobResult;
 using utsure::core::job::EncodeJobRunOptions;
 using utsure::core::job::EncodeJobSummary;
 using utsure::core::job::EncodeJobStage;
+using utsure::core::job::ParallelBatchSettings;
+using utsure::core::job::ParallelBatchSummary;
 using utsure::core::media::OutputVideoCodec;
+
+struct ProcessMemorySnapshot final {
+    std::uint64_t rss_bytes{0};
+    std::uint64_t peak_rss_bytes{0};
+};
+
+std::optional<ProcessMemorySnapshot> sample_process_memory() noexcept {
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS counters{};
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)) == 0) {
+        return std::nullopt;
+    }
+    return ProcessMemorySnapshot{
+        .rss_bytes = static_cast<std::uint64_t>(counters.WorkingSetSize),
+        .peak_rss_bytes = static_cast<std::uint64_t>(counters.PeakWorkingSetSize)
+    };
+#else
+    return std::nullopt;
+#endif
+}
+
+void log_parallel_resource_context(
+    const char *label,
+    const int active_job_count,
+    const int runner_slot_index,
+    const int job_index,
+    const ParallelBatchSummary &summary
+) {
+    std::cout << label
+              << ".active_jobs=" << active_job_count
+              << " runner_slot=" << runner_slot_index
+              << " job_index=" << job_index
+              << " planned_decoder_threads=" << summary.decoder_threads_per_job
+              << " planned_encoder_threads=" << summary.encoder_threads_per_job
+              << " estimated_video_workers=" << summary.video_workers_per_job
+              << " estimated_subtitle_workers=" << summary.subtitle_workers_per_job
+              << " estimated_total_threads=" << summary.estimated_total_threads
+              << " overcommit=" << (summary.estimated_threads_exceed_usable_cores ? 1 : 0);
+    if (const auto memory = sample_process_memory(); memory.has_value()) {
+        std::cout << " current_rss=" << memory->rss_bytes
+                  << " peak_rss=" << memory->peak_rss_bytes;
+    } else {
+        std::cout << " current_rss=unavailable peak_rss=unavailable";
+    }
+    std::cout << '\n';
+}
 
 int fail(const char *message) {
     std::cerr << message << '\n';
@@ -147,18 +203,15 @@ EncodeJobRunnerWorker *make_queue_worker(
     );
 }
 
-EncodeJob make_real_subtitle_job(
+EncodeJob make_real_encode_job(
     const std::filesystem::path &input_path,
     const std::filesystem::path &subtitle_path,
-    const std::filesystem::path &output_path
+    const std::filesystem::path &output_path,
+    const bool burn_subtitles
 ) {
-    return EncodeJob{
+    EncodeJob job{
         .input = {
             .main_source_path = input_path
-        },
-        .subtitles = utsure::core::job::EncodeJobSubtitleSettings{
-            .subtitle_path = subtitle_path,
-            .format_hint = "ass"
         },
         .output = {
             .output_path = output_path,
@@ -177,6 +230,21 @@ EncodeJob make_real_subtitle_job(
             .video_frame_queue_depth_override = 4U
         }
     };
+    if (burn_subtitles) {
+        job.subtitles = utsure::core::job::EncodeJobSubtitleSettings{
+            .subtitle_path = subtitle_path,
+            .format_hint = "ass"
+        };
+    }
+    return job;
+}
+
+EncodeJob make_real_subtitle_job(
+    const std::filesystem::path &input_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &output_path
+) {
+    return make_real_encode_job(input_path, subtitle_path, output_path, true);
 }
 
 int run_cancel_while_active_assertion() {
@@ -640,6 +708,179 @@ int run_parallel_controller_smoke_assertion() {
     return 0;
 }
 
+int run_real_parallel_pair_assertion(
+    const char *label,
+    const std::filesystem::path &input_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &first_output_path,
+    const std::filesystem::path &second_output_path,
+    const bool burn_subtitles,
+    const bool cancel_first_job
+) {
+    constexpr std::uint64_t kAllowedCurrentRssGrowthBytes = 512ULL * 1024ULL * 1024ULL;
+    const auto initial_memory = sample_process_memory();
+    const auto initial_quarantine_count = EncodeJobRunnerController::quarantined_worker_count_for_tests();
+    const auto resource_summary = utsure::core::job::BatchParallelism::summarize(
+        ParallelBatchSettings{
+            .enabled = true,
+            .requested_job_count = 2
+        },
+        4U
+    );
+
+    bool first_streaming = false;
+    bool second_streaming = false;
+    bool first_finished = false;
+    bool second_finished = false;
+    bool first_succeeded = false;
+    bool second_succeeded = false;
+    bool first_canceled = false;
+    bool second_canceled = false;
+
+    EncodeJobRunnerController first_controller;
+    EncodeJobRunnerController second_controller;
+    QObject::connect(
+        &first_controller,
+        &EncodeJobRunnerController::progress_changed,
+        &first_controller,
+        [&first_streaming](const EncodeJobProgress &progress) {
+            if (progress.stage == EncodeJobStage::encoding_output) {
+                first_streaming = true;
+            }
+        }
+    );
+    QObject::connect(
+        &second_controller,
+        &EncodeJobRunnerController::progress_changed,
+        &second_controller,
+        [&second_streaming](const EncodeJobProgress &progress) {
+            if (progress.stage == EncodeJobStage::encoding_output) {
+                second_streaming = true;
+            }
+        }
+    );
+    QObject::connect(
+        &first_controller,
+        &EncodeJobRunnerController::job_finished,
+        &first_controller,
+        [&](const bool succeeded, const bool canceled, const QString &, const QString &, const QString &) {
+            first_finished = true;
+            first_succeeded = succeeded;
+            first_canceled = canceled;
+        }
+    );
+    QObject::connect(
+        &second_controller,
+        &EncodeJobRunnerController::job_finished,
+        &second_controller,
+        [&](const bool succeeded, const bool canceled, const QString &, const QString &, const QString &) {
+            second_finished = true;
+            second_succeeded = succeeded;
+            second_canceled = canceled;
+        }
+    );
+
+    log_parallel_resource_context(label, 2, 0, 0, resource_summary);
+    log_parallel_resource_context(label, 2, 1, 1, resource_summary);
+    if (!first_controller.start_job(make_real_encode_job(input_path, subtitle_path, first_output_path, burn_subtitles)) ||
+        !second_controller.start_job(make_real_encode_job(input_path, subtitle_path, second_output_path, burn_subtitles))) {
+        return fail("Real parallel smoke could not start both encode jobs.");
+    }
+
+    if (!wait_until([&]() {
+            return (first_streaming || first_finished) && (second_streaming || second_finished);
+        }, 15000)) {
+        return fail("Real parallel smoke did not observe both jobs entering active encode work.");
+    }
+
+    if (cancel_first_job) {
+        if (first_finished) {
+            return fail("Real parallel cancel smoke finished the first job before cancellation could be exercised.");
+        }
+        first_controller.cancel_job();
+    }
+
+    if (!wait_until([&]() { return first_finished && second_finished; }, 30000)) {
+        return fail("Real parallel smoke did not finish before timeout.");
+    }
+
+    if (cancel_first_job) {
+        if (!first_canceled || !second_succeeded || second_canceled) {
+            return fail("Real parallel cancel smoke did not preserve cancel-one/success-other outcomes.");
+        }
+    } else if (!first_succeeded || !second_succeeded || first_canceled || second_canceled) {
+        return fail("Real parallel smoke did not complete both jobs successfully.");
+    }
+
+    log_parallel_resource_context(label, 0, 0, 0, resource_summary);
+    if (const auto final_memory = sample_process_memory(); initial_memory.has_value() && final_memory.has_value()) {
+        std::cout << label
+                  << ".current_rss_initial=" << initial_memory->rss_bytes
+                  << " current_rss_final=" << final_memory->rss_bytes
+                  << " peak_rss_final=" << final_memory->peak_rss_bytes << '\n';
+        if (final_memory->rss_bytes > initial_memory->rss_bytes + kAllowedCurrentRssGrowthBytes) {
+            return fail("Real parallel smoke current RSS grew beyond the allowed diagnostic tolerance.");
+        }
+    }
+
+    if (EncodeJobRunnerController::quarantined_worker_count_for_tests() != initial_quarantine_count) {
+        return fail("Real parallel smoke used the encode-worker quarantine fallback.");
+    }
+
+    std::cout << label << "=ok\n";
+    return 0;
+}
+
+int run_real_parallel_smoke_assertions(
+    const std::filesystem::path &input_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &no_subtitle_first_output_path,
+    const std::filesystem::path &no_subtitle_second_output_path,
+    const std::filesystem::path &subtitle_first_output_path,
+    const std::filesystem::path &subtitle_second_output_path,
+    const std::filesystem::path &cancel_first_output_path,
+    const std::filesystem::path &cancel_second_output_path
+) {
+    std::cout << "parallel_debug_matrix=no_subtitles,subtitles_normal,subtitles_serialized_with_UTSURE_SERIALIZE_SUBTITLE_SETUP=1\n";
+    if (run_real_parallel_pair_assertion(
+            "runner_lifecycle.real_parallel_no_subtitle",
+            input_path,
+            subtitle_path,
+            no_subtitle_first_output_path,
+            no_subtitle_second_output_path,
+            false,
+            false
+        ) != 0) {
+        return 1;
+    }
+
+    if (run_real_parallel_pair_assertion(
+            "runner_lifecycle.real_parallel_subtitle",
+            input_path,
+            subtitle_path,
+            subtitle_first_output_path,
+            subtitle_second_output_path,
+            true,
+            false
+        ) != 0) {
+        return 1;
+    }
+
+    if (run_real_parallel_pair_assertion(
+            "runner_lifecycle.real_parallel_cancel_one",
+            input_path,
+            subtitle_path,
+            cancel_first_output_path,
+            cancel_second_output_path,
+            true,
+            true
+        ) != 0) {
+        return 1;
+    }
+
+    return 0;
+}
+
 int run_real_cancel_and_destroy_assertion(
     const std::filesystem::path &input_path,
     const std::filesystem::path &subtitle_path,
@@ -752,6 +993,19 @@ int main(int argc, char **argv) {
 
     if (argc == 6 && std::string_view(argv[1]) == "--real-cancel-destroy") {
         return run_real_cancel_and_destroy_assertion(argv[2], argv[3], argv[4], argv[5]);
+    }
+
+    if (argc == 10 && std::string_view(argv[1]) == "--real-parallel-smokes") {
+        return run_real_parallel_smoke_assertions(
+            argv[2],
+            argv[3],
+            argv[4],
+            argv[5],
+            argv[6],
+            argv[7],
+            argv[8],
+            argv[9]
+        );
     }
 
     return 0;

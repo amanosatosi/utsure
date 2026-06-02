@@ -87,7 +87,7 @@ if(WIN32)
             OBJECT_DEPENDS "${utsure_windows_icon_ico}"
     )
 
-    target_link_libraries(utsure_encoder_app PRIVATE dwmapi)
+    target_link_libraries(utsure_encoder_app PRIVATE dwmapi psapi)
     utsure_enable_warnings(utsure_svg_to_ico)
 endif()
 

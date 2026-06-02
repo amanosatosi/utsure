@@ -79,7 +79,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <iterator>
+#include <optional>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -90,6 +92,7 @@
 #endif
 #include <windows.h>
 #include <dwmapi.h>
+#include <psapi.h>
 
 #ifndef DWMWA_BORDER_COLOR
 #define DWMWA_BORDER_COLOR 34
@@ -113,6 +116,26 @@ struct PathFieldWidgets final {
 };
 
 Q_LOGGING_CATEGORY(previewPlaybackLog, "utsure.preview.playback")
+
+struct ProcessMemorySnapshot final {
+    std::uint64_t rss_bytes{0};
+    std::uint64_t peak_rss_bytes{0};
+};
+
+std::optional<ProcessMemorySnapshot> sample_process_memory() noexcept {
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS counters{};
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)) == 0) {
+        return std::nullopt;
+    }
+    return ProcessMemorySnapshot{
+        .rss_bytes = static_cast<std::uint64_t>(counters.WorkingSetSize),
+        .peak_rss_bytes = static_cast<std::uint64_t>(counters.PeakWorkingSetSize)
+    };
+#else
+    return std::nullopt;
+#endif
+}
 
 QString to_qstring(std::string_view text) {
     return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
@@ -3293,9 +3316,9 @@ void MainWindow::show_parallel_settings_dialog() {
     form_layout->addRow("Jobs", job_count_combo);
     form_layout->addRow("Usable threads", usable_threads_value);
     form_layout->addRow("Thread budget/job", threads_per_job_value);
-    form_layout->addRow("Decoder threads/job", decoder_threads_value);
-    form_layout->addRow("Encoder threads/job", encoder_threads_value);
-    form_layout->addRow("Workers/job", workers_per_job_value);
+    form_layout->addRow("Planned decoder threads/job", decoder_threads_value);
+    form_layout->addRow("Planned encoder threads/job", encoder_threads_value);
+    form_layout->addRow("Estimated workers/job", workers_per_job_value);
     form_layout->addRow("Estimated total threads", total_threads_value);
     form_layout->addRow("Buffer/job", buffer_per_job_value);
     layout->addLayout(form_layout);
@@ -3321,7 +3344,7 @@ void MainWindow::show_parallel_settings_dialog() {
     parallel_batch_settings_.requested_job_count = std::max(job_count_combo->currentData().toInt(), 1);
     refresh_parallel_batch_summary();
     append_session_log(
-        QString("[info] Parallel batch encoding %1. Jobs: %2 | Thread budget/job: %3 | Decoder/job: %4 | Encoder/job: %5 | Video workers/job: %6 | Subtitle workers/job: %7 | Estimated total threads: %8%9 | Buffer/job: %10 frames.")
+        QString("[info] Parallel batch encoding %1. Jobs: %2 | Thread budget/job: %3 | Planned decoder/job: %4 | Planned encoder/job: %5 | Estimated video workers/job: %6 | Estimated subtitle workers/job: %7 | Estimated total threads: %8%9 | Buffer/job: %10 frames.")
             .arg(parallel_batch_summary_.enabled ? "enabled" : "disabled")
             .arg(parallel_batch_summary_.selected_job_count)
             .arg(parallel_batch_summary_.threads_per_job)
@@ -5521,11 +5544,17 @@ void MainWindow::handle_preflighted_queue_jobs(std::vector<MainWindow::Preflight
         return;
     }
 
-    queue_quarantine_baseline_ = EncodeJobRunnerController::quarantined_worker_count_for_tests();
+    queue_quarantine_baseline_ = EncodeJobRunnerController::quarantined_worker_count();
     queue_run_active_ = true;
     ensure_runner_slot_count(configured_parallel_job_count());
+    QString memory_suffix = " | RSS unavailable | Peak RSS unavailable";
+    if (const auto memory = sample_process_memory(); memory.has_value()) {
+        memory_suffix = QString(" | Current RSS: %1 bytes | Peak RSS: %2 bytes")
+            .arg(static_cast<qulonglong>(memory->rss_bytes))
+            .arg(static_cast<qulonglong>(memory->peak_rss_bytes));
+    }
     append_session_log(
-        QString("[info] Starting queue with %1 job(s). Parallel %2 | Active jobs: %3 | Usable cores: %4 | Thread budget/job: %5 | Decoder/job: %6 | Encoder/job: %7 | Video workers/job: %8 | Subtitle workers/job: %9 | Estimated total threads: %10%11 | Buffer/job: %12 frames.")
+        QString("[info] Starting queue with %1 job(s). Parallel %2 | Active jobs: %3 | Usable cores: %4 | Thread budget/job: %5 | Planned decoder/job: %6 | Planned encoder/job: %7 | Estimated video workers/job: %8 | Estimated subtitle workers/job: %9 | Estimated total threads: %10%11 | Buffer/job: %12 frames%13")
             .arg(planned_queue_jobs_.size())
             .arg(parallel_batch_summary_.enabled ? "On" : "Off")
             .arg(parallel_batch_summary_.selected_job_count)
@@ -5538,6 +5567,7 @@ void MainWindow::handle_preflighted_queue_jobs(std::vector<MainWindow::Preflight
             .arg(parallel_batch_summary_.estimated_total_threads)
             .arg(parallel_batch_summary_.estimated_threads_exceed_usable_cores ? " (exceeds usable cores)" : "")
             .arg(parallel_batch_summary_.video_frame_queue_depth)
+            .arg(memory_suffix)
     );
     refresh_all_views();
     start_available_queued_jobs();
@@ -5548,7 +5578,7 @@ void MainWindow::start_available_queued_jobs() {
         return;
     }
 
-    const std::size_t quarantine_count = EncodeJobRunnerController::quarantined_worker_count_for_tests();
+    const std::size_t quarantine_count = EncodeJobRunnerController::quarantined_worker_count();
     if (quarantine_count > queue_quarantine_baseline_) {
         stop_requested_ = true;
         append_session_log(
@@ -5590,7 +5620,26 @@ void MainWindow::start_available_queued_jobs() {
             select_job(planned_job.job_index);
         }
 
-        append_job_log(planned_job.job_index, "[info] Starting encode job.");
+        QString slot_memory_suffix = "RSS unavailable | Peak RSS unavailable";
+        if (const auto memory = sample_process_memory(); memory.has_value()) {
+            slot_memory_suffix = QString("Current RSS: %1 bytes | Peak RSS: %2 bytes")
+                .arg(static_cast<qulonglong>(memory->rss_bytes))
+                .arg(static_cast<qulonglong>(memory->peak_rss_bytes));
+        }
+        append_job_log(
+            planned_job.job_index,
+            QString("[info] Starting encode job. Runner slot: %1 | Job index: %2 | Active jobs: %3 | Planned decoder/job: %4 | Planned encoder/job: %5 | Estimated video workers/job: %6 | Estimated subtitle workers/job: %7 | Estimated total threads: %8%9 | %10")
+                .arg(slot_index)
+                .arg(planned_job.job_index)
+                .arg(parallel_batch_summary_.selected_job_count)
+                .arg(parallel_batch_summary_.decoder_threads_per_job)
+                .arg(parallel_batch_summary_.encoder_threads_per_job)
+                .arg(static_cast<qulonglong>(parallel_batch_summary_.video_workers_per_job))
+                .arg(static_cast<qulonglong>(parallel_batch_summary_.subtitle_workers_per_job))
+                .arg(parallel_batch_summary_.estimated_total_threads)
+                .arg(parallel_batch_summary_.estimated_threads_exceed_usable_cores ? " (exceeds usable cores)" : "")
+                .arg(slot_memory_suffix)
+        );
         if (!slot.controller->start_job(planned_job.job)) {
             job.state = UiJobState::failed;
             job.checked = false;
@@ -5648,7 +5697,7 @@ void MainWindow::finish_queue_run() {
     stop_requested_ = false;
     planned_queue_jobs_.clear();
     queue_cursor_ = 0;
-    queue_quarantine_baseline_ = EncodeJobRunnerController::quarantined_worker_count_for_tests();
+    queue_quarantine_baseline_ = EncodeJobRunnerController::quarantined_worker_count();
     for (auto &slot : runner_slots_) {
         slot.active_job_index = -1;
         slot.elapsed_valid = false;

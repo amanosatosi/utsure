@@ -1218,7 +1218,7 @@ Next cleanup steps:
 
 ### M34 Parallel encode mode hardening
 
-Status: Started; first resource/concurrency slice implemented
+Status: Started; real parallel validation slice implemented
 
 Scope:
   * Keep parallel mode available for power users while making its resource accounting honest.
@@ -1235,10 +1235,13 @@ Implemented first step:
   * Added a font recovery concurrency test that verifies identical parallel requests launch one FontCollector process.
   * Added a queue-run quarantine baseline so any worker quarantine during a queue run logs a fatal lifecycle diagnostic and stops further dispatch.
   * Added a CI-cheap fake parallel controller smoke that runs two active controllers concurrently, cancels one job, lets the other finish, and asserts quarantine did not increase.
+  * Added real-media app/controller parallel smokes for two no-subtitle jobs, two subtitle burn-in jobs, and cancel-one/finish-one subtitle jobs using generated media.
+  * Added per-queue and per-runner-slot parallel diagnostics with active job count, job index, planned decoder/encoder threads, estimated worker counts, estimated total threads, overcommit flag, and Windows current/peak RSS where available.
+  * Renamed the production quarantine counter to `quarantined_worker_count()`, keeping the test wrapper for existing assertions.
 
 Next steps:
-  * Add CI-cheap real-media parallel no-subtitle and subtitle burn-in smokes through the app/controller path.
-  * Add global parallel working-set/RSS diagnostics that sum the active job estimates and log per-runner-slot memory context.
+  * Add a scheduled/manual serialized-subtitle parallel run with `UTSURE_SERIALIZE_SUBTITLE_SETUP=1` if CI time allows.
+  * Continue refining actual worker-count reporting if the streaming pipeline exposes explicit worker-count overrides.
 
 ## Immediate next milestone
 

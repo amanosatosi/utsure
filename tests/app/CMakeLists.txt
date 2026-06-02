@@ -71,6 +71,12 @@ set(UTSURE_APP_LIFECYCLE_MAIN_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-lifecycl
 set(UTSURE_APP_LIFECYCLE_SUBTITLE_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-lifecycle-subtitle.ass")
 set(UTSURE_APP_LIFECYCLE_CANCEL_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-lifecycle-cancel-output.mp4")
 set(UTSURE_APP_LIFECYCLE_DESTROY_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-lifecycle-destroy-output.mp4")
+set(UTSURE_APP_PARALLEL_NO_SUBTITLE_FIRST_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-parallel-no-subtitle-a.mp4")
+set(UTSURE_APP_PARALLEL_NO_SUBTITLE_SECOND_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-parallel-no-subtitle-b.mp4")
+set(UTSURE_APP_PARALLEL_SUBTITLE_FIRST_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-parallel-subtitle-a.mp4")
+set(UTSURE_APP_PARALLEL_SUBTITLE_SECOND_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-parallel-subtitle-b.mp4")
+set(UTSURE_APP_PARALLEL_CANCEL_FIRST_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-parallel-cancel-a.mp4")
+set(UTSURE_APP_PARALLEL_CANCEL_SECOND_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-parallel-cancel-b.mp4")
 file(MAKE_DIRECTORY "${UTSURE_APP_TEST_MEDIA_DIR}")
 file(WRITE "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
     "[Script Info]\n"
@@ -85,7 +91,7 @@ file(WRITE "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
     "\n"
     "[Events]\n"
     "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
-    "Dialogue: 0,0:00:00.00,0:00:12.00,Default,,0,0,0,,Lifecycle cancellation smoke\n"
+    "Dialogue: 0,0:00:00.00,0:00:15.00,Default,,0,0,0,,Lifecycle cancellation smoke\n"
 )
 
 if(WIN32)
@@ -140,8 +146,8 @@ if(UTSURE_APP_FFMPEG_EXECUTABLE)
         OUTPUT "${UTSURE_APP_LIFECYCLE_MAIN_FILE}"
         COMMAND "${UTSURE_APP_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
             -f lavfi -i "testsrc2=size=320x180:rate=24"
-            -f lavfi -i "sine=frequency=720:sample_rate=48000:duration=12"
-            -t 12
+            -f lavfi -i "sine=frequency=720:sample_rate=48000:duration=15"
+            -t 15
             -filter_complex "[0:v]setpts=PTS/1.5[v];[1:a]atempo=1.5[a]"
             -map "[v]"
             -map "[a]"
@@ -189,6 +195,9 @@ target_link_libraries(utsure_app_encode_job_runner_lifecycle_tests
         Qt6::Core
         utsure::encoder_core
 )
+if(WIN32)
+    target_link_libraries(utsure_app_encode_job_runner_lifecycle_tests PRIVATE psapi)
+endif()
 
 target_compile_features(utsure_app_encode_job_runner_lifecycle_tests PRIVATE cxx_std_20)
 
@@ -205,6 +214,19 @@ if(UTSURE_APP_FFMPEG_EXECUTABLE)
             "${UTSURE_APP_LIFECYCLE_CANCEL_OUTPUT_FILE}"
             "${UTSURE_APP_LIFECYCLE_DESTROY_OUTPUT_FILE}"
     )
+
+    add_test(
+        NAME utsure.app.encode_job_runner.parallel_smokes
+        COMMAND utsure_app_encode_job_runner_lifecycle_tests --real-parallel-smokes
+            "${UTSURE_APP_LIFECYCLE_MAIN_FILE}"
+            "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
+            "${UTSURE_APP_PARALLEL_NO_SUBTITLE_FIRST_OUTPUT_FILE}"
+            "${UTSURE_APP_PARALLEL_NO_SUBTITLE_SECOND_OUTPUT_FILE}"
+            "${UTSURE_APP_PARALLEL_SUBTITLE_FIRST_OUTPUT_FILE}"
+            "${UTSURE_APP_PARALLEL_SUBTITLE_SECOND_OUTPUT_FILE}"
+            "${UTSURE_APP_PARALLEL_CANCEL_FIRST_OUTPUT_FILE}"
+            "${UTSURE_APP_PARALLEL_CANCEL_SECOND_OUTPUT_FILE}"
+    )
 else()
     add_test(
         NAME utsure.app.encode_job_runner.lifecycle
@@ -216,7 +238,14 @@ set_tests_properties(utsure.app.encode_job_runner.lifecycle PROPERTIES
     ENVIRONMENT "UTSURE_FONTCOLLECTOR_PATH=${UTSURE_APP_TEST_FONTCOLLECTOR_STUB}"
     TIMEOUT 45
 )
+if(UTSURE_APP_FFMPEG_EXECUTABLE)
+    set_tests_properties(utsure.app.encode_job_runner.parallel_smokes PROPERTIES
+        ENVIRONMENT "UTSURE_FONTCOLLECTOR_PATH=${UTSURE_APP_TEST_FONTCOLLECTOR_STUB}"
+        TIMEOUT 90
+    )
+endif()
 
 utsure_label_tests_matching("^utsure\\.app\\.settings\\." unit smoke)
 utsure_label_tests_matching("^utsure\\.app\\.ui_font$" integration smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.lifecycle$" integration smoke)
+utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.parallel_smokes$" integration media smoke)
