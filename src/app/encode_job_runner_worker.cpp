@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -79,7 +80,23 @@ void throw_if_canceled(const bool cancel_requested) {
 
 }  // namespace
 
-EncodeJobRunnerWorker::EncodeJobRunnerWorker(QObject *parent) : QObject(parent) {}
+EncodeJobRunnerWorker::EncodeJobRunnerWorker(QObject *parent)
+    : QObject(parent),
+      run_function_([](const utsure::core::job::EncodeJob &job,
+                       const utsure::core::job::EncodeJobRunOptions &options) {
+          return utsure::core::job::EncodeJobRunner::run(job, options);
+      }) {}
+
+EncodeJobRunnerWorker::EncodeJobRunnerWorker(RunFunction run_function, QObject *parent)
+    : QObject(parent),
+      run_function_(std::move(run_function)) {
+    if (!run_function_) {
+        run_function_ = [](const utsure::core::job::EncodeJob &job,
+                           const utsure::core::job::EncodeJobRunOptions &options) {
+            return utsure::core::job::EncodeJobRunner::run(job, options);
+        };
+    }
+}
 
 void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
     active_.store(true);
@@ -91,9 +108,12 @@ void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
         }
     } active_guard{active_};
     try {
-        const auto result = utsure::core::job::EncodeJobRunner::run(job, utsure::core::job::EncodeJobRunOptions{
+        const auto result = run_function_(job, utsure::core::job::EncodeJobRunOptions{
             .decode_normalization_policy = {},
-            .observer = this
+            .observer = this,
+            .cancellation_requested = [this]() {
+                return cancel_requested();
+            }
         });
 
         if (result.succeeded()) {

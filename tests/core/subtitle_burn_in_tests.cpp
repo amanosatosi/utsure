@@ -18,6 +18,12 @@
 #include <string_view>
 #include <vector>
 
+#if defined(_WIN32)
+#define NOMINMAX
+#include <windows.h>
+#include <psapi.h>
+#endif
+
 namespace {
 
 using utsure::core::job::EncodeJob;
@@ -83,6 +89,28 @@ bool string_messages_contain_text(const std::vector<std::string> &messages, std:
     }
 
     return false;
+}
+
+struct ProcessMemorySnapshot final {
+    std::uint64_t rss_bytes{0};
+    std::uint64_t peak_rss_bytes{0};
+};
+
+std::optional<ProcessMemorySnapshot> sample_process_memory() noexcept {
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS counters{};
+    counters.cb = sizeof(counters);
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)) == 0) {
+        return std::nullopt;
+    }
+
+    return ProcessMemorySnapshot{
+        .rss_bytes = static_cast<std::uint64_t>(counters.WorkingSetSize),
+        .peak_rss_bytes = static_cast<std::uint64_t>(counters.PeakWorkingSetSize)
+    };
+#else
+    return std::nullopt;
+#endif
 }
 
 std::size_t count_string_messages_containing_text(
@@ -2286,7 +2314,16 @@ int run_sequential_stability_assertion(
     };
 
     std::int64_t previous_frame_count = -1;
+    const auto initial_memory = sample_process_memory();
+    std::vector<ProcessMemorySnapshot> after_job_memory{};
     for (std::size_t index = 0; index < outputs.size(); ++index) {
+        const auto before_job_memory = sample_process_memory();
+        if (before_job_memory.has_value()) {
+            std::cout << "sequential_stability.job" << (index + 1)
+                      << ".rss_before=" << before_job_memory->rss_bytes
+                      << " peak_before=" << before_job_memory->peak_rss_bytes << '\n';
+        }
+
         CollectingObserver observer{};
         const EncodeJob job{
             .input = {
@@ -2331,6 +2368,10 @@ int run_sequential_stability_assertion(
 
         if (!observer_logs_contain_text(observer, "Segment start: name=main") ||
             !observer_logs_contain_text(observer, "Streaming frame checkpoint: segment=main") ||
+            !observer_logs_contain_text(observer, "decoder_threads=") ||
+            !observer_logs_contain_text(observer, "encoder_threads=") ||
+            !observer_logs_contain_text(observer, "subtitle_workers=") ||
+            !observer_logs_contain_text(observer, "video_queue_depth=") ||
             !observer_logs_contain_text(observer, "Mux stage end: output finalized")) {
             return fail("Sequential stability encode did not emit the expected long-run diagnostics.");
         }
@@ -2345,6 +2386,25 @@ int run_sequential_stability_assertion(
             return fail("Sequential stability encodes produced inconsistent frame counts.");
         }
         previous_frame_count = frame_count;
+
+        const auto after_memory = sample_process_memory();
+        if (after_memory.has_value()) {
+            after_job_memory.push_back(*after_memory);
+            std::cout << "sequential_stability.job" << (index + 1)
+                      << ".rss_after=" << after_memory->rss_bytes
+                      << " peak_after=" << after_memory->peak_rss_bytes << '\n';
+        }
+    }
+
+    if (initial_memory.has_value() && after_job_memory.size() == outputs.size()) {
+        constexpr std::uint64_t kAllowedSequentialGrowthBytes = 256ULL * 1024ULL * 1024ULL;
+        const auto final_rss = after_job_memory.back().rss_bytes;
+        if (final_rss > initial_memory->rss_bytes + kAllowedSequentialGrowthBytes) {
+            return fail("Sequential stability RSS grew beyond the allowed tolerance.");
+        }
+        std::cout << "sequential_stability.rss_initial=" << initial_memory->rss_bytes << '\n';
+        std::cout << "sequential_stability.rss_final=" << final_rss << '\n';
+        std::cout << "sequential_stability.peak_final=" << after_job_memory.back().peak_rss_bytes << '\n';
     }
 
     std::cout << "sequential_stability.jobs=3\n";

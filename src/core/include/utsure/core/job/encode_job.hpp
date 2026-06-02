@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <string_view>
+#include <functional>
 
 namespace utsure::core::job {
 
@@ -172,6 +173,7 @@ struct EncodeJobResult final {
 struct EncodeJobRunOptions final {
     media::DecodeNormalizationPolicy decode_normalization_policy{};
     EncodeJobObserver *observer{nullptr};
+    std::function<bool()> cancellation_requested{};
 };
 
 class EncodeJobRunner final {

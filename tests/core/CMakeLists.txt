@@ -29,6 +29,7 @@ set(UTSURE_SUBTITLE_OUTPUT_TIMELINE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtit
 set(UTSURE_SUBTITLE_TRANSFORM_SCHEDULE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-transform-schedule-sample.ass")
 set(UTSURE_SUBTITLE_MOVE_SCHEDULE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-move-schedule-sample.ass")
 set(UTSURE_SUBTITLE_STRESS_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-main.mp4")
+set(UTSURE_SUBTITLE_SPEED_15X_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-speed-15x-main.mp4")
 set(UTSURE_THUMBNAIL_PREROLL_IMAGE_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail.png")
 set(UTSURE_THUMBNAIL_PREROLL_LARGE_IMAGE_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail-large.png")
 set(UTSURE_THUMBNAIL_PREROLL_4_3_IMAGE_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail-4x3.png")
@@ -453,6 +454,25 @@ add_custom_command(
 )
 
 add_custom_command(
+    OUTPUT "${UTSURE_SUBTITLE_SPEED_15X_MAIN_FILE}"
+    COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+        -f lavfi -i "testsrc2=size=320x180:rate=24"
+        -f lavfi -i "sine=frequency=880:sample_rate=48000:duration=9"
+        -t 9
+        -filter_complex "[0:v]setpts=PTS/1.5[v];[1:a]atempo=1.5[a]"
+        -map "[v]"
+        -map "[a]"
+        -c:v libx264
+        -preset ultrafast
+        -pix_fmt yuv420p
+        -c:a aac
+        -b:a 128k
+        -shortest
+        "${UTSURE_SUBTITLE_SPEED_15X_MAIN_FILE}"
+    VERBATIM
+)
+
+add_custom_command(
     OUTPUT "${UTSURE_THUMBNAIL_PREROLL_IMAGE_FILE}"
     COMMAND "${UTSURE_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
         -f lavfi -i "color=c=black:size=320x180"
@@ -498,6 +518,7 @@ add_custom_target(
         "${UTSURE_MULTI_AUDIO_DEFAULT_FILE}"
         "${UTSURE_MULTI_AUDIO_FALLBACK_FILE}"
         "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
+        "${UTSURE_SUBTITLE_SPEED_15X_MAIN_FILE}"
         "${UTSURE_THUMBNAIL_PREROLL_IMAGE_FILE}"
         "${UTSURE_THUMBNAIL_PREROLL_LARGE_IMAGE_FILE}"
         "${UTSURE_THUMBNAIL_PREROLL_4_3_IMAGE_FILE}"
@@ -1297,6 +1318,10 @@ target_link_libraries(utsure_core_subtitle_burn_in_tests
         utsure::encoder_core
 )
 
+if(WIN32)
+    target_link_libraries(utsure_core_subtitle_burn_in_tests PRIVATE psapi)
+endif()
+
 target_compile_features(utsure_core_subtitle_burn_in_tests PRIVATE cxx_std_20)
 
 utsure_enable_warnings(utsure_core_subtitle_burn_in_tests)
@@ -1560,7 +1585,7 @@ add_test(
     COMMAND "${CMAKE_COMMAND}" -E env
         UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
         utsure_core_subtitle_burn_in_tests --sequential-stability-h264
-            "${UTSURE_SUBTITLE_STRESS_MAIN_FILE}"
+            "${UTSURE_SUBTITLE_SPEED_15X_MAIN_FILE}"
             "${UTSURE_SUBTITLE_STRESS_SAMPLE_FILE}"
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-sequential-stability-1-h264.mp4"
             "${UTSURE_TEST_MEDIA_DIR}/subtitle-sequential-stability-2-h264.mp4"

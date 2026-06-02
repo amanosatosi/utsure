@@ -110,7 +110,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M24 slice also permits one narrow user-requested preview-navigation follow-up, limited to decoupling manual preview browsing from the selected trim markers so users can keep refining `IN/OUT` after setting them, while preserving trim jump buttons and export trim behavior.
 - The current M24 slice also permits one narrow user-requested preview-control follow-up, limited to reducing preview seek/play startup latency with smaller synchronous preview windows and lighter audio preroll, plus a timestamp-badge jump dialog for timecode and frame entry, without changing encode behavior or broader layout structure.
 - The current M24 slice also permits one narrow user-requested preview-stability follow-up, limited to hardening repeated FFMS2 preview seeks against session-state churn and tightening preview playback A/V start alignment without changing encode behavior or broader desktop layout structure.
-- The current M24 slice now also includes a long-run encode crash-hardening pass, limited to streaming subtitle-path diagnostics, bounded default memory/thread behavior, Qt encode-worker shutdown safety, and cheap sequential stability coverage; explicit speed-change regression coverage remains pending until a core encode speed setting exists.
+- The current M24 slice now also includes a long-run encode crash-hardening pass, limited to streaming subtitle-path diagnostics, bounded default memory/thread behavior, Qt encode-worker shutdown safety, and cheap sequential stability coverage; 1.5x repro coverage uses a generated time-compressed source because the current core job model does not expose a user-facing speed setting.
 - The CMake AddressSanitizer option remains available for future manual or scheduled CLANG64 validation, but the separate subtitle sanitizer CI job has been removed to keep normal CI simpler.
 - The current M24 CI slice now also includes bumping the Windows GitHub Actions JavaScript actions to Node 24-compatible releases, with a temporary `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` override during validation.
 - The current M24 CI slice also permits one narrow user-requested cache follow-up, limited to temporarily disabling the FFmpeg GitHub Actions cache in the Windows workflow and leaving an explicit reminder to re-enable it on or after May 1, 2026, without changing unrelated build/test behavior.
@@ -1181,7 +1181,8 @@ Completed:
   * Kept subtitle composition serialized by default and worker-local composition behind the existing environment opt-in.
   * Reworked `EncodeJobRunnerController` to use explicit lifecycle states and to request cancel, wait for worker-thread unwind, then stop/delete the worker during destruction.
   * Added app runner lifecycle coverage and a three-job sequential subtitle burn-in stability smoke test.
-  * Did not add speed-change test coverage because the current core job model does not expose a speed-change setting.
+  * Follow-up fixed finish-state reentrancy when a `job_finished` slot immediately starts the next job, replaced the missing-file lifecycle test with an injected active fake runner, added bounded shutdown waiting with active-state checks, and threaded cancellation polling through streaming decode/subtitle/encode/mux loops.
+  * Follow-up changed the sequential smoke to use a generated 1.5x time-compressed source, and added Windows RSS/peak RSS before/after logging plus a bounded-growth assertion across three sequential jobs.
 
 ### Test-suite tiering and CI cleanup
 

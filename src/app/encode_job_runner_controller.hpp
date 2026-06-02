@@ -13,6 +13,7 @@ class EncodeJobRunnerController final : public QObject {
 
 public:
     explicit EncodeJobRunnerController(QObject *parent = nullptr);
+    explicit EncodeJobRunnerController(EncodeJobRunnerWorker *worker, QObject *parent = nullptr);
     ~EncodeJobRunnerController() override;
 
     [[nodiscard]] bool is_running() const noexcept;
@@ -47,8 +48,10 @@ private:
         const QString &details_text,
         const QString &output_path
     );
+    void initialize_worker_thread();
+    void shutdown_worker();
 
-    QThread worker_thread_{};
+    QThread *worker_thread_{nullptr};
     EncodeJobRunnerWorker *worker_{nullptr};
     RunnerState state_{RunnerState::idle};
     bool shutting_down_{false};

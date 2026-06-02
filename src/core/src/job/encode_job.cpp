@@ -192,6 +192,12 @@ void notify_log_safely(
     }
 }
 
+void throw_if_cancellation_requested(const EncodeJobRunOptions &options) {
+    if (options.cancellation_requested && options.cancellation_requested()) {
+        throw std::runtime_error(std::string(kEncodeJobCanceledException));
+    }
+}
+
 bool same_path_or_equivalent(const std::filesystem::path &left, const std::filesystem::path &right) {
     if (left.lexically_normal() == right.lexically_normal()) {
         return true;
@@ -636,6 +642,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
     };
 
     try {
+        throw_if_cancellation_requested(options);
         notify_progress(
             telemetry,
             EncodeJobStage::assembling_timeline,
@@ -644,6 +651,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
         notify_log(telemetry, EncodeJobLogLevel::info, "Assembling the encode timeline.");
 
         const auto timeline_assembly_result = timeline::TimelineAssembler::assemble(build_timeline_request(job));
+        throw_if_cancellation_requested(options);
         if (!timeline_assembly_result.succeeded()) {
             return make_error(
                 job,
@@ -732,6 +740,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
         };
 
         for (const auto &segment_plan : timeline_plan.segments) {
+            throw_if_cancellation_requested(options);
             notify_progress(
                 telemetry,
                 EncodeJobStage::decoding_segment,
@@ -755,6 +764,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             if (auto renderer_error = ensure_subtitle_renderer(); renderer_error.has_value()) {
                 return *renderer_error;
             }
+            throw_if_cancellation_requested(options);
         }
 
         if (effective_job.thumbnail_preroll.has_value() && effective_job.thumbnail_preroll->enabled) {
@@ -772,6 +782,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             if (auto renderer_error = ensure_subtitle_renderer(); renderer_error.has_value()) {
                 return *renderer_error;
             }
+            throw_if_cancellation_requested(options);
         }
 
         notify_progress(
@@ -818,7 +829,8 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                 },
                 .warning_callback = [&telemetry](const std::string &message) {
                     notify_log(telemetry, EncodeJobLogLevel::warning, message);
-                }
+                },
+                .cancellation_requested = options.cancellation_requested
             }
         );
         if (!streaming_result.succeeded()) {

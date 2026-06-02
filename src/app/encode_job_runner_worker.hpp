@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QString>
 #include <atomic>
+#include <functional>
 #include <optional>
 
 class EncodeJobRunnerWorker final
@@ -13,7 +14,13 @@ class EncodeJobRunnerWorker final
     Q_OBJECT
 
 public:
+    using RunFunction = std::function<utsure::core::job::EncodeJobResult(
+        const utsure::core::job::EncodeJob &job,
+        const utsure::core::job::EncodeJobRunOptions &options
+    )>;
+
     explicit EncodeJobRunnerWorker(QObject *parent = nullptr);
+    explicit EncodeJobRunnerWorker(RunFunction run_function, QObject *parent = nullptr);
 
     void run_job(const utsure::core::job::EncodeJob &job);
     void request_cancel() noexcept;
@@ -41,4 +48,5 @@ private:
     std::atomic_bool cancel_requested_{false};
     std::atomic_bool active_{false};
     std::optional<utsure::core::job::EncodeJobProgress> last_progress_{};
+    RunFunction run_function_{};
 };
