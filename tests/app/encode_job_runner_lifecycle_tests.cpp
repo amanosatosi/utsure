@@ -191,7 +191,9 @@ int run_cancel_while_active_assertion() {
         }
     );
 
-    controller.start_job(make_lifecycle_job("cancel-active.mp4"));
+    if (!controller.start_job(make_lifecycle_job("cancel-active.mp4"))) {
+        return fail("Controller refused to start the fake active cancel job.");
+    }
     if (!wait_until([&]() { return started_count.load() == 1; }, 1000)) {
         return fail("Fake active job did not start before timeout.");
     }
@@ -218,7 +220,9 @@ int run_destroy_while_active_assertion() {
         auto controller = std::make_unique<EncodeJobRunnerController>(
             make_blocking_worker(started_count, finished_count)
         );
-        controller->start_job(make_lifecycle_job("destroy-active.mp4"));
+        if (!controller->start_job(make_lifecycle_job("destroy-active.mp4"))) {
+            return fail("Controller refused to start the fake active destroy job.");
+        }
         if (!wait_until([&]() { return started_count.load() == 1; }, 1000)) {
             return fail("Fake active destroy job did not start before timeout.");
         }
@@ -248,12 +252,16 @@ int run_reentrant_finished_starts_next_job_assertion() {
         [&](const bool, const bool, const QString &, const QString &, const QString &) {
             ++job_finished_count;
             if (job_finished_count == 1) {
-                controller.start_job(make_lifecycle_job("second-reentrant.mp4"));
+                if (!controller.start_job(make_lifecycle_job("second-reentrant.mp4"))) {
+                    return;
+                }
             }
         }
     );
 
-    controller.start_job(make_lifecycle_job("first-reentrant.mp4"));
+    if (!controller.start_job(make_lifecycle_job("first-reentrant.mp4"))) {
+        return fail("Controller refused to start the first reentrant fake job.");
+    }
     if (!wait_until([&]() { return started_count.load() == 1; }, 1000)) {
         return fail("First reentrant fake job did not start.");
     }
@@ -315,7 +323,12 @@ int run_deterministic_queue_assertion() {
         active_index = next_index;
         states[static_cast<std::size_t>(active_index)] = QueueItemState::starting;
         started_order.push_back(active_index);
-        controller.start_job(make_lifecycle_job(("queue-job-" + std::to_string(active_index) + ".mp4").c_str()));
+        if (!controller.start_job(make_lifecycle_job(("queue-job-" + std::to_string(active_index) + ".mp4").c_str()))) {
+            states[static_cast<std::size_t>(active_index)] = QueueItemState::failed;
+            active_index = -1;
+            ++terminal_count;
+            return;
+        }
         states[static_cast<std::size_t>(active_index)] = QueueItemState::running;
         ++next_index;
     };
@@ -378,12 +391,176 @@ int run_deterministic_queue_assertion() {
     return 0;
 }
 
+int run_failed_start_acceptance_assertion() {
+    std::atomic_int started_count{0};
+    std::atomic_int finished_count{0};
+    EncodeJobRunnerController controller(make_blocking_worker(started_count, finished_count));
+    if (!controller.start_job(make_lifecycle_job("accepted-first.mp4"))) {
+        return fail("Controller refused the first fake job unexpectedly.");
+    }
+    if (!wait_until([&]() { return started_count.load() == 1; }, 1000)) {
+        return fail("First fake job did not become active before failed-start assertion.");
+    }
+    if (controller.start_job(make_lifecycle_job("must-not-start-while-running.mp4"))) {
+        return fail("Controller accepted a second job while already running.");
+    }
+    if (started_count.load() != 1) {
+        return fail("Rejected start unexpectedly reached the worker.");
+    }
+
+    controller.cancel_job();
+    if (!wait_until([&]() { return finished_count.load() == 1; }, 2000)) {
+        return fail("Failed-start assertion cleanup did not cancel the active job.");
+    }
+
+    std::cout << "runner_lifecycle.failed_start_acceptance=ok\n";
+    return 0;
+}
+
+int run_queue_layer_dispatch_assertion() {
+    enum class QueueItemState {
+        queued,
+        starting,
+        running,
+        cancel_requested,
+        finishing,
+        completed,
+        failed,
+        canceled
+    };
+
+    struct PlannedQueueJob final {
+        int job_index{0};
+        EncodeJob job{};
+    };
+
+    constexpr int kJobCount = 12;
+    constexpr int kQueuedCancelIndex = 5;
+    constexpr int kActiveCancelIndex = 1;
+    std::atomic_int started_count{0};
+    std::atomic_int active_count{0};
+    std::atomic_int max_active_count{0};
+    std::vector<QueueItemState> states(kJobCount, QueueItemState::queued);
+    std::vector<PlannedQueueJob> planned_jobs{};
+    std::vector<int> dispatch_order{};
+    planned_jobs.reserve(kJobCount);
+    dispatch_order.reserve(kJobCount);
+    for (int index = 0; index < kJobCount; ++index) {
+        planned_jobs.push_back(PlannedQueueJob{
+            .job_index = index,
+            .job = make_lifecycle_job(("queue-layer-job-" + std::to_string(index) + ".mp4").c_str())
+        });
+    }
+
+    int queue_cursor = 0;
+    int active_job_index = -1;
+    int terminal_count = 0;
+    EncodeJobRunnerController controller(make_queue_worker(started_count, active_count, max_active_count));
+    std::function<void()> start_available_jobs;
+    start_available_jobs = [&]() {
+        if (controller.is_running() || active_job_index >= 0) {
+            return;
+        }
+
+        while (queue_cursor < static_cast<int>(planned_jobs.size())) {
+            const auto &planned_job = planned_jobs[static_cast<std::size_t>(queue_cursor++)];
+            const int job_index = planned_job.job_index;
+            if (states[static_cast<std::size_t>(job_index)] == QueueItemState::canceled) {
+                continue;
+            }
+
+            states[static_cast<std::size_t>(job_index)] = QueueItemState::starting;
+            active_job_index = job_index;
+            dispatch_order.push_back(job_index);
+            if (!controller.start_job(planned_job.job)) {
+                states[static_cast<std::size_t>(job_index)] = QueueItemState::failed;
+                active_job_index = -1;
+                ++terminal_count;
+                continue;
+            }
+
+            states[static_cast<std::size_t>(job_index)] = QueueItemState::running;
+            return;
+        }
+    };
+
+    QObject::connect(
+        &controller,
+        &EncodeJobRunnerController::job_finished,
+        &controller,
+        [&](const bool succeeded, const bool canceled, const QString &, const QString &, const QString &) {
+            if (active_job_index < 0) {
+                return;
+            }
+
+            states[static_cast<std::size_t>(active_job_index)] = QueueItemState::finishing;
+            states[static_cast<std::size_t>(active_job_index)] = canceled
+                ? QueueItemState::canceled
+                : succeeded ? QueueItemState::completed : QueueItemState::failed;
+            active_job_index = -1;
+            ++terminal_count;
+            QTimer::singleShot(0, &controller, [&start_available_jobs]() {
+                start_available_jobs();
+            });
+        }
+    );
+
+    start_available_jobs();
+    if (!wait_until([&]() { return started_count.load() == 1; }, 1000)) {
+        return fail("Queue-layer dispatch did not start the first job.");
+    }
+
+    states[static_cast<std::size_t>(kQueuedCancelIndex)] = QueueItemState::canceled;
+    ++terminal_count;
+    if (!wait_until([&]() {
+            return states[0] == QueueItemState::completed && started_count.load() >= 2;
+        }, 3000)) {
+        return fail("Canceling a queued job interfered with the active queue-layer job.");
+    }
+
+    if (states[0] != QueueItemState::completed || states[static_cast<std::size_t>(kQueuedCancelIndex)] != QueueItemState::canceled) {
+        return fail("Queue-layer queued cancellation did not preserve active/queued state.");
+    }
+    if (active_job_index != kActiveCancelIndex) {
+        return fail("Queue-layer dispatch order was not deterministic before active cancel.");
+    }
+
+    states[static_cast<std::size_t>(kActiveCancelIndex)] = QueueItemState::cancel_requested;
+    controller.cancel_job();
+    if (!wait_until([&]() { return terminal_count == kJobCount; }, 6000)) {
+        return fail("Queue-layer dispatch did not put every job into a terminal state.");
+    }
+
+    if (max_active_count.load() != 1 || active_count.load() != 0) {
+        return fail("Queue-layer dispatch allowed more than one active job.");
+    }
+    if (states[static_cast<std::size_t>(kActiveCancelIndex)] != QueueItemState::canceled) {
+        return fail("Queue-layer active cancel did not transition to canceled.");
+    }
+    for (int index = 0; index < kJobCount; ++index) {
+        if (index == kQueuedCancelIndex || index == kActiveCancelIndex) {
+            continue;
+        }
+        if (states[static_cast<std::size_t>(index)] != QueueItemState::completed) {
+            return fail("Queue-layer dispatch left a non-canceled job outside completed state.");
+        }
+    }
+    if (std::find(dispatch_order.begin(), dispatch_order.end(), kQueuedCancelIndex) != dispatch_order.end()) {
+        return fail("Queue-layer dispatch started a queued-canceled job.");
+    }
+
+    std::cout << "runner_lifecycle.queue_layer_jobs=12\n";
+    std::cout << "runner_lifecycle.queue_layer_max_active=" << max_active_count.load() << '\n';
+    return 0;
+}
+
 int run_real_cancel_and_destroy_assertion(
     const std::filesystem::path &input_path,
     const std::filesystem::path &subtitle_path,
     const std::filesystem::path &cancel_output_path,
     const std::filesystem::path &destroy_output_path
 ) {
+    const auto initial_quarantine_count = EncodeJobRunnerController::quarantined_worker_count_for_tests();
     {
         bool streaming_stage_seen = false;
         bool canceled_finished = false;
@@ -407,7 +584,9 @@ int run_real_cancel_and_destroy_assertion(
             }
         );
 
-        controller.start_job(make_real_subtitle_job(input_path, subtitle_path, cancel_output_path));
+        if (!controller.start_job(make_real_subtitle_job(input_path, subtitle_path, cancel_output_path))) {
+            return fail("Controller refused to start the real cancel encode job.");
+        }
         if (!wait_until([&]() { return streaming_stage_seen || canceled_finished; }, 10000)) {
             return fail("Real encode did not reach streaming stage before cancel timeout.");
         }
@@ -418,6 +597,9 @@ int run_real_cancel_and_destroy_assertion(
         if (!wait_until([&]() { return canceled_finished; }, 10000)) {
             return fail("Real active encode cancellation did not finish before timeout.");
         }
+    }
+    if (EncodeJobRunnerController::quarantined_worker_count_for_tests() != initial_quarantine_count) {
+        return fail("Real active cancellation used the encode-worker quarantine fallback.");
     }
 
     {
@@ -435,7 +617,9 @@ int run_real_cancel_and_destroy_assertion(
             }
         );
 
-        controller->start_job(make_real_subtitle_job(input_path, subtitle_path, destroy_output_path));
+        if (!controller->start_job(make_real_subtitle_job(input_path, subtitle_path, destroy_output_path))) {
+            return fail("Controller refused to start the real destroy encode job.");
+        }
         if (!wait_until([&]() { return streaming_stage_seen; }, 10000)) {
             return fail("Real encode did not reach streaming stage before destroy timeout.");
         }
@@ -444,6 +628,9 @@ int run_real_cancel_and_destroy_assertion(
         if (destruction_timer.elapsed() > 7000) {
             return fail("Destroying a controller during a real encode exceeded the bounded shutdown timeout.");
         }
+    }
+    if (EncodeJobRunnerController::quarantined_worker_count_for_tests() != initial_quarantine_count) {
+        return fail("Real destroy during active encode used the encode-worker quarantine fallback.");
     }
 
     std::cout << "runner_lifecycle.real_cancel_destroy=ok\n";
@@ -470,7 +657,9 @@ int main(int argc, char **argv) {
         run_cancel_while_active_assertion() != 0 ||
         run_destroy_while_active_assertion() != 0 ||
         run_reentrant_finished_starts_next_job_assertion() != 0 ||
-        run_deterministic_queue_assertion() != 0) {
+        run_deterministic_queue_assertion() != 0 ||
+        run_failed_start_acceptance_assertion() != 0 ||
+        run_queue_layer_dispatch_assertion() != 0) {
         return 1;
     }
 

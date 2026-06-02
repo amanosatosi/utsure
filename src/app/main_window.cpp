@@ -5545,7 +5545,16 @@ void MainWindow::start_available_queued_jobs() {
         }
 
         append_job_log(planned_job.job_index, "[info] Starting encode job.");
-        slot.controller->start_job(planned_job.job);
+        if (!slot.controller->start_job(planned_job.job)) {
+            job.state = UiJobState::failed;
+            job.checked = false;
+            job.last_status_message = "Encode failed to start.";
+            job.last_details_summary = "The encode runner refused to accept the selected job.";
+            append_job_log(planned_job.job_index, "[error] Encode runner refused to start the queued job.");
+            slot.active_job_index = -1;
+            slot.elapsed_valid = false;
+            continue;
+        }
         job.state = UiJobState::running;
         job.last_status_message = "Encoding...";
     }

@@ -61,7 +61,7 @@ add_test(
 
 set_tests_properties(utsure.app.ui_font PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-find_program(UTSURE_APP_FFMPEG_EXECUTABLE NAMES ffmpeg REQUIRED)
+find_program(UTSURE_APP_FFMPEG_EXECUTABLE NAMES ffmpeg)
 
 set(UTSURE_APP_TEST_MEDIA_DIR "${CMAKE_CURRENT_BINARY_DIR}/media")
 set(UTSURE_APP_LIFECYCLE_MAIN_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-lifecycle-main.mp4")
@@ -132,31 +132,36 @@ else()
     )
 endif()
 
-add_custom_command(
-    OUTPUT "${UTSURE_APP_LIFECYCLE_MAIN_FILE}"
-    COMMAND "${UTSURE_APP_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
-        -f lavfi -i "testsrc2=size=320x180:rate=24"
-        -f lavfi -i "sine=frequency=720:sample_rate=48000:duration=12"
-        -t 12
-        -filter_complex "[0:v]setpts=PTS/1.5[v];[1:a]atempo=1.5[a]"
-        -map "[v]"
-        -map "[a]"
-        -c:v libx264
-        -preset ultrafast
-        -pix_fmt yuv420p
-        -c:a aac
-        -b:a 96k
-        -shortest
-        "${UTSURE_APP_LIFECYCLE_MAIN_FILE}"
-    VERBATIM
-)
+if(UTSURE_APP_FFMPEG_EXECUTABLE)
+    add_custom_command(
+        OUTPUT "${UTSURE_APP_LIFECYCLE_MAIN_FILE}"
+        COMMAND "${UTSURE_APP_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+            -f lavfi -i "testsrc2=size=320x180:rate=24"
+            -f lavfi -i "sine=frequency=720:sample_rate=48000:duration=12"
+            -t 12
+            -filter_complex "[0:v]setpts=PTS/1.5[v];[1:a]atempo=1.5[a]"
+            -map "[v]"
+            -map "[a]"
+            -c:v libx264
+            -preset ultrafast
+            -pix_fmt yuv420p
+            -c:a aac
+            -b:a 96k
+            -shortest
+            "${UTSURE_APP_LIFECYCLE_MAIN_FILE}"
+        VERBATIM
+    )
 
-add_custom_target(
-    utsure_app_generate_lifecycle_media
-    DEPENDS
-        "${UTSURE_APP_LIFECYCLE_MAIN_FILE}"
-        "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
-)
+    add_custom_target(
+        utsure_app_generate_lifecycle_media
+        DEPENDS
+            "${UTSURE_APP_LIFECYCLE_MAIN_FILE}"
+            "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
+    )
+else()
+    message(WARNING "ffmpeg was not found; app lifecycle tests will run fake queue/controller coverage without the real encode cancel/destroy smoke.")
+endif()
+
 
 qt_add_executable(utsure_app_encode_job_runner_lifecycle_tests
     encode_job_runner_lifecycle_tests.cpp
@@ -186,16 +191,23 @@ target_compile_features(utsure_app_encode_job_runner_lifecycle_tests PRIVATE cxx
 
 utsure_enable_warnings(utsure_app_encode_job_runner_lifecycle_tests)
 
-add_dependencies(utsure_app_encode_job_runner_lifecycle_tests utsure_app_generate_lifecycle_media)
+if(UTSURE_APP_FFMPEG_EXECUTABLE)
+    add_dependencies(utsure_app_encode_job_runner_lifecycle_tests utsure_app_generate_lifecycle_media)
 
-add_test(
-    NAME utsure.app.encode_job_runner.lifecycle
-    COMMAND utsure_app_encode_job_runner_lifecycle_tests --real-cancel-destroy
-        "${UTSURE_APP_LIFECYCLE_MAIN_FILE}"
-        "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
-        "${UTSURE_APP_LIFECYCLE_CANCEL_OUTPUT_FILE}"
-        "${UTSURE_APP_LIFECYCLE_DESTROY_OUTPUT_FILE}"
-)
+    add_test(
+        NAME utsure.app.encode_job_runner.lifecycle
+        COMMAND utsure_app_encode_job_runner_lifecycle_tests --real-cancel-destroy
+            "${UTSURE_APP_LIFECYCLE_MAIN_FILE}"
+            "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
+            "${UTSURE_APP_LIFECYCLE_CANCEL_OUTPUT_FILE}"
+            "${UTSURE_APP_LIFECYCLE_DESTROY_OUTPUT_FILE}"
+    )
+else()
+    add_test(
+        NAME utsure.app.encode_job_runner.lifecycle
+        COMMAND utsure_app_encode_job_runner_lifecycle_tests
+    )
+endif()
 
 set_tests_properties(utsure.app.encode_job_runner.lifecycle PROPERTIES
     ENVIRONMENT "UTSURE_FONTCOLLECTOR_PATH=${UTSURE_APP_TEST_FONTCOLLECTOR_STUB}"

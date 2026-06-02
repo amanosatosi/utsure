@@ -155,9 +155,14 @@ bool EncodeJobRunnerController::is_running() const noexcept {
         state_ == RunnerState::finishing;
 }
 
-void EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &job) {
+std::size_t EncodeJobRunnerController::quarantined_worker_count_for_tests() noexcept {
+    const std::lock_guard lock(quarantined_encode_workers_mutex());
+    return quarantined_encode_workers().size();
+}
+
+bool EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &job) {
     if (is_running() || worker_ == nullptr || worker_thread_ == nullptr || shutting_down_) {
-        return;
+        return false;
     }
 
     worker_->clear_cancel_request();
@@ -183,6 +188,7 @@ void EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &jo
         },
         Qt::QueuedConnection
     );
+    return true;
 }
 
 void EncodeJobRunnerController::cancel_job() noexcept {

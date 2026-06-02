@@ -6,6 +6,8 @@
 #include <QString>
 #include <QThread>
 
+#include <cstddef>
+
 class EncodeJobRunnerWorker;
 
 class EncodeJobRunnerController final : public QObject {
@@ -17,8 +19,9 @@ public:
     ~EncodeJobRunnerController() override;
 
     [[nodiscard]] bool is_running() const noexcept;
-    void start_job(const utsure::core::job::EncodeJob &job);
+    [[nodiscard]] bool start_job(const utsure::core::job::EncodeJob &job);
     void cancel_job() noexcept;
+    [[nodiscard]] static std::size_t quarantined_worker_count_for_tests() noexcept;
 
 signals:
     void running_changed(bool running);
