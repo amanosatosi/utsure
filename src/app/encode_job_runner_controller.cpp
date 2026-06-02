@@ -5,10 +5,28 @@
 #include <QMetaType>
 #include <QMetaObject>
 
+#include <mutex>
+#include <vector>
+
 namespace {
 
 constexpr int kShutdownWaitChunkMilliseconds = 250;
 constexpr int kShutdownTotalWaitMilliseconds = 5000;
+
+struct QuarantinedEncodeWorker final {
+    QThread *thread{nullptr};
+    EncodeJobRunnerWorker *worker{nullptr};
+};
+
+std::vector<QuarantinedEncodeWorker> &quarantined_encode_workers() {
+    static auto *workers = new std::vector<QuarantinedEncodeWorker>();
+    return *workers;
+}
+
+std::mutex &quarantined_encode_workers_mutex() {
+    static auto *mutex = new std::mutex();
+    return *mutex;
+}
 
 QThread::Priority map_thread_priority(const utsure::core::job::EncodeJobProcessPriority priority) {
     switch (priority) {
@@ -91,26 +109,42 @@ void EncodeJobRunnerController::shutdown_worker() {
     }
 
     if (worker_thread_->isRunning()) {
-        emit log_message("[error] Encode worker did not stop after cancellation; terminating worker thread.");
-        worker_thread_->terminate();
-        worker_thread_->wait(kShutdownTotalWaitMilliseconds);
+        emit log_message(
+            "[error] Encode worker did not stop after cooperative cancellation before the shutdown timeout. "
+            "Keeping the worker and QThread in a process-lifetime quarantine instead of terminating the thread."
+        );
+        {
+            const std::lock_guard lock(quarantined_encode_workers_mutex());
+            quarantined_encode_workers().push_back(QuarantinedEncodeWorker{
+                .thread = worker_thread_,
+                .worker = worker_
+            });
+        }
+        worker_ = nullptr;
+        worker_thread_ = nullptr;
+        state_ = RunnerState::finished;
+        return;
     }
 
     if (worker_ != nullptr) {
         if (worker_->is_active()) {
-            emit log_message("[error] Encode worker remained active after shutdown; leaving worker object undeleted.");
+            emit log_message("[error] Encode worker thread stopped while worker still reported active; quarantining worker object.");
+            const std::lock_guard lock(quarantined_encode_workers_mutex());
+            quarantined_encode_workers().push_back(QuarantinedEncodeWorker{
+                .thread = nullptr,
+                .worker = worker_
+            });
         } else {
             delete worker_;
         }
         worker_ = nullptr;
     }
 
-    if (worker_thread_->isRunning()) {
-        emit log_message("[error] Worker thread is still running after bounded shutdown; leaving QThread object alive.");
-        worker_thread_ = nullptr;
-    } else {
+    if (worker_thread_ != nullptr) {
         delete worker_thread_;
         worker_thread_ = nullptr;
+    } else {
+        emit log_message("[error] Worker thread ownership was already released during shutdown.");
     }
     state_ = RunnerState::finished;
 }

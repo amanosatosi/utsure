@@ -1183,6 +1183,10 @@ Completed:
   * Added app runner lifecycle coverage and a three-job sequential subtitle burn-in stability smoke test.
   * Follow-up fixed finish-state reentrancy when a `job_finished` slot immediately starts the next job, replaced the missing-file lifecycle test with an injected active fake runner, added bounded shutdown waiting with active-state checks, and threaded cancellation polling through streaming decode/subtitle/encode/mux loops.
   * Follow-up changed the sequential smoke to use a generated 1.5x time-compressed source, and added Windows RSS/peak RSS before/after logging plus a bounded-growth assertion across three sequential jobs.
+  * Follow-up removed `QThread::terminate()` from encode-runner shutdown; workers that ignore cooperative cancellation past the bounded wait are logged and kept in a process-lifetime quarantine instead of being deleted or force-terminated.
+  * Follow-up added FFmpeg input/output interrupt callbacks tied to encode cancellation, including open/read/header/mux/trailer checks that report canceled results instead of generic FFmpeg failures.
+  * Follow-up made queue item states explicit (`queued`, `starting`, `running`, `cancel_requested`, `finishing`, `completed`, `failed`, `canceled`) and added fake 12-job queue coverage for non-overlap, queued cancellation, active cancellation, and continued deterministic dispatch.
+  * Follow-up added app/controller real encode lifecycle coverage using generated 1.5x subtitle burn-in media, exercising active cancel and destroy during streaming work with CTest timeouts.
 
 ### Test-suite tiering and CI cleanup
 

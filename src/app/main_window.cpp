@@ -537,14 +537,17 @@ QByteArray load_svg_resource_bytes(const QString &resource_path, QString *failur
 
 QColor status_color_for_state(const MainWindow::UiJobState state) {
     switch (state) {
-    case MainWindow::UiJobState::finished:
+    case MainWindow::UiJobState::completed:
         return QColor("#4ecb71");
     case MainWindow::UiJobState::failed:
     case MainWindow::UiJobState::canceled:
         return QColor("#f74f4f");
-    case MainWindow::UiJobState::encoding:
+    case MainWindow::UiJobState::starting:
+    case MainWindow::UiJobState::running:
+    case MainWindow::UiJobState::cancel_requested:
+    case MainWindow::UiJobState::finishing:
         return QColor("#b241ff");
-    case MainWindow::UiJobState::pending:
+    case MainWindow::UiJobState::queued:
     default:
         return QColor("#8b8b99");
     }
@@ -2394,15 +2397,21 @@ QString MainWindow::selected_job_name() const {
 
 QString MainWindow::format_job_state_text(const UiEncodeJob &job) const {
     switch (job.state) {
-    case UiJobState::encoding:
+    case UiJobState::starting:
+        return "Starting";
+    case UiJobState::running:
         return format_progress_percentage(job.encode_progress_fraction.value_or(0.0));
-    case UiJobState::finished:
+    case UiJobState::cancel_requested:
+        return "Canceling";
+    case UiJobState::finishing:
+        return "Finishing";
+    case UiJobState::completed:
         return "Finished";
     case UiJobState::failed:
         return "Failed";
     case UiJobState::canceled:
         return "Canceled";
-    case UiJobState::pending:
+    case UiJobState::queued:
     default:
         return job_has_minimum_required_fields(job) ? "Ready" : QString();
     }
@@ -2413,7 +2422,7 @@ QString MainWindow::format_job_state_display_text(const UiEncodeJob &job) const 
 }
 
 bool MainWindow::job_is_terminal(const UiEncodeJob &job) const {
-    return job.state == UiJobState::finished ||
+    return job.state == UiJobState::completed ||
         job.state == UiJobState::failed ||
         job.state == UiJobState::canceled;
 }
@@ -2469,7 +2478,10 @@ double MainWindow::current_busy_spinner_progress_fraction() const {
         }
 
         const auto &job = jobs_[static_cast<std::size_t>(slot.active_job_index)];
-        if (job.state != UiJobState::encoding) {
+        if (job.state != UiJobState::running &&
+            job.state != UiJobState::starting &&
+            job.state != UiJobState::cancel_requested &&
+            job.state != UiJobState::finishing) {
             continue;
         }
 
@@ -4417,7 +4429,7 @@ void MainWindow::sync_selected_job_from_editor() {
         apply_automatic_thumbnail_selection(selected_job_index_, false);
     }
 
-    if (job.state == UiJobState::pending) {
+    if (job.state == UiJobState::queued) {
         job.last_status_message = job_has_minimum_required_fields(job)
             ? "Ready to queue."
             : "Select an output path to make the job runnable.";
@@ -4666,7 +4678,7 @@ void MainWindow::persist_app_settings_warning(const QString &context, const QStr
 }
 
 void MainWindow::reset_job_for_rerun(UiEncodeJob &job) {
-    job.state = UiJobState::pending;
+    job.state = UiJobState::queued;
     job.checked = true;
     job.efps_display.clear();
     job.speed_display.clear();
@@ -5516,9 +5528,9 @@ void MainWindow::start_available_queued_jobs() {
         }
 
         auto &job = jobs_[static_cast<std::size_t>(planned_job.job_index)];
-        job.state = UiJobState::encoding;
+        job.state = UiJobState::starting;
         job.encode_progress_fraction = 0.0;
-        job.last_status_message = "Encoding...";
+        job.last_status_message = "Starting...";
         job.elapsed_ms = 0;
         job.remaining_ms = -1;
         job.efps_display.clear();
@@ -5534,6 +5546,8 @@ void MainWindow::start_available_queued_jobs() {
 
         append_job_log(planned_job.job_index, "[info] Starting encode job.");
         slot.controller->start_job(planned_job.job);
+        job.state = UiJobState::running;
+        job.last_status_message = "Encoding...";
     }
 
     if (!stop_requested_ && queue_cursor_ >= static_cast<int>(planned_queue_jobs_.size()) && active_runner_count() == 0) {
@@ -5558,6 +5572,8 @@ void MainWindow::stop_encode_queue() {
         }
 
         if (slot.active_job_index >= 0 && slot.active_job_index < static_cast<int>(jobs_.size())) {
+            jobs_[static_cast<std::size_t>(slot.active_job_index)].state = UiJobState::cancel_requested;
+            jobs_[static_cast<std::size_t>(slot.active_job_index)].last_status_message = "Cancel requested.";
             append_job_log(slot.active_job_index, "[warning] Cancel requested by user.");
         }
 
@@ -5716,6 +5732,7 @@ void MainWindow::handle_runner_finished(
     }
 
     auto &job = jobs_[static_cast<std::size_t>(job_index)];
+    job.state = UiJobState::finishing;
     if (slot.elapsed_valid) {
         job.elapsed_ms = slot.elapsed_timer.elapsed();
     }
@@ -5732,7 +5749,7 @@ void MainWindow::handle_runner_finished(
 
     if (succeeded) {
         job.encode_progress_fraction = 1.0;
-        job.state = UiJobState::finished;
+        job.state = UiJobState::completed;
         job.checked = false;
         job.remaining_ms = 0;
         append_job_log(job_index, "[info] Encode finished successfully.");

@@ -95,6 +95,61 @@ struct PacketDeleter final {
 
 using PacketHandle = std::unique_ptr<AVPacket, PacketDeleter>;
 
+struct CancellationInterruptContext final {
+    std::function<bool()> cancellation_requested{};
+};
+
+int ffmpeg_cancellation_interrupt_callback(void *opaque) noexcept {
+    auto *context = static_cast<CancellationInterruptContext *>(opaque);
+    if (context == nullptr || !context->cancellation_requested) {
+        return 0;
+    }
+
+    try {
+        return context->cancellation_requested() ? 1 : 0;
+    } catch (...) {
+        return 0;
+    }
+}
+
+std::shared_ptr<CancellationInterruptContext> make_cancellation_interrupt_context(
+    std::function<bool()> cancellation_requested
+) {
+    if (!cancellation_requested) {
+        return {};
+    }
+
+    return std::make_shared<CancellationInterruptContext>(CancellationInterruptContext{
+        .cancellation_requested = std::move(cancellation_requested)
+    });
+}
+
+void attach_cancellation_interrupt_callback(
+    AVFormatContext &format_context,
+    const std::shared_ptr<CancellationInterruptContext> &interrupt_context
+) noexcept {
+    if (!interrupt_context) {
+        return;
+    }
+
+    format_context.interrupt_callback.callback = ffmpeg_cancellation_interrupt_callback;
+    format_context.interrupt_callback.opaque = interrupt_context.get();
+}
+
+bool cancellation_interrupt_requested(
+    const std::shared_ptr<CancellationInterruptContext> &interrupt_context
+) noexcept {
+    if (!interrupt_context || !interrupt_context->cancellation_requested) {
+        return false;
+    }
+
+    try {
+        return interrupt_context->cancellation_requested();
+    } catch (...) {
+        return false;
+    }
+}
+
 struct CodecParametersDeleter final {
     void operator()(AVCodecParameters *parameters) const noexcept {
         if (parameters == nullptr) {
@@ -249,6 +304,7 @@ struct AudioCopyTemplate final {
 };
 
 struct SegmentDecoderResources final {
+    std::shared_ptr<CancellationInterruptContext> interrupt_context{};
     FormatContextHandle format_context{};
     CodecContextHandle video_decoder{};
     AVStream *video_stream{nullptr};
@@ -1457,10 +1513,23 @@ private:
     std::optional<double> smoothed_fps_{};
 };
 
-FormatContextHandle open_format_context(const std::string &input_path_string) {
-    AVFormatContext *raw_format_context = nullptr;
+FormatContextHandle open_format_context(
+    const std::string &input_path_string,
+    const std::shared_ptr<CancellationInterruptContext> &interrupt_context = {}
+) {
+    AVFormatContext *raw_allocated_context = avformat_alloc_context();
+    if (raw_allocated_context == nullptr) {
+        throw std::runtime_error("Failed to allocate an FFmpeg input format context.");
+    }
+
+    attach_cancellation_interrupt_callback(*raw_allocated_context, interrupt_context);
+    AVFormatContext *raw_format_context = raw_allocated_context;
     const auto open_result = avformat_open_input(&raw_format_context, input_path_string.c_str(), nullptr, nullptr);
     if (open_result < 0) {
+        avformat_close_input(&raw_format_context);
+        if (cancellation_interrupt_requested(interrupt_context)) {
+            throw std::runtime_error(std::string(job::kEncodeJobCanceledException));
+        }
         throw std::runtime_error(
             "Failed to open media input '" + input_path_string + "'. FFmpeg reported: " +
             ffmpeg_support::ffmpeg_error_to_string(open_result)
@@ -1468,8 +1537,12 @@ FormatContextHandle open_format_context(const std::string &input_path_string) {
     }
 
     FormatContextHandle format_context(raw_format_context);
+    attach_cancellation_interrupt_callback(*format_context, interrupt_context);
     const auto stream_info_result = avformat_find_stream_info(format_context.get(), nullptr);
     if (stream_info_result < 0) {
+        if (cancellation_interrupt_requested(interrupt_context)) {
+            throw std::runtime_error(std::string(job::kEncodeJobCanceledException));
+        }
         throw std::runtime_error(
             "Failed to read stream information from '" + input_path_string + "'. FFmpeg reported: " +
             ffmpeg_support::ffmpeg_error_to_string(stream_info_result)
@@ -1554,10 +1627,12 @@ SegmentDecoderResources open_segment_resources(
     const timeline::TimelineSegmentPlan &segment_plan,
     const bool decode_audio,
     const TranscodeThreadingSettings &threading_settings,
-    const std::uint32_t logical_core_count
+    const std::uint32_t logical_core_count,
+    const std::function<bool()> &cancellation_requested
 ) {
     const auto input_path_string = segment_plan.source_path.lexically_normal().string();
-    auto format_context = open_format_context(input_path_string);
+    auto interrupt_context = make_cancellation_interrupt_context(cancellation_requested);
+    auto format_context = open_format_context(input_path_string, interrupt_context);
 
     const auto &video_stream_info = *segment_plan.inspected_source_info.primary_video_stream;
     if (video_stream_info.stream_index < 0 ||
@@ -1588,6 +1663,7 @@ SegmentDecoderResources open_segment_resources(
     }
 
     return SegmentDecoderResources{
+        .interrupt_context = std::move(interrupt_context),
         .format_context = std::move(format_context),
         .video_decoder = std::move(opened_video_decoder.context),
         .video_stream = video_stream,
@@ -1598,13 +1674,17 @@ SegmentDecoderResources open_segment_resources(
     };
 }
 
-std::optional<AudioCopyTemplate> build_audio_copy_template(const timeline::TimelineSegmentPlan &segment_plan) {
+std::optional<AudioCopyTemplate> build_audio_copy_template(
+    const timeline::TimelineSegmentPlan &segment_plan,
+    const std::function<bool()> &cancellation_requested
+) {
     if (!segment_plan.inspected_source_info.primary_audio_stream.has_value()) {
         return std::nullopt;
     }
 
     const auto input_path_string = segment_plan.source_path.lexically_normal().string();
-    auto format_context = open_format_context(input_path_string);
+    const auto interrupt_context = make_cancellation_interrupt_context(cancellation_requested);
+    auto format_context = open_format_context(input_path_string, interrupt_context);
     const auto &audio_stream_info = *segment_plan.inspected_source_info.primary_audio_stream;
     if (audio_stream_info.stream_index < 0 ||
         audio_stream_info.stream_index >= static_cast<int>(format_context->nb_streams)) {
@@ -2280,7 +2360,10 @@ EncoderSelection select_encoder(const OutputVideoCodec codec) {
     }
 }
 
-OutputFormatContextHandle create_output_context(const std::string &output_path_string) {
+OutputFormatContextHandle create_output_context(
+    const std::string &output_path_string,
+    const std::shared_ptr<CancellationInterruptContext> &interrupt_context = {}
+) {
     AVFormatContext *raw_format_context = nullptr;
     const auto format_result = avformat_alloc_output_context2(
         &raw_format_context,
@@ -2295,6 +2378,7 @@ OutputFormatContextHandle create_output_context(const std::string &output_path_s
         );
     }
 
+    attach_cancellation_interrupt_callback(*raw_format_context, interrupt_context);
     return OutputFormatContextHandle(raw_format_context);
 }
 
@@ -2318,6 +2402,10 @@ void open_output_file(AVFormatContext &format_context, const std::filesystem::pa
     const auto output_path_string = output_path.string();
     const auto open_result = avio_open(&format_context.pb, output_path_string.c_str(), AVIO_FLAG_WRITE);
     if (open_result < 0) {
+        if (format_context.interrupt_callback.callback != nullptr &&
+            format_context.interrupt_callback.callback(format_context.interrupt_callback.opaque) != 0) {
+            throw std::runtime_error(std::string(job::kEncodeJobCanceledException));
+        }
         throw std::runtime_error(
             "Failed to open the output file '" + output_path_string + "'. FFmpeg reported: " +
             ffmpeg_support::ffmpeg_error_to_string(open_result)
@@ -2655,6 +2743,7 @@ public:
           audio_plan_(audio_plan),
           audio_copy_template_(std::move(audio_copy_template)),
           cancellation_requested_(std::move(cancellation_requested)),
+          interrupt_context_(make_cancellation_interrupt_context(cancellation_requested_)),
           partial_output_cleanup_(request.output_path.lexically_normal()) {
         const auto output_path = request.output_path.lexically_normal();
         const auto output_path_string = output_path.string();
@@ -2666,7 +2755,7 @@ public:
             throw std::runtime_error("The software encoder backends require even frame dimensions for yuv420p output.");
         }
 
-        output_context_ = create_output_context(output_path_string);
+        output_context_ = create_output_context(output_path_string, interrupt_context_);
         AVStream *raw_video_stream = avformat_new_stream(output_context_.get(), nullptr);
         if (raw_video_stream == nullptr) {
             throw std::runtime_error("Failed to create the output video stream.");
@@ -2707,6 +2796,7 @@ public:
 
         const auto header_result = avformat_write_header(output_context_.get(), nullptr);
         if (header_result < 0) {
+            throw_if_cancellation_requested(cancellation_requested_);
             throw std::runtime_error(
                 "Failed to write the output container header. FFmpeg reported: " +
                 ffmpeg_support::ffmpeg_error_to_string(header_result)
@@ -2803,6 +2893,7 @@ public:
         const auto write_result = av_interleaved_write_frame(output_context_.get(), packet.get());
         av_packet_unref(packet.get());
         if (write_result < 0) {
+            throw_if_cancellation_requested(cancellation_requested_);
             throw std::runtime_error(
                 "Failed to mux a copied audio packet. FFmpeg reported: " +
                 ffmpeg_support::ffmpeg_error_to_string(write_result)
@@ -2840,6 +2931,7 @@ public:
             throw_if_cancellation_requested(cancellation_requested_);
             const auto trailer_result = av_write_trailer(output_context_.get());
             if (trailer_result < 0) {
+                throw_if_cancellation_requested(cancellation_requested_);
                 throw std::runtime_error(
                     "Failed to finalize the output container. FFmpeg reported: " +
                     ffmpeg_support::ffmpeg_error_to_string(trailer_result)
@@ -3320,6 +3412,7 @@ private:
         const auto write_result = av_interleaved_write_frame(output_context_.get(), &packet);
         av_packet_unref(&packet);
         if (write_result < 0) {
+            throw_if_cancellation_requested(cancellation_requested_);
             throw std::runtime_error(
                 "Failed to mux an encoded streaming packet. FFmpeg reported: " +
                 ffmpeg_support::ffmpeg_error_to_string(write_result)
@@ -3373,6 +3466,7 @@ private:
     std::optional<AudioOutputPlan> audio_plan_{};
     std::optional<AudioCopyTemplate> audio_copy_template_{};
     std::function<bool()> cancellation_requested_{};
+    std::shared_ptr<CancellationInterruptContext> interrupt_context_{};
     PartialOutputCleanupGuard partial_output_cleanup_;
     OutputFormatContextHandle output_context_{};
     CodecContextHandle video_codec_context_{};
@@ -3787,7 +3881,8 @@ SegmentProcessResult process_segment(
         segment_plan,
         encode_audio,
         threading_settings,
-        runtime_behavior.effective_logical_core_count
+        runtime_behavior.effective_logical_core_count,
+        cancellation_requested
     );
     seek_segment_to_trim_start(segment_plan, resources);
     PacketHandle demux_packet = allocate_packet();
@@ -4766,6 +4861,7 @@ SegmentProcessResult process_segment(
         drain_ready_processed_video_frames();
     }
 
+    throw_if_cancellation_requested(cancellation_requested);
     send_packet_or_throw(*resources.video_decoder, nullptr);
     receive_video_frames();
 
@@ -5333,7 +5429,8 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
         std::optional<AudioCopyTemplate> audio_copy_template{};
         if (audio_output_plan.has_value() && audio_output_plan->copies_audio()) {
             audio_copy_template = build_audio_copy_template(
-                timeline_plan.segments[timeline_plan.main_segment_index]
+                timeline_plan.segments[timeline_plan.main_segment_index],
+                request.cancellation_requested
             );
             if (!audio_copy_template.has_value()) {
                 return make_error(

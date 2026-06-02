@@ -49,9 +49,12 @@ public:
 
     [[nodiscard]] QString window_structure_summary() const;
     enum class UiJobState : std::uint8_t {
-        pending = 0,
-        encoding,
-        finished,
+        queued = 0,
+        starting,
+        running,
+        cancel_requested,
+        finishing,
+        completed,
         failed,
         canceled
     };
@@ -61,7 +64,7 @@ public:
         QString source_name{};
         QString type_label{};
         bool checked{true};
-        UiJobState state{UiJobState::pending};
+        UiJobState state{UiJobState::queued};
         QString output_name_custom_text{};
         QString output_path{};
         bool output_path_manual_override{false};
