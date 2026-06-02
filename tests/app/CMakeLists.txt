@@ -70,6 +70,10 @@ qt_add_executable(utsure_app_encode_job_runner_lifecycle_tests
     "${CMAKE_SOURCE_DIR}/src/app/encode_job_progress_qt_types.hpp"
 )
 
+set_target_properties(utsure_app_encode_job_runner_lifecycle_tests PROPERTIES
+  AUTOMOC ON
+)
+
 target_include_directories(utsure_app_encode_job_runner_lifecycle_tests
     PRIVATE
         "${CMAKE_SOURCE_DIR}/src/app"
