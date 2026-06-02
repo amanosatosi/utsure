@@ -7,6 +7,7 @@
 #include <QCoreApplication>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QMetaObject>
 #include <QThread>
 #include <QTimer>
 
@@ -776,6 +777,7 @@ int run_real_parallel_pair_assertion(
     bool second_succeeded = false;
     bool first_canceled = false;
     bool second_canceled = false;
+    std::atomic_bool first_cancel_requested{false};
 
     EncodeJobRunnerController first_controller;
     EncodeJobRunnerController second_controller;
@@ -783,9 +785,18 @@ int run_real_parallel_pair_assertion(
         &first_controller,
         &EncodeJobRunnerController::progress_changed,
         &first_controller,
-        [&first_streaming](const EncodeJobProgress &progress) {
+        [&first_controller, &first_streaming, &first_cancel_requested, cancel_first_job](const EncodeJobProgress &progress) {
             if (progress.stage == EncodeJobStage::encoding_output) {
                 first_streaming = true;
+                if (cancel_first_job && !first_cancel_requested.exchange(true)) {
+                    QMetaObject::invokeMethod(
+                        &first_controller,
+                        [&first_controller]() {
+                            first_controller.cancel_job();
+                        },
+                        Qt::QueuedConnection
+                    );
+                }
             }
         }
     );
@@ -828,39 +839,7 @@ int run_real_parallel_pair_assertion(
     }
 
     if (cancel_first_job) {
-        if (!wait_until([&]() { return first_streaming || first_finished; }, 15000)) {
-            log_real_parallel_state(
-                label,
-                "cancel_start_timeout",
-                first_streaming,
-                second_streaming,
-                first_finished,
-                second_finished,
-                first_succeeded,
-                second_succeeded,
-                first_canceled,
-                second_canceled,
-                initial_quarantine_count
-            );
-            return fail("Real parallel cancel smoke did not observe the first job entering active encode work.");
-        }
-        if (first_finished) {
-            log_real_parallel_state(
-                label,
-                "cancel_start_finished_early",
-                first_streaming,
-                second_streaming,
-                first_finished,
-                second_finished,
-                first_succeeded,
-                second_succeeded,
-                first_canceled,
-                second_canceled,
-                initial_quarantine_count
-            );
-            return fail("Real parallel cancel smoke finished the first job before cancellation could be exercised.");
-        }
-        first_controller.cancel_job();
+        // Cancellation is requested by the first encoding_output progress callback above.
     } else if (!wait_until([&]() {
             return (first_streaming || first_finished) && (second_streaming || second_finished);
         }, 15000)) {
@@ -898,6 +877,22 @@ int run_real_parallel_pair_assertion(
     }
 
     if (cancel_first_job) {
+        if (!first_cancel_requested.load()) {
+            log_real_parallel_state(
+                label,
+                "cancel_not_requested_before_finish",
+                first_streaming,
+                second_streaming,
+                first_finished,
+                second_finished,
+                first_succeeded,
+                second_succeeded,
+                first_canceled,
+                second_canceled,
+                initial_quarantine_count
+            );
+            return fail("Real parallel cancel smoke finished before the first encoding progress callback requested cancellation.");
+        }
         if (!first_canceled || !second_succeeded || second_canceled) {
             log_real_parallel_state(
                 label,
