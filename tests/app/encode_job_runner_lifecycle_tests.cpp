@@ -88,6 +88,41 @@ void log_parallel_resource_context(
     std::cout << '\n';
 }
 
+void log_real_parallel_state(
+    const char *label,
+    const char *reason,
+    const bool first_streaming,
+    const bool second_streaming,
+    const bool first_finished,
+    const bool second_finished,
+    const bool first_succeeded,
+    const bool second_succeeded,
+    const bool first_canceled,
+    const bool second_canceled,
+    const std::size_t initial_quarantine_count
+) {
+    const auto current_quarantine_count = EncodeJobRunnerController::quarantined_worker_count_for_tests();
+    std::cerr << label
+              << "." << reason
+              << ": first_streaming=" << first_streaming
+              << " second_streaming=" << second_streaming
+              << " first_finished=" << first_finished
+              << " second_finished=" << second_finished
+              << " first_succeeded=" << first_succeeded
+              << " second_succeeded=" << second_succeeded
+              << " first_canceled=" << first_canceled
+              << " second_canceled=" << second_canceled
+              << " quarantine_current=" << current_quarantine_count
+              << " quarantine_initial=" << initial_quarantine_count;
+    if (const auto memory = sample_process_memory(); memory.has_value()) {
+        std::cerr << " current_rss=" << memory->rss_bytes
+                  << " peak_rss=" << memory->peak_rss_bytes;
+    } else {
+        std::cerr << " current_rss=unavailable peak_rss=unavailable";
+    }
+    std::cerr << '\n';
+}
+
 int fail(const char *message) {
     std::cerr << message << '\n';
     return 1;
@@ -316,6 +351,7 @@ int run_reentrant_finished_starts_next_job_assertion() {
     std::atomic_int started_count{0};
     std::atomic_int finished_count{0};
     int job_finished_count = 0;
+    bool reentrant_start_accepted = false;
     EncodeJobRunnerController controller(make_blocking_worker(started_count, finished_count));
     QObject::connect(
         &controller,
@@ -324,9 +360,7 @@ int run_reentrant_finished_starts_next_job_assertion() {
         [&](const bool, const bool, const QString &, const QString &, const QString &) {
             ++job_finished_count;
             if (job_finished_count == 1) {
-                if (!controller.start_job(make_lifecycle_job("second-reentrant.mp4"))) {
-                    return;
-                }
+                reentrant_start_accepted = controller.start_job(make_lifecycle_job("second-reentrant.mp4"));
             }
         }
     );
@@ -338,6 +372,12 @@ int run_reentrant_finished_starts_next_job_assertion() {
         return fail("First reentrant fake job did not start.");
     }
     controller.cancel_job();
+    if (!wait_until([&]() { return job_finished_count >= 1; }, 2000)) {
+        return fail("First reentrant fake job did not finish after cancel.");
+    }
+    if (!reentrant_start_accepted) {
+        return fail("job_finished handler could not start the second reentrant job.");
+    }
     if (!wait_until([&]() { return started_count.load() == 2; }, 2000)) {
         return fail("job_finished handler did not start the second job.");
     }
@@ -787,28 +827,107 @@ int run_real_parallel_pair_assertion(
         return fail("Real parallel smoke could not start both encode jobs.");
     }
 
-    if (!wait_until([&]() {
-            return (first_streaming || first_finished) && (second_streaming || second_finished);
-        }, 15000)) {
-        return fail("Real parallel smoke did not observe both jobs entering active encode work.");
-    }
-
     if (cancel_first_job) {
+        if (!wait_until([&]() { return first_streaming || first_finished; }, 15000)) {
+            log_real_parallel_state(
+                label,
+                "cancel_start_timeout",
+                first_streaming,
+                second_streaming,
+                first_finished,
+                second_finished,
+                first_succeeded,
+                second_succeeded,
+                first_canceled,
+                second_canceled,
+                initial_quarantine_count
+            );
+            return fail("Real parallel cancel smoke did not observe the first job entering active encode work.");
+        }
         if (first_finished) {
+            log_real_parallel_state(
+                label,
+                "cancel_start_finished_early",
+                first_streaming,
+                second_streaming,
+                first_finished,
+                second_finished,
+                first_succeeded,
+                second_succeeded,
+                first_canceled,
+                second_canceled,
+                initial_quarantine_count
+            );
             return fail("Real parallel cancel smoke finished the first job before cancellation could be exercised.");
         }
         first_controller.cancel_job();
+    } else if (!wait_until([&]() {
+            return (first_streaming || first_finished) && (second_streaming || second_finished);
+        }, 15000)) {
+        log_real_parallel_state(
+            label,
+            "active_work_timeout",
+            first_streaming,
+            second_streaming,
+            first_finished,
+            second_finished,
+            first_succeeded,
+            second_succeeded,
+            first_canceled,
+            second_canceled,
+            initial_quarantine_count
+        );
+        return fail("Real parallel smoke did not observe both jobs entering active encode work.");
     }
 
     if (!wait_until([&]() { return first_finished && second_finished; }, 30000)) {
+        log_real_parallel_state(
+            label,
+            "finish_timeout",
+            first_streaming,
+            second_streaming,
+            first_finished,
+            second_finished,
+            first_succeeded,
+            second_succeeded,
+            first_canceled,
+            second_canceled,
+            initial_quarantine_count
+        );
         return fail("Real parallel smoke did not finish before timeout.");
     }
 
     if (cancel_first_job) {
         if (!first_canceled || !second_succeeded || second_canceled) {
+            log_real_parallel_state(
+                label,
+                "unexpected_cancel_outcome",
+                first_streaming,
+                second_streaming,
+                first_finished,
+                second_finished,
+                first_succeeded,
+                second_succeeded,
+                first_canceled,
+                second_canceled,
+                initial_quarantine_count
+            );
             return fail("Real parallel cancel smoke did not preserve cancel-one/success-other outcomes.");
         }
     } else if (!first_succeeded || !second_succeeded || first_canceled || second_canceled) {
+        log_real_parallel_state(
+            label,
+            "unexpected_success_outcome",
+            first_streaming,
+            second_streaming,
+            first_finished,
+            second_finished,
+            first_succeeded,
+            second_succeeded,
+            first_canceled,
+            second_canceled,
+            initial_quarantine_count
+        );
         return fail("Real parallel smoke did not complete both jobs successfully.");
     }
 
@@ -980,22 +1099,17 @@ int run_cancel_idle_assertion() {
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
 
-    if (run_cancel_idle_assertion() != 0 ||
-        run_cancel_while_active_assertion() != 0 ||
-        run_destroy_while_active_assertion() != 0 ||
-        run_reentrant_finished_starts_next_job_assertion() != 0 ||
-        run_deterministic_queue_assertion() != 0 ||
-        run_failed_start_acceptance_assertion() != 0 ||
-        run_queue_layer_dispatch_assertion() != 0 ||
-        run_parallel_controller_smoke_assertion() != 0) {
-        return 1;
-    }
-
-    if (argc == 6 && std::string_view(argv[1]) == "--real-cancel-destroy") {
+    if (argc >= 2 && std::string_view(argv[1]) == "--real-cancel-destroy") {
+        if (argc != 6) {
+            return fail("Usage: utsure_app_encode_job_runner_lifecycle_tests --real-cancel-destroy <input> <subtitle> <cancel-output> <destroy-output>");
+        }
         return run_real_cancel_and_destroy_assertion(argv[2], argv[3], argv[4], argv[5]);
     }
 
-    if (argc == 10 && std::string_view(argv[1]) == "--real-parallel-smokes") {
+    if (argc >= 2 && std::string_view(argv[1]) == "--real-parallel-smokes") {
+        if (argc != 10) {
+            return fail("Usage: utsure_app_encode_job_runner_lifecycle_tests --real-parallel-smokes <input> <subtitle> <no-sub-a> <no-sub-b> <sub-a> <sub-b> <cancel-a> <cancel-b>");
+        }
         return run_real_parallel_smoke_assertions(
             argv[2],
             argv[3],
@@ -1006,6 +1120,21 @@ int main(int argc, char **argv) {
             argv[8],
             argv[9]
         );
+    }
+
+    if (argc != 1) {
+        return fail("Unknown mode for utsure_app_encode_job_runner_lifecycle_tests.");
+    }
+
+    if (run_cancel_idle_assertion() != 0 ||
+        run_cancel_while_active_assertion() != 0 ||
+        run_destroy_while_active_assertion() != 0 ||
+        run_reentrant_finished_starts_next_job_assertion() != 0 ||
+        run_deterministic_queue_assertion() != 0 ||
+        run_failed_start_acceptance_assertion() != 0 ||
+        run_queue_layer_dispatch_assertion() != 0 ||
+        run_parallel_controller_smoke_assertion() != 0) {
+        return 1;
     }
 
     return 0;

@@ -208,6 +208,11 @@ if(UTSURE_APP_FFMPEG_EXECUTABLE)
 
     add_test(
         NAME utsure.app.encode_job_runner.lifecycle
+        COMMAND utsure_app_encode_job_runner_lifecycle_tests
+    )
+
+    add_test(
+        NAME utsure.app.encode_job_runner.real_cancel_destroy
         COMMAND utsure_app_encode_job_runner_lifecycle_tests --real-cancel-destroy
             "${UTSURE_APP_LIFECYCLE_MAIN_FILE}"
             "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
@@ -239,6 +244,10 @@ set_tests_properties(utsure.app.encode_job_runner.lifecycle PROPERTIES
     TIMEOUT 45
 )
 if(UTSURE_APP_FFMPEG_EXECUTABLE)
+    set_tests_properties(utsure.app.encode_job_runner.real_cancel_destroy PROPERTIES
+        ENVIRONMENT "UTSURE_FONTCOLLECTOR_PATH=${UTSURE_APP_TEST_FONTCOLLECTOR_STUB}"
+        TIMEOUT 45
+    )
     set_tests_properties(utsure.app.encode_job_runner.parallel_smokes PROPERTIES
         ENVIRONMENT "UTSURE_FONTCOLLECTOR_PATH=${UTSURE_APP_TEST_FONTCOLLECTOR_STUB}"
         TIMEOUT 90
@@ -248,4 +257,5 @@ endif()
 utsure_label_tests_matching("^utsure\\.app\\.settings\\." unit smoke)
 utsure_label_tests_matching("^utsure\\.app\\.ui_font$" integration smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.lifecycle$" integration smoke)
+utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.real_cancel_destroy$" integration media smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.parallel_smokes$" integration media smoke)

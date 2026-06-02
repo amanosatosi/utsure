@@ -77,6 +77,45 @@ cmake --build "${build_dir}" --target utsure_core_subtitle_bitmap_compositor_tes
 cmake --build "${build_dir}" --target utsure_core_subtitle_burn_in_tests --parallel
 
 ctest --test-dir "${build_dir}" -N
+ctest --test-dir "${build_dir}" --show-only=json-v1 > "${build_dir}/ctest-tests.json"
+python - "${build_dir}/ctest-tests.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+def executable_candidates(raw_command):
+    normalized = raw_command.replace("\\", "/")
+    candidates = [Path(raw_command), Path(normalized)]
+    if len(normalized) >= 3 and normalized[1] == ":" and normalized[2] == "/":
+        candidates.append(Path(f"/{normalized[0].lower()}{normalized[2:]}"))
+    return candidates
+
+report_path = Path(sys.argv[1])
+with report_path.open("r", encoding="utf-8") as stream:
+    report = json.load(stream)
+
+missing = []
+for test in report.get("tests", []):
+    command = test.get("command", [])
+    if not command:
+        continue
+    candidates = executable_candidates(command[0])
+    candidates.extend(
+        (report_path.parent / candidate).resolve()
+        for candidate in list(candidates)
+        if not candidate.is_absolute()
+    )
+    if not any(candidate.exists() for candidate in candidates):
+        missing.append((test.get("name", "<unnamed>"), command[0]))
+
+if missing:
+    print("CTest build-wiring error: registered test executables are missing:", file=sys.stderr)
+    for name, executable in missing:
+        print(f"  {name}: {executable}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"Verified {len(report.get('tests', []))} registered CTest command executable(s) exist.")
+PY
 ctest --test-dir "${build_dir}" --print-labels
 ctest --test-dir "${build_dir}" --output-on-failure "${ctest_args[@]}"
 

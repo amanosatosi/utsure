@@ -1238,6 +1238,7 @@ Implemented first step:
   * Added real-media app/controller parallel smokes for two no-subtitle jobs, two subtitle burn-in jobs, and cancel-one/finish-one subtitle jobs using generated media.
   * Added per-queue and per-runner-slot parallel diagnostics with active job count, job index, planned decoder/encoder threads, estimated worker counts, estimated total threads, overcommit flag, and Windows current/peak RSS where available.
   * Renamed the production quarantine counter to `quarantined_worker_count()`, keeping the test wrapper for existing assertions.
+  * Follow-up hardened test/build wiring before further parallel production changes: split lifecycle fake, real cancel/destroy, and real parallel smoke CTest modes; made real parallel cancel-one cancel on first active encode progress; added timeout state/RSS/quarantine diagnostics; and added a CI sanity check that every registered CTest executable exists before running tests.
 
 Next steps:
   * Add a scheduled/manual serialized-subtitle parallel run with `UTSURE_SERIALIZE_SUBTITLE_SETUP=1` if CI time allows.
