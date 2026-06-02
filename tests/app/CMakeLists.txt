@@ -62,6 +62,9 @@ add_test(
 set_tests_properties(utsure.app.ui_font PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 find_program(UTSURE_APP_FFMPEG_EXECUTABLE NAMES ffmpeg)
+if(NOT UTSURE_APP_FFMPEG_EXECUTABLE AND DEFINED ENV{CI})
+    message(FATAL_ERROR "ffmpeg is required in CI for the app encode-runner real cancel/destroy lifecycle smoke.")
+endif()
 
 set(UTSURE_APP_TEST_MEDIA_DIR "${CMAKE_CURRENT_BINARY_DIR}/media")
 set(UTSURE_APP_LIFECYCLE_MAIN_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-lifecycle-main.mp4")
@@ -159,7 +162,7 @@ if(UTSURE_APP_FFMPEG_EXECUTABLE)
             "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
     )
 else()
-    message(WARNING "ffmpeg was not found; app lifecycle tests will run fake queue/controller coverage without the real encode cancel/destroy smoke.")
+    message(WARNING "ffmpeg was not found; app lifecycle tests will run fake queue/controller coverage, but the real cancel/destroy encode smoke is skipped for this local configure.")
 endif()
 
 

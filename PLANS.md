@@ -1188,6 +1188,7 @@ Completed:
   * Follow-up made queue item states explicit (`queued`, `starting`, `running`, `cancel_requested`, `finishing`, `completed`, `failed`, `canceled`) and added fake 12-job queue coverage for non-overlap, queued cancellation, active cancellation, and continued deterministic dispatch.
   * Follow-up added app/controller real encode lifecycle coverage using generated 1.5x subtitle burn-in media, exercising active cancel and destroy during streaming work with CTest timeouts.
   * Follow-up changed `EncodeJobRunnerController::start_job()` to report acceptance, updated queue dispatch so refused starts fail visibly instead of becoming fake running rows, added quarantine-count assertions to real lifecycle coverage, and added queue-layer dispatch coverage for 12 planned jobs through a MainWindow-like runner-slot path.
+  * Follow-up made `start_job()` acceptance depend on a running worker thread and a successfully queued `invokeMethod`, with state rollback on queue failure; CI now requires ffmpeg for the real app lifecycle smoke while local config keeps fake lifecycle coverage.
 
 ### Test-suite tiering and CI cleanup
 

@@ -161,7 +161,11 @@ std::size_t EncodeJobRunnerController::quarantined_worker_count_for_tests() noex
 }
 
 bool EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &job) {
-    if (is_running() || worker_ == nullptr || worker_thread_ == nullptr || shutting_down_) {
+    if (is_running() ||
+        worker_ == nullptr ||
+        worker_thread_ == nullptr ||
+        !worker_thread_->isRunning() ||
+        shutting_down_) {
         return false;
     }
 
@@ -181,13 +185,20 @@ bool EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &jo
             .arg(QString::fromUtf8(utsure::core::job::to_display_string(job.execution.process_priority)))
     );
 
-    QMetaObject::invokeMethod(
+    const bool queued = QMetaObject::invokeMethod(
         worker_,
         [worker = worker_, job]() {
             worker->run_job(job);
         },
         Qt::QueuedConnection
     );
+    if (!queued) {
+        state_ = RunnerState::idle;
+        worker_thread_->setPriority(QThread::NormalPriority);
+        emit log_message("[error] Failed to queue encode work on the worker thread.");
+        emit running_changed(false);
+        return false;
+    }
     return true;
 }
 
