@@ -14,16 +14,19 @@ extern "C" {
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -273,7 +276,8 @@ double choose_pixel_aspect_ratio(const media::Rational &sample_aspect_ratio) {
 }
 
 std::string format_renderer_setup_diagnostics(
-    const SubtitleRenderSessionCreateRequest &request
+    const SubtitleRenderSessionCreateRequest &request,
+    const std::size_t image_asset_count
 ) {
     std::ostringstream message;
     message << "libassmod renderer setup: frame_size="
@@ -284,6 +288,8 @@ std::string format_renderer_setup_diagnostics(
             << ", use_margins=0"
             << ", font.default_family=Arial"
             << ", font.provider=autodetect"
+            << ", setup.thread_id=" << std::this_thread::get_id()
+            << ", image_assets=" << image_asset_count
             << ", libassmod_ref=" << UTSURE_LIBASSMOD_REF;
     if (request.font_search_directory.has_value()) {
         message << ", font.directory=" << path_to_utf8_string(*request.font_search_directory);
@@ -292,6 +298,21 @@ std::string format_renderer_setup_diagnostics(
     }
 
     return message.str();
+}
+
+bool should_serialize_subtitle_setup() noexcept {
+    const char *value = std::getenv("UTSURE_SERIALIZE_SUBTITLE_SETUP");
+    if (value == nullptr || value[0] == '\0') {
+        return false;
+    }
+
+    const std::string normalized = runtime::lowercase_ascii(std::string(value));
+    return normalized == "1" || normalized == "true" || normalized == "on" || normalized == "yes";
+}
+
+std::mutex &subtitle_setup_mutex() {
+    static std::mutex mutex;
+    return mutex;
 }
 
 LibraryHandle create_library() {
@@ -978,7 +999,7 @@ private:
             return;
         }
 
-        request.debug_context->log_callback(format_renderer_setup_diagnostics(create_request_));
+        request.debug_context->log_callback(format_renderer_setup_diagnostics(create_request_, image_assets_.size()));
         renderer_setup_diagnostics_logged_ = true;
     }
 
@@ -1101,6 +1122,18 @@ public:
     [[nodiscard]] SubtitleRenderSessionResult create_session(
         const SubtitleRenderSessionCreateRequest &request
     ) noexcept override {
+        if (should_serialize_subtitle_setup()) {
+            const std::lock_guard lock(subtitle_setup_mutex());
+            return create_session_impl(request);
+        }
+
+        return create_session_impl(request);
+    }
+
+private:
+    [[nodiscard]] SubtitleRenderSessionResult create_session_impl(
+        const SubtitleRenderSessionCreateRequest &request
+    ) noexcept {
         try {
             if (request.subtitle_path.empty()) {
                 return make_session_error(

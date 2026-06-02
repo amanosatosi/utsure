@@ -4,11 +4,14 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
@@ -34,6 +37,11 @@ constexpr std::size_t kMaxInlineToolLogBytes = 8192;
 struct FontRecoveryCacheEntry final {
     std::shared_ptr<SubtitleFontRecoveryArtifacts> artifacts{};
     SubtitleFontRecoveryReport report{};
+};
+
+struct FontRecoveryInFlightEntry final {
+    bool completed{false};
+    std::condition_variable completed_cv{};
 };
 
 std::string lowercase_ascii(std::string value) {
@@ -115,10 +123,16 @@ std::uint64_t current_process_id() {
 #endif
 }
 
+std::uint64_t next_temporary_root_counter() noexcept {
+    static std::atomic<std::uint64_t> next_counter{1};
+    return next_counter.fetch_add(1, std::memory_order_relaxed);
+}
+
 std::filesystem::path make_temporary_root() {
     const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
     const auto root_name =
-        "utsure-fontcollector-" + std::to_string(current_process_id()) + "-" + std::to_string(timestamp);
+        "utsure-fontcollector-" + std::to_string(current_process_id()) + "-" +
+        std::to_string(timestamp) + "-" + std::to_string(next_temporary_root_counter());
     return std::filesystem::temp_directory_path() / root_name;
 }
 
@@ -334,6 +348,68 @@ std::unordered_map<std::string, FontRecoveryCacheEntry> &font_recovery_cache() {
     return cache;
 }
 
+std::unordered_map<std::string, std::shared_ptr<FontRecoveryInFlightEntry>> &font_recovery_in_flight() {
+    static std::unordered_map<std::string, std::shared_ptr<FontRecoveryInFlightEntry>> in_flight;
+    return in_flight;
+}
+
+class FontRecoveryInFlightGuard final {
+public:
+    FontRecoveryInFlightGuard() = default;
+    FontRecoveryInFlightGuard(
+        std::string key,
+        std::shared_ptr<FontRecoveryInFlightEntry> entry
+    )
+        : key_(std::move(key)),
+          entry_(std::move(entry)) {}
+
+    FontRecoveryInFlightGuard(const FontRecoveryInFlightGuard &) = delete;
+    FontRecoveryInFlightGuard &operator=(const FontRecoveryInFlightGuard &) = delete;
+
+    FontRecoveryInFlightGuard(FontRecoveryInFlightGuard &&other) noexcept
+        : key_(std::move(other.key_)),
+          entry_(std::move(other.entry_)),
+          active_(std::exchange(other.active_, false)) {}
+
+    FontRecoveryInFlightGuard &operator=(FontRecoveryInFlightGuard &&other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+
+        complete();
+        key_ = std::move(other.key_);
+        entry_ = std::move(other.entry_);
+        active_ = std::exchange(other.active_, false);
+        return *this;
+    }
+
+    ~FontRecoveryInFlightGuard() {
+        complete();
+    }
+
+private:
+    void complete() noexcept {
+        if (!active_ || key_.empty() || !entry_) {
+            return;
+        }
+
+        {
+            std::lock_guard lock(font_recovery_cache_mutex());
+            entry_->completed = true;
+            const auto in_flight = font_recovery_in_flight().find(key_);
+            if (in_flight != font_recovery_in_flight().end() && in_flight->second == entry_) {
+                font_recovery_in_flight().erase(in_flight);
+            }
+        }
+        entry_->completed_cv.notify_all();
+        active_ = false;
+    }
+
+    std::string key_{};
+    std::shared_ptr<FontRecoveryInFlightEntry> entry_{};
+    bool active_{true};
+};
+
 std::optional<std::string> make_font_recovery_cache_key(
     const std::filesystem::path &subtitle_path,
     const std::filesystem::path &fontcollector_executable
@@ -479,12 +555,28 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
     }
 
     const auto cache_key = make_font_recovery_cache_key(normalized_subtitle_path, *fontcollector_executable);
+    FontRecoveryInFlightGuard in_flight_guard{};
     if (cache_key.has_value()) {
-        std::lock_guard lock(font_recovery_cache_mutex());
-        const auto cached_entry = font_recovery_cache().find(*cache_key);
-        if (cached_entry != font_recovery_cache().end()) {
-            apply_cached_font_recovery_entry(prepared_request, cached_entry->second);
-            return prepared_request;
+        for (;;) {
+            std::unique_lock lock(font_recovery_cache_mutex());
+            const auto cached_entry = font_recovery_cache().find(*cache_key);
+            if (cached_entry != font_recovery_cache().end()) {
+                apply_cached_font_recovery_entry(prepared_request, cached_entry->second);
+                return prepared_request;
+            }
+
+            const auto in_flight_entry = font_recovery_in_flight().find(*cache_key);
+            if (in_flight_entry == font_recovery_in_flight().end()) {
+                auto entry = std::make_shared<FontRecoveryInFlightEntry>();
+                font_recovery_in_flight()[*cache_key] = entry;
+                in_flight_guard = FontRecoveryInFlightGuard(*cache_key, std::move(entry));
+                break;
+            }
+
+            auto entry = in_flight_entry->second;
+            entry->completed_cv.wait(lock, [&entry]() {
+                return entry->completed;
+            });
         }
     }
 

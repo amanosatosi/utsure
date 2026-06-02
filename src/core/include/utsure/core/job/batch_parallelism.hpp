@@ -20,6 +20,13 @@ struct ParallelBatchSummary final {
     bool enabled{false};
     int selected_job_count{1};
     int threads_per_job{1};
+    int decoder_threads_per_job{1};
+    int encoder_threads_per_job{1};
+    std::size_t video_workers_per_job{1};
+    std::size_t subtitle_workers_per_job{1};
+    int estimated_threads_per_job{1};
+    int estimated_total_threads{1};
+    bool estimated_threads_exceed_usable_cores{false};
     std::size_t video_frame_queue_depth{70};
 };
 

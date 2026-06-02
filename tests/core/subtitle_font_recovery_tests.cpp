@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -99,6 +100,8 @@ std::filesystem::path make_fontcollector_stub(const std::filesystem::path &root)
         "shift\r\n"
         "goto parse\r\n"
         ":parsed\r\n"
+        "if not \"%UTSURE_FONTCOLLECTOR_STUB_COUNT_LOG%\"==\"\" echo launch>>\"%UTSURE_FONTCOLLECTOR_STUB_COUNT_LOG%\"\r\n"
+        "if /I \"%UTSURE_FONTCOLLECTOR_STUB_DELAY%\"==\"1\" ping -n 2 127.0.0.1 >nul\r\n"
         "if not \"%LOG_PATH%\"==\"\" if /I not \"%UTSURE_FONTCOLLECTOR_STUB_MODE%\"==\"fail-no-log\" echo fontcollector stub>\"%LOG_PATH%\"\r\n"
         "if /I \"%UTSURE_FONTCOLLECTOR_STUB_MODE%\"==\"success\" (\r\n"
         "  if not exist \"%OUTPUT_DIR%\" mkdir \"%OUTPUT_DIR%\"\r\n"
@@ -137,6 +140,8 @@ std::filesystem::path make_fontcollector_stub(const std::filesystem::path &root)
         "      ;;\n"
         "  esac\n"
         "done\n"
+        "if [ -n \"$UTSURE_FONTCOLLECTOR_STUB_COUNT_LOG\" ]; then printf \"launch\\n\" >> \"$UTSURE_FONTCOLLECTOR_STUB_COUNT_LOG\"; fi\n"
+        "if [ \"$UTSURE_FONTCOLLECTOR_STUB_DELAY\" = \"1\" ]; then sleep 1; fi\n"
         "if [ -n \"$LOG_PATH\" ] && [ \"$UTSURE_FONTCOLLECTOR_STUB_MODE\" != \"fail-no-log\" ]; then printf \"fontcollector stub\" > \"$LOG_PATH\"; fi\n"
         "case \"$UTSURE_FONTCOLLECTOR_STUB_MODE\" in\n"
         "  success)\n"
@@ -460,6 +465,64 @@ int assert_failed_tool_preserves_diagnostic_log(const std::filesystem::path &roo
     return 0;
 }
 
+std::size_t count_lines(const std::filesystem::path &path) {
+    std::ifstream stream(path, std::ios::binary);
+    std::size_t count = 0;
+    std::string line{};
+    while (std::getline(stream, line)) {
+        ++count;
+    }
+    return count;
+}
+
+int assert_concurrent_recovery_shares_in_flight_result(
+    const std::filesystem::path &root,
+    const std::filesystem::path &tool_path
+) {
+    const ScopedEnvironmentVariable stub_mode("UTSURE_FONTCOLLECTOR_STUB_MODE", std::string("success"));
+    const ScopedEnvironmentVariable stub_delay("UTSURE_FONTCOLLECTOR_STUB_DELAY", std::string("1"));
+    const auto launch_log_path = root / "fontcollector-launch-count.log";
+    const ScopedEnvironmentVariable count_log("UTSURE_FONTCOLLECTOR_STUB_COUNT_LOG", launch_log_path.string());
+    const auto subtitle_path = root / "episode07.ass";
+    write_text_file(subtitle_path, "[Script Info]\nTitle: episode07\n");
+
+    PreparedSubtitleRenderSessionRequest first_result{};
+    PreparedSubtitleRenderSessionRequest second_result{};
+    std::thread first_thread([&]() {
+        first_result = prepare_subtitle_render_session_request(
+            make_session_request(subtitle_path),
+            SubtitleFontRecoveryOptions{
+                .fontcollector_executable_override = tool_path
+            }
+        );
+    });
+    std::thread second_thread([&]() {
+        second_result = prepare_subtitle_render_session_request(
+            make_session_request(subtitle_path),
+            SubtitleFontRecoveryOptions{
+                .fontcollector_executable_override = tool_path
+            }
+        );
+    });
+    first_thread.join();
+    second_thread.join();
+
+    if (first_result.font_recovery_report.outcome != SubtitleFontRecoveryOutcome::recovered_fonts ||
+        second_result.font_recovery_report.outcome != SubtitleFontRecoveryOutcome::recovered_fonts ||
+        !first_result.session_request.font_search_directory.has_value() ||
+        !second_result.session_request.font_search_directory.has_value() ||
+        *first_result.session_request.font_search_directory != *second_result.session_request.font_search_directory) {
+        return fail("Concurrent font recovery did not share the recovered in-flight result.");
+    }
+
+    if (count_lines(launch_log_path) != 1U) {
+        return fail("Concurrent font recovery launched duplicate FontCollector work for the same key.");
+    }
+
+    std::cout << "fontcollector.concurrent_launches=1\n";
+    return 0;
+}
+
 int assert_burn_in_pipeline_blocks_missing_primary_fontcollector(const std::filesystem::path &root) {
     const ScopedEnvironmentVariable fontcollector_path(
         "UTSURE_FONTCOLLECTOR_PATH",
@@ -557,6 +620,10 @@ int main() {
     }
 
     if (assert_failed_tool_preserves_diagnostic_log(root, tool_path) != 0) {
+        return 1;
+    }
+
+    if (assert_concurrent_recovery_shares_in_flight_result(root, tool_path) != 0) {
         return 1;
     }
 

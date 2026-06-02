@@ -24,6 +24,9 @@ int assert_divisor_selection_and_buffer_tiers() {
         12U
     );
     if (disabled.enabled || disabled.selected_job_count != 1 || disabled.threads_per_job != 12 ||
+        disabled.decoder_threads_per_job != 0 || disabled.encoder_threads_per_job != 0 ||
+        disabled.video_workers_per_job != 0U || disabled.subtitle_workers_per_job != 0U ||
+        disabled.estimated_total_threads != 12 || disabled.estimated_threads_exceed_usable_cores ||
         disabled.video_frame_queue_depth != 70U) {
         return fail("Disabled parallel mode did not preserve the single-job default behavior.");
     }
@@ -41,6 +44,9 @@ int assert_divisor_selection_and_buffer_tiers() {
         12U
     );
     if (!two_jobs.enabled || two_jobs.selected_job_count != 2 || two_jobs.threads_per_job != 6 ||
+        two_jobs.decoder_threads_per_job != 1 || two_jobs.encoder_threads_per_job != 2 ||
+        two_jobs.video_workers_per_job != 1U || two_jobs.subtitle_workers_per_job != 1U ||
+        two_jobs.estimated_total_threads != 12 || two_jobs.estimated_threads_exceed_usable_cores ||
         two_jobs.video_frame_queue_depth != 40U) {
         return fail("Two-job parallel planning did not resolve the expected threads/job or buffer/job values.");
     }
@@ -53,6 +59,8 @@ int assert_divisor_selection_and_buffer_tiers() {
         12U
     );
     if (four_jobs.selected_job_count != 4 || four_jobs.threads_per_job != 3 ||
+        four_jobs.decoder_threads_per_job != 1 || four_jobs.encoder_threads_per_job != 1 ||
+        four_jobs.estimated_total_threads != 20 || !four_jobs.estimated_threads_exceed_usable_cores ||
         four_jobs.video_frame_queue_depth != 20U) {
         return fail("Four-job parallel planning did not resolve the expected threads/job or buffer/job values.");
     }
@@ -120,8 +128,8 @@ int assert_execution_settings_application() {
         12U
     );
     BatchParallelism::apply_execution_settings(job, enabled);
-    if (job.execution.threading.decoder_thread_count_override != 4 ||
-        job.execution.threading.encoder_thread_count_override != 4 ||
+    if (job.execution.threading.decoder_thread_count_override != 1 ||
+        job.execution.threading.encoder_thread_count_override != 1 ||
         job.execution.threading.logical_core_count_override != 4U ||
         job.execution.video_frame_queue_depth_override != 40U) {
         return fail("Enabled parallel mode did not inject the planned thread/buffer settings into the job.");
@@ -129,6 +137,30 @@ int assert_execution_settings_application() {
 
     std::cout << "parallel.apply_threads=" << *job.execution.threading.encoder_thread_count_override << '\n';
     std::cout << "parallel.apply_buffer=" << *job.execution.video_frame_queue_depth_override << '\n';
+    return 0;
+}
+
+int assert_resource_plan_does_not_double_spend_codec_threads() {
+    const auto summary = BatchParallelism::summarize(
+        ParallelBatchSettings{
+            .enabled = true,
+            .requested_job_count = 4
+        },
+        16U
+    );
+
+    if (summary.threads_per_job != 4 ||
+        summary.decoder_threads_per_job + summary.encoder_threads_per_job > summary.threads_per_job ||
+        summary.decoder_threads_per_job != 1 ||
+        summary.encoder_threads_per_job != 1 ||
+        summary.estimated_total_threads != 20 ||
+        !summary.estimated_threads_exceed_usable_cores) {
+        return fail("Parallel resource plan still double-spends or hides planned thread overcommit.");
+    }
+
+    std::cout << "parallel.resource.decoder=" << summary.decoder_threads_per_job << '\n';
+    std::cout << "parallel.resource.encoder=" << summary.encoder_threads_per_job << '\n';
+    std::cout << "parallel.resource.total_threads=" << summary.estimated_total_threads << '\n';
     return 0;
 }
 
@@ -144,6 +176,10 @@ int main() {
     }
 
     if (assert_execution_settings_application() != 0) {
+        return 1;
+    }
+
+    if (assert_resource_plan_does_not_double_spend_codec_threads() != 0) {
         return 1;
     }
 

@@ -115,10 +115,14 @@ EncodeJobRunnerWorker *make_blocking_worker(
 EncodeJobRunnerWorker *make_queue_worker(
     std::atomic_int &started_count,
     std::atomic_int &active_count,
-    std::atomic_int &max_active_count
+    std::atomic_int &max_active_count,
+    const int fake_job_ticks = 20
 ) {
     return new EncodeJobRunnerWorker(
-        [&started_count, &active_count, &max_active_count](const EncodeJob &job, const EncodeJobRunOptions &options) {
+        [&started_count, &active_count, &max_active_count, fake_job_ticks](
+            const EncodeJob &job,
+            const EncodeJobRunOptions &options
+        ) {
             ++started_count;
             const int active = ++active_count;
             int observed_max = max_active_count.load();
@@ -131,12 +135,11 @@ EncodeJobRunnerWorker *make_queue_worker(
                 }
             } active_guard{active_count};
 
-    constexpr int kFakeQueueJobTicks = 20;
-    for (int tick = 0; tick < kFakeQueueJobTicks; ++tick) {
-        if (options.cancellation_requested && options.cancellation_requested()) {
-            return make_canceled_result(job);
-        }
-        QThread::msleep(5);
+            for (int tick = 0; tick < fake_job_ticks; ++tick) {
+                if (options.cancellation_requested && options.cancellation_requested()) {
+                    return make_canceled_result(job);
+                }
+                QThread::msleep(5);
             }
 
             return make_success_result(job);
@@ -573,6 +576,70 @@ int run_queue_layer_dispatch_assertion() {
     return 0;
 }
 
+int run_parallel_controller_smoke_assertion() {
+    constexpr int kLongFakeJobTicks = 200;
+    const auto initial_quarantine_count = EncodeJobRunnerController::quarantined_worker_count_for_tests();
+    std::atomic_int started_count{0};
+    std::atomic_int active_count{0};
+    std::atomic_int max_active_count{0};
+    bool first_finished = false;
+    bool first_canceled = false;
+    bool second_finished = false;
+    bool second_succeeded = false;
+
+    EncodeJobRunnerController first_controller(
+        make_queue_worker(started_count, active_count, max_active_count, kLongFakeJobTicks)
+    );
+    EncodeJobRunnerController second_controller(
+        make_queue_worker(started_count, active_count, max_active_count, kLongFakeJobTicks)
+    );
+
+    QObject::connect(
+        &first_controller,
+        &EncodeJobRunnerController::job_finished,
+        &first_controller,
+        [&](const bool, const bool canceled, const QString &, const QString &, const QString &) {
+            first_finished = true;
+            first_canceled = canceled;
+        }
+    );
+    QObject::connect(
+        &second_controller,
+        &EncodeJobRunnerController::job_finished,
+        &second_controller,
+        [&](const bool succeeded, const bool, const QString &, const QString &, const QString &) {
+            second_finished = true;
+            second_succeeded = succeeded;
+        }
+    );
+
+    if (!first_controller.start_job(make_lifecycle_job("parallel-first.mp4")) ||
+        !second_controller.start_job(make_lifecycle_job("parallel-second.mp4"))) {
+        return fail("Parallel controller smoke could not start both fake jobs.");
+    }
+
+    if (!wait_until([&]() { return started_count.load() == 2 && max_active_count.load() >= 2; }, 2000)) {
+        return fail("Parallel controller smoke did not observe two concurrently active jobs.");
+    }
+
+    first_controller.cancel_job();
+    if (!wait_until([&]() { return first_finished && second_finished; }, 5000)) {
+        return fail("Parallel controller smoke did not finish/cancel both jobs before timeout.");
+    }
+
+    if (!first_canceled || !second_succeeded || active_count.load() != 0) {
+        return fail("Parallel controller smoke did not preserve per-job cancel/success outcomes.");
+    }
+
+    if (EncodeJobRunnerController::quarantined_worker_count_for_tests() != initial_quarantine_count) {
+        return fail("Parallel controller smoke used the encode-worker quarantine fallback.");
+    }
+
+    std::cout << "runner_lifecycle.parallel_fake_jobs=2\n";
+    std::cout << "runner_lifecycle.parallel_fake_max_active=" << max_active_count.load() << '\n';
+    return 0;
+}
+
 int run_real_cancel_and_destroy_assertion(
     const std::filesystem::path &input_path,
     const std::filesystem::path &subtitle_path,
@@ -678,7 +745,8 @@ int main(int argc, char **argv) {
         run_reentrant_finished_starts_next_job_assertion() != 0 ||
         run_deterministic_queue_assertion() != 0 ||
         run_failed_start_acceptance_assertion() != 0 ||
-        run_queue_layer_dispatch_assertion() != 0) {
+        run_queue_layer_dispatch_assertion() != 0 ||
+        run_parallel_controller_smoke_assertion() != 0) {
         return 1;
     }
 

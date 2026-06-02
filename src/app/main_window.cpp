@@ -3234,6 +3234,10 @@ void MainWindow::show_parallel_settings_dialog() {
     auto *job_count_combo = new QComboBox(&dialog);
     auto *usable_threads_value = new QLabel(&dialog);
     auto *threads_per_job_value = new QLabel(&dialog);
+    auto *decoder_threads_value = new QLabel(&dialog);
+    auto *encoder_threads_value = new QLabel(&dialog);
+    auto *workers_per_job_value = new QLabel(&dialog);
+    auto *total_threads_value = new QLabel(&dialog);
     auto *buffer_per_job_value = new QLabel(&dialog);
 
     const std::uint32_t usable_thread_count = parallel_batch_summary_.usable_thread_count;
@@ -3269,6 +3273,18 @@ void MainWindow::show_parallel_settings_dialog() {
         job_count_combo->setEnabled(enable_parallel_check->isChecked());
         usable_threads_value->setText(QString::number(dialog_summary.usable_thread_count));
         threads_per_job_value->setText(QString::number(dialog_summary.threads_per_job));
+        decoder_threads_value->setText(QString::number(dialog_summary.decoder_threads_per_job));
+        encoder_threads_value->setText(QString::number(dialog_summary.encoder_threads_per_job));
+        workers_per_job_value->setText(
+            QString("video %1, subtitle %2")
+                .arg(static_cast<qulonglong>(dialog_summary.video_workers_per_job))
+                .arg(static_cast<qulonglong>(dialog_summary.subtitle_workers_per_job))
+        );
+        total_threads_value->setText(
+            QString("%1%2")
+                .arg(dialog_summary.estimated_total_threads)
+                .arg(dialog_summary.estimated_threads_exceed_usable_cores ? " (exceeds usable cores)" : "")
+        );
         buffer_per_job_value->setText(QString("%1 frames").arg(dialog_summary.video_frame_queue_depth));
     };
 
@@ -3276,7 +3292,11 @@ void MainWindow::show_parallel_settings_dialog() {
     form_layout->addRow(QString(), enable_parallel_check);
     form_layout->addRow("Jobs", job_count_combo);
     form_layout->addRow("Usable threads", usable_threads_value);
-    form_layout->addRow("Threads/job", threads_per_job_value);
+    form_layout->addRow("Thread budget/job", threads_per_job_value);
+    form_layout->addRow("Decoder threads/job", decoder_threads_value);
+    form_layout->addRow("Encoder threads/job", encoder_threads_value);
+    form_layout->addRow("Workers/job", workers_per_job_value);
+    form_layout->addRow("Estimated total threads", total_threads_value);
     form_layout->addRow("Buffer/job", buffer_per_job_value);
     layout->addLayout(form_layout);
 
@@ -3301,10 +3321,16 @@ void MainWindow::show_parallel_settings_dialog() {
     parallel_batch_settings_.requested_job_count = std::max(job_count_combo->currentData().toInt(), 1);
     refresh_parallel_batch_summary();
     append_session_log(
-        QString("[info] Parallel batch encoding %1. Jobs: %2 | Threads/job: %3 | Buffer/job: %4 frames.")
+        QString("[info] Parallel batch encoding %1. Jobs: %2 | Thread budget/job: %3 | Decoder/job: %4 | Encoder/job: %5 | Video workers/job: %6 | Subtitle workers/job: %7 | Estimated total threads: %8%9 | Buffer/job: %10 frames.")
             .arg(parallel_batch_summary_.enabled ? "enabled" : "disabled")
             .arg(parallel_batch_summary_.selected_job_count)
             .arg(parallel_batch_summary_.threads_per_job)
+            .arg(parallel_batch_summary_.decoder_threads_per_job)
+            .arg(parallel_batch_summary_.encoder_threads_per_job)
+            .arg(static_cast<qulonglong>(parallel_batch_summary_.video_workers_per_job))
+            .arg(static_cast<qulonglong>(parallel_batch_summary_.subtitle_workers_per_job))
+            .arg(parallel_batch_summary_.estimated_total_threads)
+            .arg(parallel_batch_summary_.estimated_threads_exceed_usable_cores ? " (exceeds usable cores)" : "")
             .arg(parallel_batch_summary_.video_frame_queue_depth)
     );
     refresh_toolbar_state();
@@ -5495,14 +5521,22 @@ void MainWindow::handle_preflighted_queue_jobs(std::vector<MainWindow::Preflight
         return;
     }
 
+    queue_quarantine_baseline_ = EncodeJobRunnerController::quarantined_worker_count_for_tests();
     queue_run_active_ = true;
     ensure_runner_slot_count(configured_parallel_job_count());
     append_session_log(
-        QString("[info] Starting queue with %1 job(s). Parallel %2 | Jobs: %3 | Threads/job: %4 | Buffer/job: %5 frames.")
+        QString("[info] Starting queue with %1 job(s). Parallel %2 | Active jobs: %3 | Usable cores: %4 | Thread budget/job: %5 | Decoder/job: %6 | Encoder/job: %7 | Video workers/job: %8 | Subtitle workers/job: %9 | Estimated total threads: %10%11 | Buffer/job: %12 frames.")
             .arg(planned_queue_jobs_.size())
             .arg(parallel_batch_summary_.enabled ? "On" : "Off")
             .arg(parallel_batch_summary_.selected_job_count)
+            .arg(parallel_batch_summary_.usable_thread_count)
             .arg(parallel_batch_summary_.threads_per_job)
+            .arg(parallel_batch_summary_.decoder_threads_per_job)
+            .arg(parallel_batch_summary_.encoder_threads_per_job)
+            .arg(static_cast<qulonglong>(parallel_batch_summary_.video_workers_per_job))
+            .arg(static_cast<qulonglong>(parallel_batch_summary_.subtitle_workers_per_job))
+            .arg(parallel_batch_summary_.estimated_total_threads)
+            .arg(parallel_batch_summary_.estimated_threads_exceed_usable_cores ? " (exceeds usable cores)" : "")
             .arg(parallel_batch_summary_.video_frame_queue_depth)
     );
     refresh_all_views();
@@ -5511,6 +5545,18 @@ void MainWindow::handle_preflighted_queue_jobs(std::vector<MainWindow::Preflight
 
 void MainWindow::start_available_queued_jobs() {
     if (!queue_run_active_) {
+        return;
+    }
+
+    const std::size_t quarantine_count = EncodeJobRunnerController::quarantined_worker_count_for_tests();
+    if (quarantine_count > queue_quarantine_baseline_) {
+        stop_requested_ = true;
+        append_session_log(
+            QString("[error] Encode worker quarantine increased during queue run; stopping further dispatch. Quarantine count: %1 (baseline %2).")
+                .arg(static_cast<qulonglong>(quarantine_count))
+                .arg(static_cast<qulonglong>(queue_quarantine_baseline_))
+        );
+        refresh_all_views();
         return;
     }
 
@@ -5602,6 +5648,7 @@ void MainWindow::finish_queue_run() {
     stop_requested_ = false;
     planned_queue_jobs_.clear();
     queue_cursor_ = 0;
+    queue_quarantine_baseline_ = EncodeJobRunnerController::quarantined_worker_count_for_tests();
     for (auto &slot : runner_slots_) {
         slot.active_job_index = -1;
         slot.elapsed_valid = false;

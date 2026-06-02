@@ -12,6 +12,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -300,6 +301,7 @@ private:
     std::vector<RunnerSlot> runner_slots_{};
     int selected_job_index_{-1};
     int queue_cursor_{0};
+    std::size_t queue_quarantine_baseline_{0};
     bool queue_run_active_{false};
     bool queue_start_planning_active_{false};
     bool stop_requested_{false};

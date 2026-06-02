@@ -1216,6 +1216,30 @@ Next cleanup steps:
   * Continue replacing broad encode regressions with seam/unit tests for normalization decisions where possible, keeping one small encode smoke test for each critical pipeline path.
   * Keep improving media-test failure logs so expected/actual counts, output dimensions, job error/hint, output paths, and first/last diagnostics are visible on the first CI run.
 
+### M34 Parallel encode mode hardening
+
+Status: Started; first resource/concurrency slice implemented
+
+Scope:
+  * Keep parallel mode available for power users while making its resource accounting honest.
+  * Avoid double-spending a per-job thread budget across decoder and encoder subsystems.
+  * Add diagnostics and tests around subtitle setup/font recovery concurrency that can affect parallel jobs.
+
+Implemented first step:
+  * Added an explicit parallel resource plan to `BatchParallelism` with decoder threads/job, encoder threads/job, video workers/job, subtitle workers/job, estimated threads/job, estimated total active threads, and an overcommit flag.
+  * Changed parallel execution settings so the full per-job budget is not assigned to both decoder and encoder; decoder threads prefer 1 in parallel mode and encoder threads use remaining budget after worker/overhead allowances.
+  * Updated app parallel settings and queue-start logs to show active jobs, usable cores, per-job budget split, estimated total threads, overcommit status, and buffer depth.
+  * Added a resource-plan regression test proving codec thread overrides no longer double-spend the budget.
+  * Added `UTSURE_SERIALIZE_SUBTITLE_SETUP=1` to serialize libassmod subtitle session setup when debugging parallel subtitle crashes, and expanded renderer setup diagnostics with setup thread id and image asset count.
+  * Made FontCollector recovery temporary roots include pid, timestamp, and an atomic counter, and added in-flight sharing so identical concurrent font recovery requests wait for one active FontCollector run.
+  * Added a font recovery concurrency test that verifies identical parallel requests launch one FontCollector process.
+  * Added a queue-run quarantine baseline so any worker quarantine during a queue run logs a fatal lifecycle diagnostic and stops further dispatch.
+  * Added a CI-cheap fake parallel controller smoke that runs two active controllers concurrently, cancels one job, lets the other finish, and asserts quarantine did not increase.
+
+Next steps:
+  * Add CI-cheap real-media parallel no-subtitle and subtitle burn-in smokes through the app/controller path.
+  * Add global parallel working-set/RSS diagnostics that sum the active job estimates and log per-runner-slot memory context.
+
 ## Immediate next milestone
 
-Re-run GitHub Actions for M27/M28/M29/M30/M31/M32/M33 validation, then resume pending M24/M25 external validation work.
+Re-run GitHub Actions for M27/M28/M29/M30/M31/M32/M33 validation, then continue M34 parallel stress validation.
