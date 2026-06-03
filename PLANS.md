@@ -1259,6 +1259,7 @@ Implemented:
   * Convert always-visible profile buttons into combo selection and context-menu actions.
   * Add focused app-settings tests for required profile defaults and same-name profile preservation.
   * Update the app structure smoke summary to describe the compact Profiles/Resolution row and revised Video/Audio groups.
+  * Follow-up equalized the Profiles/Resolution and Video/Audio group spacing, removed the Resolution `Output` label, limited combo content growth so long audio-track names do not squeeze Video, and reduced built-in/loadable profiles to `Default` and `Low Size`.
 
 ## Immediate next milestone
 

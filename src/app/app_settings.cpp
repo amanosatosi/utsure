@@ -232,6 +232,10 @@ std::vector<AppSettings::EncodingProfile> encoding_profiles_from_json(const QJso
         if (!profile.has_value()) {
             continue;
         }
+        if (profile->name.compare("Default", Qt::CaseInsensitive) != 0 &&
+            profile->name.compare("Low Size", Qt::CaseInsensitive) != 0) {
+            continue;
+        }
         const auto duplicate_name = std::find_if(
             profiles.begin(),
             profiles.end(),
@@ -585,81 +589,6 @@ std::vector<AppSettings::EncodingProfile> AppSettings::default_encoding_profiles
             .resize = utsure::core::job::EncodeResizeSettings{
                 .mode = utsure::core::job::EncodeResizeMode::target_height,
                 .target_height = 540,
-                .allow_upscale = false
-            }
-        },
-        EncodingProfile{
-            .name = "H.264 1080p Compatibility",
-            .encode = LastUsedEncodeChoices{
-                .codec = utsure::core::media::OutputVideoCodec::h264,
-                .preset = "fast",
-                .crf = 22,
-                .audio_mode = utsure::core::media::AudioOutputMode::encode_aac,
-                .audio_bitrate_kbps = 192
-            },
-            .resize = utsure::core::job::EncodeResizeSettings{
-                .mode = utsure::core::job::EncodeResizeMode::target_height,
-                .target_height = 1080,
-                .allow_upscale = false
-            }
-        },
-        EncodingProfile{
-            .name = "HEVC 1080p Quality",
-            .encode = LastUsedEncodeChoices{
-                .codec = utsure::core::media::OutputVideoCodec::h265,
-                .preset = "slow",
-                .crf = 18,
-                .audio_mode = utsure::core::media::AudioOutputMode::encode_aac,
-                .audio_bitrate_kbps = 192
-            },
-            .resize = utsure::core::job::EncodeResizeSettings{
-                .mode = utsure::core::job::EncodeResizeMode::target_height,
-                .target_height = 1080,
-                .allow_upscale = false
-            }
-        },
-        EncodingProfile{
-            .name = "HEVC 720p Smaller",
-            .encode = LastUsedEncodeChoices{
-                .codec = utsure::core::media::OutputVideoCodec::h265,
-                .preset = "medium",
-                .crf = 21,
-                .audio_mode = utsure::core::media::AudioOutputMode::encode_aac,
-                .audio_bitrate_kbps = 160
-            },
-            .resize = utsure::core::job::EncodeResizeSettings{
-                .mode = utsure::core::job::EncodeResizeMode::target_height,
-                .target_height = 720,
-                .allow_upscale = false
-            }
-        },
-        EncodingProfile{
-            .name = "HEVC 540p Data Saver",
-            .encode = LastUsedEncodeChoices{
-                .codec = utsure::core::media::OutputVideoCodec::h265,
-                .preset = "medium",
-                .crf = 23,
-                .audio_mode = utsure::core::media::AudioOutputMode::encode_aac,
-                .audio_bitrate_kbps = 128
-            },
-            .resize = utsure::core::job::EncodeResizeSettings{
-                .mode = utsure::core::job::EncodeResizeMode::target_height,
-                .target_height = 540,
-                .allow_upscale = false
-            }
-        },
-        EncodingProfile{
-            .name = "HEVC 480p Small",
-            .encode = LastUsedEncodeChoices{
-                .codec = utsure::core::media::OutputVideoCodec::h265,
-                .preset = "medium",
-                .crf = 25,
-                .audio_mode = utsure::core::media::AudioOutputMode::encode_aac,
-                .audio_bitrate_kbps = 128
-            },
-            .resize = utsure::core::job::EncodeResizeSettings{
-                .mode = utsure::core::job::EncodeResizeMode::target_height,
-                .target_height = 480,
                 .allow_upscale = false
             }
         }

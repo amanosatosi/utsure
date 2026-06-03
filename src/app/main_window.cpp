@@ -1683,20 +1683,24 @@ QLabel#PreviewTimeBadge {
     auto *profile_group = new QGroupBox("Profiles", encode_tab_content);
     auto *profile_layout = new QVBoxLayout(profile_group);
     profile_combo_ = new QComboBox(profile_group);
+    profile_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    profile_combo_->setMinimumContentsLength(18);
     profile_combo_->setContextMenuPolicy(Qt::CustomContextMenu);
     profile_combo_->setToolTip("Select a saved profile, or right-click an active saved profile to update, rename, or remove it.");
     profile_layout->addWidget(profile_combo_);
-    encode_top_row->addWidget(profile_group, 2);
+    encode_top_row->addWidget(profile_group, 1);
 
     auto *resolution_group = new QGroupBox("Resolution", encode_tab_content);
-    auto *resolution_layout = new QFormLayout(resolution_group);
+    auto *resolution_layout = new QVBoxLayout(resolution_group);
     resize_preset_combo_ = new QComboBox(resolution_group);
+    resize_preset_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    resize_preset_combo_->setMinimumContentsLength(18);
     resize_preset_combo_->addItem("Source", 0);
     resize_preset_combo_->addItem("1080p", 1080);
     resize_preset_combo_->addItem("720p", 720);
     resize_preset_combo_->addItem("540p", 540);
     resize_preset_combo_->addItem("480p", 480);
-    resolution_layout->addRow("Output", resize_preset_combo_);
+    resolution_layout->addWidget(resize_preset_combo_);
     encode_top_row->addWidget(resolution_group, 1);
     encode_tab_layout->addLayout(encode_top_row);
 
@@ -1707,9 +1711,13 @@ QLabel#PreviewTimeBadge {
     auto *video_group = new QGroupBox("Video", encode_tab_content);
     auto *video_layout = new QFormLayout(video_group);
     video_codec_combo_ = new QComboBox(video_group);
+    video_codec_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    video_codec_combo_->setMinimumContentsLength(18);
     video_codec_combo_->addItem("H.265", static_cast<int>(utsure::core::media::OutputVideoCodec::h265));
     video_codec_combo_->addItem("H.264", static_cast<int>(utsure::core::media::OutputVideoCodec::h264));
     preset_combo_ = new QComboBox(video_group);
+    preset_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    preset_combo_->setMinimumContentsLength(18);
     preset_combo_->addItems(QStringList{
         "ultrafast",
         "superfast",
@@ -1730,6 +1738,8 @@ QLabel#PreviewTimeBadge {
     auto *audio_group = new QGroupBox("Audio", encode_tab_content);
     auto *audio_layout = new QFormLayout(audio_group);
     audio_format_combo_ = new QComboBox(audio_group);
+    audio_format_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    audio_format_combo_->setMinimumContentsLength(18);
     audio_format_combo_->addItem("Auto", static_cast<int>(utsure::core::media::AudioOutputMode::auto_select));
     audio_format_combo_->addItem("AAC", static_cast<int>(utsure::core::media::AudioOutputMode::encode_aac));
     audio_format_combo_->addItem(
@@ -1738,12 +1748,16 @@ QLabel#PreviewTimeBadge {
     );
     audio_format_combo_->addItem("No audio", static_cast<int>(utsure::core::media::AudioOutputMode::disable));
     audio_quality_combo_ = new QComboBox(audio_group);
+    audio_quality_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    audio_quality_combo_->setMinimumContentsLength(18);
     audio_quality_combo_->addItem("128 kbps", 128);
     audio_quality_combo_->addItem("160 kbps", 160);
     audio_quality_combo_->addItem("192 kbps", 192);
     audio_quality_combo_->addItem("256 kbps", 256);
     audio_quality_combo_->addItem("320 kbps", 320);
     audio_track_combo_ = new QComboBox(audio_group);
+    audio_track_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    audio_track_combo_->setMinimumContentsLength(18);
     audio_layout->addRow("Format", audio_format_combo_);
     audio_layout->addRow("Quality", audio_quality_combo_);
     audio_layout->addRow("Track", audio_track_combo_);

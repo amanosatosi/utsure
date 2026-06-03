@@ -172,7 +172,7 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
     };
     settings.encoding_profiles = {
         AppSettings::EncodingProfile{
-            .name = "HEVC 540p Data Saver",
+            .name = "Default",
             .encode = AppSettings::LastUsedEncodeChoices{
                 .codec = utsure::core::media::OutputVideoCodec::h265,
                 .preset = "medium",
@@ -187,7 +187,7 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
             }
         }
     };
-    settings.last_used_profile = "HEVC 540p Data Saver";
+    settings.last_used_profile = "Default";
     settings.set_sequence_counter_value("bdrip|show", 12);
 
     QString save_error;
@@ -196,7 +196,7 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
     }
 
     const auto loaded = AppSettings::load(config_path);
-    const auto *roundtrip_profile = find_profile(loaded.settings.encoding_profiles, "HEVC 540p Data Saver");
+    const auto *roundtrip_profile = find_profile(loaded.settings.encoding_profiles, "Default");
     if (!loaded.warning.isEmpty() ||
         loaded.settings.last_used.codec != utsure::core::media::OutputVideoCodec::h264 ||
         loaded.settings.last_used.preset != "slow" ||
@@ -216,7 +216,8 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
         roundtrip_profile->encode.audio_bitrate_kbps != 128 ||
         find_profile(loaded.settings.encoding_profiles, "Default") == nullptr ||
         find_profile(loaded.settings.encoding_profiles, "Low Size") == nullptr ||
-        loaded.settings.last_used_profile != "HEVC 540p Data Saver" ||
+        loaded.settings.encoding_profiles.size() != 2U ||
+        loaded.settings.last_used_profile != "Default" ||
         !loaded.settings.toshi_mode_enabled ||
         loaded.settings.sequence_counter_value("bdrip|show") != 12) {
         return fail("Settings JSON did not round-trip encode choices, naming tokens, UI font, Toshi mode, and counters.");
@@ -263,6 +264,12 @@ int assert_required_encoding_profiles_are_available(const std::filesystem::path 
             {"video", QJsonObject{{"codec", "h264"}, {"preset", "slow"}, {"crf", 35}}},
             {"audio", QJsonObject{{"mode", "aac"}, {"bitrateKbps", 256}}},
             {"resize", QJsonObject{{"mode", "targetHeight"}, {"height", 480}}}
+        },
+        QJsonObject{
+            {"name", "HEVC 540p Data Saver"},
+            {"video", QJsonObject{{"codec", "h265"}, {"preset", "medium"}, {"crf", 23}}},
+            {"audio", QJsonObject{{"mode", "aac"}, {"bitrateKbps", 128}}},
+            {"resize", QJsonObject{{"mode", "targetHeight"}, {"height", 540}}}
         }
     });
     QFile file(config_path);
@@ -281,6 +288,7 @@ int assert_required_encoding_profiles_are_available(const std::filesystem::path 
         preserved_default->encode.audio_bitrate_kbps != 256 ||
         preserved_default->resize.target_height != 480 ||
         loaded_low_size == nullptr ||
+        find_profile(loaded.settings.encoding_profiles, "HEVC 540p Data Saver") != nullptr ||
         loaded.settings.encoding_profiles.size() != 2U) {
         return fail("Loading existing profiles did not preserve same-name profiles while adding missing required defaults.");
     }
