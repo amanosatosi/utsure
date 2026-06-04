@@ -1321,6 +1321,15 @@ Implemented:
   * Switched Windows CI builds to `RelWithDebInfo`, uploads a separate symbols artifact, and strips root portable binaries before zipping to avoid unnecessary normal bundle bloat.
   * Added developer documentation for collecting crash dumps and matching them with CI symbols.
 
+Hardening follow-up:
+  * Reordered crash writing so `MiniDumpWriteDump` runs before sidecar snapshot/JSON writing; sidecar failure no longer blocks dump creation.
+  * Added `UTSURE_CRASH_DUMP_DIR` for test/debug dump-directory overrides while preserving the default `%LOCALAPPDATA%/Utsure/crash-dumps`.
+  * Added per-runner-slot crash contexts, crashing-thread id, last-updated runner slot, and active job count to the sidecar collection JSON.
+  * Moved active encode job counting from controller finish handling into the worker execution guard so disconnect/shutdown/quarantine paths cannot strand the count.
+  * Kept access violations on the Windows unhandled-exception filter path with `EXCEPTION_POINTERS` by not registering a `SIGSEGV` handler.
+  * Added a Windows-only controlled child-process crash smoke inside the crash dump writer test; the parent asserts `.dmp` output and sidecar context without crashing the test process.
+  * Extended symbols packaging to capture unstripped build-tree project DLLs if any are introduced later, while portable stripping remains limited to root bundle binaries.
+
 Validation:
   * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
   * Static validation included `git diff --check` and a targeted `QThread::terminate` search over source, tests, scripts, and workflows.

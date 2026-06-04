@@ -71,6 +71,14 @@ struct CrashContextSnapshot final {
     std::string last_log_message{};
 };
 
+struct CrashContextCollectionSnapshot final {
+    unsigned long crashing_thread_id{0};
+    int last_updated_runner_slot{-1};
+    int active_job_count{0};
+    CrashContextSnapshot last_updated_context{};
+    std::vector<CrashContextSnapshot> runner_contexts{};
+};
+
 struct CrashArtifactPaths final {
     std::filesystem::path dump_path{};
     std::filesystem::path sidecar_path{};
@@ -93,6 +101,7 @@ struct CrashDumpWriteResult final {
     unsigned long process_id
 );
 [[nodiscard]] std::string crash_context_to_json(const CrashContextSnapshot &snapshot);
+[[nodiscard]] std::string crash_context_collection_to_json(const CrashContextCollectionSnapshot &snapshot);
 [[nodiscard]] std::vector<CrashArtifactPaths> find_recent_crash_artifacts(
     const std::filesystem::path &directory,
     std::size_t max_count = 5
@@ -100,14 +109,20 @@ struct CrashDumpWriteResult final {
 
 void reset_crash_context_for_tests();
 void update_crash_context(const CrashContextUpdate &update);
+void set_current_thread_runner_slot(int runner_slot_index) noexcept;
+void clear_current_thread_runner_slot() noexcept;
+[[nodiscard]] int begin_active_encode_job(int runner_slot_index) noexcept;
+[[nodiscard]] int end_active_encode_job(int runner_slot_index) noexcept;
+[[nodiscard]] int current_active_encode_job_count() noexcept;
 void update_crash_context_from_progress(const utsure::core::job::EncodeJobProgress &progress);
 void update_crash_context_from_runtime_log(std::string_view message);
 void mark_crash_context_cancellation_requested(bool requested);
 [[nodiscard]] CrashContextSnapshot crash_context_snapshot();
+[[nodiscard]] CrashContextCollectionSnapshot crash_context_collection_snapshot(unsigned long crashing_thread_id = 0);
 
 [[nodiscard]] bool write_crash_sidecar_for_test(
     const CrashArtifactPaths &paths,
-    const CrashContextSnapshot &snapshot,
+    const CrashContextCollectionSnapshot &snapshot,
     std::string *error_message = nullptr
 );
 

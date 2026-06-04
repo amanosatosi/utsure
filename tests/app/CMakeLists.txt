@@ -88,6 +88,7 @@ add_test(
     NAME utsure.app.crash_dump_writer
     COMMAND utsure_app_crash_dump_writer_tests
 )
+set_tests_properties(utsure.app.crash_dump_writer PROPERTIES TIMEOUT 45)
 
 find_program(UTSURE_APP_FFMPEG_EXECUTABLE NAMES ffmpeg)
 if(NOT UTSURE_APP_FFMPEG_EXECUTABLE AND DEFINED ENV{CI})

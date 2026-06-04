@@ -25,6 +25,11 @@ fi
 
 cp "${app_executable}" "${symbols_dir}/build/"
 
+find "${build_dir}" -type f \( -name 'utsure*.dll' -o -name 'libutsure*.dll' \) -print0 |
+  while IFS= read -r -d '' binary_path; do
+    cp "${binary_path}" "${symbols_dir}/build/"
+  done
+
 if [[ -d "${bundle_dir}" ]]; then
   find "${bundle_dir}" -maxdepth 1 -type f \( -name '*.exe' -o -name '*.dll' \) -print0 |
     while IFS= read -r -d '' binary_path; do

@@ -42,6 +42,23 @@ CrashContextSnapshot &mutable_context() {
     return *context;
 }
 
+std::vector<CrashContextSnapshot> &mutable_runner_contexts() {
+    static auto *contexts = new std::vector<CrashContextSnapshot>();
+    return *contexts;
+}
+
+int &last_updated_runner_slot() {
+    static auto *slot = new int{-1};
+    return *slot;
+}
+
+std::atomic_int &active_encode_job_count_storage() {
+    static auto *count = new std::atomic_int{0};
+    return *count;
+}
+
+thread_local int current_thread_runner_slot = -1;
+
 std::atomic_bool &dump_write_in_progress() {
     static auto *flag = new std::atomic_bool{false};
     return *flag;
@@ -81,6 +98,21 @@ void populate_default_build_fields(CrashContextSnapshot &snapshot) {
     }
 }
 
+CrashContextSnapshot &runner_context_for_slot(const int runner_slot_index) {
+    auto &contexts = mutable_runner_contexts();
+    if (runner_slot_index < 0) {
+        return mutable_context();
+    }
+    const auto target_size = static_cast<std::size_t>(runner_slot_index + 1);
+    if (contexts.size() < target_size) {
+        contexts.resize(target_size);
+        for (auto &context : contexts) {
+            populate_default_build_fields(context);
+        }
+    }
+    return contexts[static_cast<std::size_t>(runner_slot_index)];
+}
+
 std::int64_t current_unix_seconds() noexcept {
     return std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch()
@@ -90,6 +122,14 @@ std::int64_t current_unix_seconds() noexcept {
 unsigned long current_process_id() noexcept {
 #if defined(_WIN32)
     return static_cast<unsigned long>(GetCurrentProcessId());
+#else
+    return 0UL;
+#endif
+}
+
+unsigned long current_thread_id() noexcept {
+#if defined(_WIN32)
+    return static_cast<unsigned long>(GetCurrentThreadId());
 #else
     return 0UL;
 #endif
@@ -364,6 +404,19 @@ std::filesystem::path local_app_data_directory() {
     return std::filesystem::current_path();
 }
 
+std::filesystem::path crash_dump_directory_override() {
+    std::array<wchar_t, MAX_PATH * 4> buffer{};
+    const DWORD length = GetEnvironmentVariableW(
+        L"UTSURE_CRASH_DUMP_DIR",
+        buffer.data(),
+        static_cast<DWORD>(buffer.size())
+    );
+    if (length > 0 && length < buffer.size()) {
+        return std::filesystem::path(buffer.data());
+    }
+    return {};
+}
+
 void update_memory_snapshot(CrashContextUpdate &update) noexcept {
     PROCESS_MEMORY_COUNTERS counters{};
     counters.cb = sizeof(counters);
@@ -457,8 +510,15 @@ void signal_handler(int /*signal_number*/) {
 
 std::filesystem::path default_crash_dump_directory() {
 #if defined(_WIN32)
+    if (const auto override_directory = crash_dump_directory_override(); !override_directory.empty()) {
+        return override_directory;
+    }
     return local_app_data_directory() / "Utsure" / "crash-dumps";
 #else
+    const char *override_directory = std::getenv("UTSURE_CRASH_DUMP_DIR");
+    if (override_directory != nullptr && std::string_view(override_directory).size() > 0U) {
+        return std::filesystem::path(override_directory);
+    }
     return std::filesystem::temp_directory_path() / "Utsure" / "crash-dumps";
 #endif
 }
@@ -532,6 +592,67 @@ std::string crash_context_to_json(const CrashContextSnapshot &snapshot) {
     return json.str();
 }
 
+void append_context_json_object(std::ostringstream &json, const CrashContextSnapshot &snapshot, const std::string &indent) {
+    json << indent << "{\n";
+    append_json_string(json, "schema", "utsure.crash_context.runner.v1", true);
+    append_json_int(json, "queue_job_index", snapshot.queue_job_index, true);
+    append_json_int(json, "runner_slot_index", snapshot.runner_slot_index, true);
+    append_json_string(json, "input_path", snapshot.input_path, true);
+    append_json_string(json, "output_path", snapshot.output_path, true);
+    append_json_string(json, "source_codec", snapshot.source_codec, true);
+    append_json_string(json, "source_pixel_format", snapshot.source_pixel_format, true);
+    append_json_string(json, "decoded_frame_format", snapshot.decoded_frame_format, true);
+    append_json_string(json, "video_output_codec", snapshot.video_output_codec, true);
+    append_json_string(json, "resolution", snapshot.resolution, true);
+    append_json_string(json, "current_stage", snapshot.current_stage, true);
+    append_json_string(json, "segment_name", snapshot.segment_name, true);
+    append_json_int(json, "frame_index", snapshot.frame_index, true);
+    append_json_int(json, "pts", snapshot.pts, true);
+    append_json_int(json, "decoder_thread_count", snapshot.decoder_thread_count, true);
+    append_json_string(json, "decoder_thread_type", snapshot.decoder_thread_type, true);
+    append_json_int(json, "encoder_thread_count", snapshot.encoder_thread_count, true);
+    append_json_string(json, "encoder_thread_type", snapshot.encoder_thread_type, true);
+    append_json_bool(json, "subtitle_enabled", snapshot.subtitle_enabled, true);
+    append_json_string(json, "subtitle_setup_mode", snapshot.subtitle_setup_mode, true);
+    append_json_string(json, "frame_transfer_path", snapshot.frame_transfer_path, true);
+    append_json_uint(json, "current_rss_bytes", snapshot.current_rss_bytes, true);
+    append_json_uint(json, "peak_rss_bytes", snapshot.peak_rss_bytes, true);
+    append_json_bool(json, "cancellation_requested", snapshot.cancellation_requested, true);
+    append_json_string(json, "last_log_message", snapshot.last_log_message, false);
+    json << indent << "}";
+}
+
+std::string crash_context_collection_to_json(const CrashContextCollectionSnapshot &snapshot) {
+    std::ostringstream json;
+    json << "{\n";
+    append_json_string(json, "schema", "utsure.crash_context.collection.v1", true);
+    append_json_string(json, "build_version", snapshot.last_updated_context.build_version, true);
+    append_json_string(json, "git_commit", snapshot.last_updated_context.git_commit, true);
+    append_json_uint(json, "crashing_thread_id", snapshot.crashing_thread_id, true);
+    append_json_int(json, "last_updated_runner_slot", snapshot.last_updated_runner_slot, true);
+    append_json_int(json, "active_job_count", snapshot.active_job_count, true);
+    append_json_int(json, "queue_job_index", snapshot.last_updated_context.queue_job_index, true);
+    append_json_int(json, "runner_slot_index", snapshot.last_updated_context.runner_slot_index, true);
+    append_json_string(json, "input_path", snapshot.last_updated_context.input_path, true);
+    append_json_string(json, "output_path", snapshot.last_updated_context.output_path, true);
+    append_json_string(json, "source_codec", snapshot.last_updated_context.source_codec, true);
+    append_json_string(json, "decoded_frame_format", snapshot.last_updated_context.decoded_frame_format, true);
+    append_json_string(json, "current_stage", snapshot.last_updated_context.current_stage, true);
+    append_json_string(json, "frame_transfer_path", snapshot.last_updated_context.frame_transfer_path, true);
+    append_json_string(json, "last_log_message", snapshot.last_updated_context.last_log_message, true);
+    json << "  \"runner_contexts\": [\n";
+    for (std::size_t index = 0; index < snapshot.runner_contexts.size(); ++index) {
+        append_context_json_object(json, snapshot.runner_contexts[index], "    ");
+        if (index + 1U < snapshot.runner_contexts.size()) {
+            json << ',';
+        }
+        json << '\n';
+    }
+    json << "  ]\n";
+    json << "}\n";
+    return json.str();
+}
+
 std::vector<CrashArtifactPaths> find_recent_crash_artifacts(
     const std::filesystem::path &directory,
     const std::size_t max_count
@@ -577,11 +698,18 @@ std::vector<CrashArtifactPaths> find_recent_crash_artifacts(
 void reset_crash_context_for_tests() {
     const std::lock_guard lock(context_mutex());
     mutable_context() = CrashContextSnapshot{};
+    mutable_runner_contexts().clear();
+    last_updated_runner_slot() = -1;
+    active_encode_job_count_storage().store(0);
+    current_thread_runner_slot = -1;
     populate_default_build_fields(mutable_context());
 }
 
 void update_crash_context(const CrashContextUpdate &update) {
     CrashContextUpdate enriched_update = update;
+    if (!enriched_update.runner_slot_index.has_value() && current_thread_runner_slot >= 0) {
+        enriched_update.runner_slot_index = current_thread_runner_slot;
+    }
 #if defined(_WIN32)
     update_memory_snapshot(enriched_update);
 #endif
@@ -589,6 +717,69 @@ void update_crash_context(const CrashContextUpdate &update) {
     auto &snapshot = mutable_context();
     populate_default_build_fields(snapshot);
     apply_optional(snapshot, enriched_update);
+    if (!enriched_update.active_job_count.has_value()) {
+        snapshot.active_job_count = active_encode_job_count_storage().load();
+    }
+
+    if (enriched_update.runner_slot_index.has_value()) {
+        auto &runner_context = runner_context_for_slot(*enriched_update.runner_slot_index);
+        populate_default_build_fields(runner_context);
+        apply_optional(runner_context, enriched_update);
+        runner_context.runner_slot_index = *enriched_update.runner_slot_index;
+        if (!enriched_update.active_job_count.has_value()) {
+            runner_context.active_job_count = active_encode_job_count_storage().load();
+        }
+        last_updated_runner_slot() = *enriched_update.runner_slot_index;
+    } else if (snapshot.runner_slot_index >= 0) {
+        last_updated_runner_slot() = snapshot.runner_slot_index;
+    }
+}
+
+void set_current_thread_runner_slot(const int runner_slot_index) noexcept {
+    current_thread_runner_slot = runner_slot_index;
+}
+
+void clear_current_thread_runner_slot() noexcept {
+    current_thread_runner_slot = -1;
+}
+
+int begin_active_encode_job(const int runner_slot_index) noexcept {
+    set_current_thread_runner_slot(runner_slot_index);
+    const int active_count = active_encode_job_count_storage().fetch_add(1) + 1;
+    try {
+        update_crash_context(CrashContextUpdate{
+            .runner_slot_index = runner_slot_index,
+            .active_job_count = active_count,
+            .current_stage = "worker_active"
+        });
+    } catch (...) {
+    }
+    return active_count;
+}
+
+int end_active_encode_job(const int runner_slot_index) noexcept {
+    int active_count = active_encode_job_count_storage().load();
+    while (active_count > 0 &&
+           !active_encode_job_count_storage().compare_exchange_weak(active_count, active_count - 1)) {
+    }
+    const int remaining_count = std::max(active_count - 1, 0);
+    try {
+        update_crash_context(CrashContextUpdate{
+            .runner_slot_index = runner_slot_index,
+            .active_job_count = remaining_count,
+            .current_stage = "worker_idle",
+            .cancellation_requested = false
+        });
+    } catch (...) {
+    }
+    if (current_thread_runner_slot == runner_slot_index) {
+        clear_current_thread_runner_slot();
+    }
+    return remaining_count;
+}
+
+int current_active_encode_job_count() noexcept {
+    return active_encode_job_count_storage().load();
 }
 
 void update_crash_context_from_progress(const core::job::EncodeJobProgress &progress) {
@@ -690,9 +881,32 @@ CrashContextSnapshot crash_context_snapshot() {
     return snapshot;
 }
 
+CrashContextCollectionSnapshot crash_context_collection_snapshot(const unsigned long crashing_thread_id) {
+    std::unique_lock lock(context_mutex(), std::try_to_lock);
+    CrashContextCollectionSnapshot collection{};
+    collection.crashing_thread_id = crashing_thread_id;
+    collection.active_job_count = active_encode_job_count_storage().load();
+    if (!lock.owns_lock()) {
+        populate_default_build_fields(collection.last_updated_context);
+        collection.last_updated_context.current_stage = "snapshot_unavailable_context_lock_busy";
+        return collection;
+    }
+
+    collection.last_updated_runner_slot = last_updated_runner_slot();
+    collection.last_updated_context = mutable_context();
+    populate_default_build_fields(collection.last_updated_context);
+    collection.last_updated_context.active_job_count = collection.active_job_count;
+    collection.runner_contexts = mutable_runner_contexts();
+    for (auto &runner_context : collection.runner_contexts) {
+        populate_default_build_fields(runner_context);
+        runner_context.active_job_count = collection.active_job_count;
+    }
+    return collection;
+}
+
 bool write_crash_sidecar_for_test(
     const CrashArtifactPaths &paths,
-    const CrashContextSnapshot &snapshot,
+    const CrashContextCollectionSnapshot &snapshot,
     std::string *error_message
 ) {
     std::error_code error{};
@@ -711,7 +925,7 @@ bool write_crash_sidecar_for_test(
         }
         return false;
     }
-    sidecar << crash_context_to_json(snapshot);
+    sidecar << crash_context_collection_to_json(snapshot);
     return static_cast<bool>(sidecar);
 }
 
@@ -721,15 +935,18 @@ void configure_crash_log_flushing() noexcept {
 }
 
 void install_crash_handlers() noexcept {
-    update_crash_context(CrashContextUpdate{
-        .build_version = current_build_version(),
-        .git_commit = git_commit_from_environment()
-    });
+    try {
+        update_crash_context(CrashContextUpdate{
+            .build_version = current_build_version(),
+            .git_commit = git_commit_from_environment()
+        });
+    } catch (...) {
+    }
 #if defined(_WIN32)
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
     SetUnhandledExceptionFilter(unhandled_exception_filter);
     std::set_terminate(terminate_handler);
     std::signal(SIGABRT, signal_handler);
-    std::signal(SIGSEGV, signal_handler);
     std::signal(SIGILL, signal_handler);
     std::signal(SIGFPE, signal_handler);
 #endif
@@ -743,41 +960,38 @@ CrashDumpWriteResult write_crash_dump_for_current_process(void *exception_pointe
         return result;
     }
     try {
+        const unsigned long crashing_thread = current_thread_id();
         const auto paths = make_crash_artifact_paths(
             default_crash_dump_directory(),
             current_unix_seconds(),
             current_process_id()
         );
         result.paths = paths;
-#if defined(_WIN32)
-        result.dump_type = selected_dump_type_name();
-#else
-        result.dump_type = "unsupported";
-#endif
         std::error_code error{};
         std::filesystem::create_directories(paths.dump_path.parent_path(), error);
         if (error) {
             result.error_message = error.message();
         }
 
-        const auto snapshot = crash_context_snapshot();
-        std::string sidecar_error{};
-        result.sidecar_written = write_crash_sidecar_for_test(paths, snapshot, &sidecar_error);
-        if (!result.sidecar_written && result.error_message.empty()) {
-            result.error_message = sidecar_error;
-        }
-
 #if defined(_WIN32)
         result.dump_written = write_minidump(paths.dump_path, exception_pointers) != FALSE;
+        result.dump_type = selected_dump_type_name();
         if (!result.dump_written && result.error_message.empty()) {
             result.error_message = "MiniDumpWriteDump failed.";
         }
 #else
         result.dump_written = false;
+        result.dump_type = "unsupported";
         if (result.error_message.empty()) {
             result.error_message = "Crash dumps are only supported on Windows.";
         }
 #endif
+        const auto snapshot = crash_context_collection_snapshot(crashing_thread);
+        std::string sidecar_error{};
+        result.sidecar_written = write_crash_sidecar_for_test(paths, snapshot, &sidecar_error);
+        if (!result.sidecar_written && result.error_message.empty()) {
+            result.error_message = sidecar_error;
+        }
         std::fprintf(
             stderr,
             "utsure crash dump: dump=%s sidecar=%s type=%s written=%d sidecar_written=%d\n",

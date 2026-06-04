@@ -125,10 +125,14 @@ EncodeJobRunnerWorker::EncodeJobRunnerWorker(RunFunction run_function, QObject *
     }
 }
 
-void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
+void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job, const int runner_slot_index) {
     active_.store(true);
+    runner_slot_index_.store(runner_slot_index);
     last_progress_.reset();
+    const int active_count = utsure::app::crash::begin_active_encode_job(runner_slot_index);
     update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
+        .runner_slot_index = runner_slot_index,
+        .active_job_count = active_count,
         .input_path = path_to_utf8_string(job.input.main_source_path),
         .output_path = path_to_utf8_string(job.output.output_path),
         .video_output_codec = utsure::core::media::to_string(job.output.video.codec),
@@ -138,14 +142,13 @@ void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
     });
     struct ActiveGuard final {
         std::atomic_bool &active;
+        std::atomic_int &runner_slot;
         ~ActiveGuard() {
             active.store(false);
-            update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
-                .current_stage = "worker_idle",
-                .cancellation_requested = false
-            });
+            utsure::app::crash::end_active_encode_job(runner_slot.load());
+            runner_slot.store(-1);
         }
-    } active_guard{active_};
+    } active_guard{active_, runner_slot_index_};
     try {
         const auto result = run_function_(job, utsure::core::job::EncodeJobRunOptions{
             .decode_normalization_policy = {},
@@ -222,18 +225,18 @@ void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
 
 void EncodeJobRunnerWorker::request_cancel() noexcept {
     cancel_requested_.store(true);
-    try {
-        utsure::app::crash::mark_crash_context_cancellation_requested(true);
-    } catch (...) {
-    }
+    update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
+        .runner_slot_index = runner_slot_index_.load(),
+        .cancellation_requested = true
+    });
 }
 
 void EncodeJobRunnerWorker::clear_cancel_request() noexcept {
     cancel_requested_.store(false);
-    try {
-        utsure::app::crash::mark_crash_context_cancellation_requested(false);
-    } catch (...) {
-    }
+    update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
+        .runner_slot_index = runner_slot_index_.load(),
+        .cancellation_requested = false
+    });
 }
 
 bool EncodeJobRunnerWorker::cancel_requested() const noexcept {

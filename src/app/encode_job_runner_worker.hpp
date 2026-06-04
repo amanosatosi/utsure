@@ -22,7 +22,7 @@ public:
     explicit EncodeJobRunnerWorker(QObject *parent = nullptr);
     explicit EncodeJobRunnerWorker(RunFunction run_function, QObject *parent = nullptr);
 
-    void run_job(const utsure::core::job::EncodeJob &job);
+    void run_job(const utsure::core::job::EncodeJob &job, int runner_slot_index);
     void request_cancel() noexcept;
     void clear_cancel_request() noexcept;
     [[nodiscard]] bool is_active() const noexcept;
@@ -47,6 +47,7 @@ private:
 
     std::atomic_bool cancel_requested_{false};
     std::atomic_bool active_{false};
+    std::atomic_int runner_slot_index_{-1};
     std::optional<utsure::core::job::EncodeJobProgress> last_progress_{};
     RunFunction run_function_{};
 };

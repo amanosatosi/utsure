@@ -39,11 +39,6 @@ std::atomic_int &next_runner_slot_index() {
     return *slot;
 }
 
-std::atomic_int &active_encode_job_count() {
-    static auto *count = new std::atomic_int{0};
-    return *count;
-}
-
 std::string path_to_utf8_string(const std::filesystem::path &path) {
     return utsure::core::filesystem::path_to_utf8_string(path);
 }
@@ -211,10 +206,9 @@ bool EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &jo
     worker_->clear_cancel_request();
     worker_thread_->setPriority(map_thread_priority(job.execution.process_priority));
     state_ = RunnerState::running;
-    const int active_count = active_encode_job_count().fetch_add(1) + 1;
     update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
         .runner_slot_index = runner_slot_index_,
-        .active_job_count = active_count,
+        .active_job_count = utsure::app::crash::current_active_encode_job_count(),
         .input_path = path_to_utf8_string(job.input.main_source_path),
         .output_path = path_to_utf8_string(job.output.output_path),
         .video_output_codec = utsure::core::media::to_string(job.output.video.codec),
@@ -237,18 +231,17 @@ bool EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &jo
 
     const bool queued = QMetaObject::invokeMethod(
         worker_,
-        [worker = worker_, job]() {
-            worker->run_job(job);
+        [worker = worker_, job, runner_slot_index = runner_slot_index_]() {
+            worker->run_job(job, runner_slot_index);
         },
         Qt::QueuedConnection
     );
     if (!queued) {
-        const int remaining_active_count = std::max(active_encode_job_count().fetch_sub(1) - 1, 0);
         state_ = RunnerState::idle;
         worker_thread_->setPriority(QThread::NormalPriority);
         update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
             .runner_slot_index = runner_slot_index_,
-            .active_job_count = remaining_active_count,
+            .active_job_count = utsure::app::crash::current_active_encode_job_count(),
             .current_stage = "controller_queue_failed"
         });
         emit log_message("[error] Failed to queue encode work on the worker thread.");
@@ -267,7 +260,7 @@ void EncodeJobRunnerController::cancel_job() noexcept {
     worker_->request_cancel();
     update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
         .runner_slot_index = runner_slot_index_,
-        .active_job_count = active_encode_job_count().load(),
+        .active_job_count = utsure::app::crash::current_active_encode_job_count(),
         .current_stage = "controller_cancel_requested",
         .cancellation_requested = true
     });
@@ -281,12 +274,11 @@ void EncodeJobRunnerController::handle_worker_finished(
     const QString &details_text,
     const QString &output_path
 ) {
-    const int remaining_active_count = std::max(active_encode_job_count().fetch_sub(1) - 1, 0);
     if (shutting_down_) {
         state_ = RunnerState::finished;
         update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
             .runner_slot_index = runner_slot_index_,
-            .active_job_count = remaining_active_count,
+            .active_job_count = utsure::app::crash::current_active_encode_job_count(),
             .output_path = qstring_to_utf8_string(output_path),
             .current_stage = canceled ? std::string("controller_shutdown_canceled") : succeeded
                 ? std::string("controller_shutdown_completed")
@@ -299,7 +291,7 @@ void EncodeJobRunnerController::handle_worker_finished(
     state_ = RunnerState::idle;
     update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
         .runner_slot_index = runner_slot_index_,
-        .active_job_count = remaining_active_count,
+        .active_job_count = utsure::app::crash::current_active_encode_job_count(),
         .output_path = qstring_to_utf8_string(output_path),
         .current_stage = canceled ? std::string("controller_canceled") : succeeded
             ? std::string("controller_completed")
