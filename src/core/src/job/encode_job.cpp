@@ -496,9 +496,35 @@ std::string format_encode_log_message(const EncodeJob &job) {
         ", and audio mode '" + std::string(media::to_string(job.output.audio.mode)) + "'.";
 }
 
+std::string format_runtime_thread_count(const int thread_count) {
+    return thread_count > 0 ? std::to_string(thread_count) : std::string("auto");
+}
+
+std::string format_resize_runtime_setting(const EncodeResizeSettings &resize) {
+    if (resize.mode == EncodeResizeMode::target_height) {
+        return std::string(to_string(resize.mode)) + "=" + std::to_string(resize.target_height);
+    }
+
+    return to_string(resize.mode);
+}
+
+std::string main_source_codec_name(const timeline::TimelinePlan &timeline_plan) {
+    if (timeline_plan.segments.empty() || timeline_plan.main_segment_index >= timeline_plan.segments.size()) {
+        return "unknown";
+    }
+
+    const auto &main_segment = timeline_plan.segments[timeline_plan.main_segment_index];
+    if (!main_segment.inspected_source_info.primary_video_stream.has_value()) {
+        return "unknown";
+    }
+
+    return main_segment.inspected_source_info.primary_video_stream->codec_name;
+}
+
 std::string format_encode_runtime_log_message(
     const EncodeJob &job,
-    const media::streaming::PipelineQueueLimits &queue_limits
+    const media::streaming::PipelineQueueLimits &queue_limits,
+    const timeline::TimelinePlan &timeline_plan
 ) {
     const auto runtime_behavior = resolve_runtime_behavior(job, queue_limits);
     return "Encoding runtime request: CPU mode " +
@@ -511,7 +537,15 @@ std::string format_encode_runtime_log_message(
         ", subtitle bitmap mode " + runtime_behavior.subtitle_bitmap_mode +
         ", subtitle composition mode " + runtime_behavior.subtitle_composition_mode +
         ", subtitle diagnostics " + runtime_behavior.subtitle_diagnostics_mode +
-        ", priority " + std::string(to_display_string(job.execution.process_priority)) + '.';
+        ", priority " + std::string(to_display_string(job.execution.process_priority)) +
+        ". Runtime settings: video codec " + std::string(media::to_string(job.output.video.codec)) +
+        ", audio mode " + std::string(media::to_string(job.output.audio.mode)) +
+        ", audio codec " + std::string(media::to_string(job.output.audio.codec)) +
+        ", resize " + format_resize_runtime_setting(job.output.resize) +
+        ", decoder thread count " + format_runtime_thread_count(runtime_behavior.selected_video_decoder_thread_count) +
+        ", encoder thread count " + format_runtime_thread_count(runtime_behavior.selected_video_encoder_thread_count) +
+        ", frame queue depth " + std::to_string(runtime_behavior.video_frame_queue_depth) +
+        ", source codec " + main_source_codec_name(timeline_plan) + '.';
 }
 
 std::string format_elapsed_microseconds(const std::int64_t elapsed_us) {
@@ -804,7 +838,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
         notify_log(
             telemetry,
             EncodeJobLogLevel::info,
-            format_encode_runtime_log_message(effective_job, queue_limits)
+            format_encode_runtime_log_message(effective_job, queue_limits, timeline_plan)
         );
         notify_progress(
             telemetry,

@@ -1286,6 +1286,14 @@ Implemented:
   * Added structured sws_getContext/sws_scale/frame-format error context with source codec, frame format, linesizes, stage, frame index, and PTS.
   * Expanded app parallel resource logs with source codec and frame queue depth while preserving existing H.264 real smokes.
 
+Follow-up:
+  * Restore the stable observer-facing runtime-settings marker expected by core encode-job tests while keeping the richer HEVC/native-direct bypass diagnostics.
+
+Follow-up completed:
+  * Kept the existing `Encoding runtime request:` observer log and added a stable `Runtime settings:` section with video codec, audio mode/codec, resize, decoder/encoder thread counts, frame queue depth, and source codec.
+  * Restored the `subtitle-free native-frame fast path` marker in the streaming video-path observer log while preserving the HEVC/env sws_scale bypass explanation.
+  * Updated the core encode-job runtime visibility test to assert the new stable `Runtime settings:` marker without weakening the existing observer-log checks.
+
 ## Immediate next milestone
 
-Finish M36 and re-run GitHub Actions for M27/M28/M29/M30/M31/M32/M33/M34/M35/M36 validation.
+Re-run GitHub Actions for M27/M28/M29/M30/M31/M32/M33/M34/M35/M36 validation.

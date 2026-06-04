@@ -681,6 +681,8 @@ int assert_runtime_visibility(
     }
 
     if (!observer_logs_contain_text(observer, "Encoding runtime request: CPU mode auto, encoder threads ") ||
+        !observer_logs_contain_text(observer, "Runtime settings: video codec ") ||
+        !observer_logs_contain_text(observer, "source codec ") ||
         observer_logs_contain_text(observer, "encoder threads FFmpeg auto threads") ||
         !observer_logs_contain_text(observer, "subtitle workers 1") ||
         !observer_logs_contain_text(observer, "video queue 70 frames") ||

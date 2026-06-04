@@ -4319,7 +4319,7 @@ SegmentProcessResult process_segment(
                    ", diagnostics " + runtime_behavior.subtitle_diagnostics_mode +
                    ", subtitle worker(s) " + std::to_string(runtime_behavior.subtitle_processing_worker_count) +
                    ", video worker(s) " + std::to_string(runtime_behavior.video_processing_worker_count) + '.')
-                : "subtitle-free native-frame candidate path; HEVC sources and UTSURE_DISABLE_NATIVE_DIRECT_ENCODE use sws_scale.")
+                : "subtitle-free native-frame fast path candidate; HEVC sources and UTSURE_DISABLE_NATIVE_DIRECT_ENCODE use sws_scale.")
     );
     emit_runtime_log(
         log_callback,
