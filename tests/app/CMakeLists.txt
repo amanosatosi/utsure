@@ -65,9 +65,40 @@ find_program(UTSURE_APP_FFMPEG_EXECUTABLE NAMES ffmpeg)
 if(NOT UTSURE_APP_FFMPEG_EXECUTABLE AND DEFINED ENV{CI})
     message(FATAL_ERROR "ffmpeg is required in CI for the app encode-runner real cancel/destroy lifecycle smoke.")
 endif()
+set(UTSURE_APP_FFMPEG_HAS_LIBX265 FALSE)
+set(UTSURE_APP_FFMPEG_HAS_LIBX265_YUV420P10LE FALSE)
+if(UTSURE_APP_FFMPEG_EXECUTABLE)
+    execute_process(
+        COMMAND "${UTSURE_APP_FFMPEG_EXECUTABLE}" -hide_banner -encoders
+        RESULT_VARIABLE UTSURE_APP_FFMPEG_ENCODERS_RESULT
+        OUTPUT_VARIABLE UTSURE_APP_FFMPEG_ENCODERS_OUTPUT
+        ERROR_VARIABLE UTSURE_APP_FFMPEG_ENCODERS_ERROR
+    )
+    if(UTSURE_APP_FFMPEG_ENCODERS_RESULT EQUAL 0 AND UTSURE_APP_FFMPEG_ENCODERS_OUTPUT MATCHES "libx265")
+        set(UTSURE_APP_FFMPEG_HAS_LIBX265 TRUE)
+        execute_process(
+            COMMAND "${UTSURE_APP_FFMPEG_EXECUTABLE}" -hide_banner -h encoder=libx265
+            RESULT_VARIABLE UTSURE_APP_FFMPEG_LIBX265_HELP_RESULT
+            OUTPUT_VARIABLE UTSURE_APP_FFMPEG_LIBX265_HELP_OUTPUT
+            ERROR_VARIABLE UTSURE_APP_FFMPEG_LIBX265_HELP_ERROR
+        )
+        if(UTSURE_APP_FFMPEG_LIBX265_HELP_RESULT EQUAL 0 AND UTSURE_APP_FFMPEG_LIBX265_HELP_OUTPUT MATCHES "yuv420p10le")
+            set(UTSURE_APP_FFMPEG_HAS_LIBX265_YUV420P10LE TRUE)
+        endif()
+    endif()
+endif()
+if(UTSURE_APP_FFMPEG_EXECUTABLE AND NOT UTSURE_APP_FFMPEG_HAS_LIBX265)
+    if(DEFINED ENV{CI})
+        message(FATAL_ERROR "ffmpeg with the libx265 encoder is required in CI for HEVC source crash reproduction tests.")
+    else()
+        message(WARNING "ffmpeg was found without libx265; local HEVC app encode-runner smokes are not registered.")
+    endif()
+endif()
 
 set(UTSURE_APP_TEST_MEDIA_DIR "${CMAKE_CURRENT_BINARY_DIR}/media")
 set(UTSURE_APP_LIFECYCLE_MAIN_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-lifecycle-main.mp4")
+set(UTSURE_APP_LIFECYCLE_HEVC_MAIN_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-lifecycle-main-hevc.mp4")
+set(UTSURE_APP_LIFECYCLE_HEVC10_MAIN_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-lifecycle-main-hevc10.mp4")
 set(UTSURE_APP_LIFECYCLE_SUBTITLE_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-lifecycle-subtitle.ass")
 set(UTSURE_APP_LIFECYCLE_CANCEL_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-lifecycle-cancel-output.mp4")
 set(UTSURE_APP_LIFECYCLE_DESTROY_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-lifecycle-destroy-output.mp4")
@@ -77,6 +108,14 @@ set(UTSURE_APP_PARALLEL_SUBTITLE_FIRST_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}
 set(UTSURE_APP_PARALLEL_SUBTITLE_SECOND_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-parallel-subtitle-b.mp4")
 set(UTSURE_APP_PARALLEL_CANCEL_FIRST_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-parallel-cancel-a.mp4")
 set(UTSURE_APP_PARALLEL_CANCEL_SECOND_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-parallel-cancel-b.mp4")
+set(UTSURE_APP_HEVC_SINGLE_NO_SUBTITLE_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-hevc-single-no-subtitle.mp4")
+set(UTSURE_APP_HEVC_SINGLE_SUBTITLE_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-hevc-single-subtitle.mp4")
+set(UTSURE_APP_HEVC_PARALLEL_NO_SUBTITLE_FIRST_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-hevc-parallel-no-subtitle-a.mp4")
+set(UTSURE_APP_HEVC_PARALLEL_NO_SUBTITLE_SECOND_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-hevc-parallel-no-subtitle-b.mp4")
+set(UTSURE_APP_HEVC_PARALLEL_SUBTITLE_FIRST_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-hevc-parallel-subtitle-a.mp4")
+set(UTSURE_APP_HEVC_PARALLEL_SUBTITLE_SECOND_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-hevc-parallel-subtitle-b.mp4")
+set(UTSURE_APP_HEVC_PARALLEL_CANCEL_FIRST_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-hevc-parallel-cancel-a.mp4")
+set(UTSURE_APP_HEVC_PARALLEL_CANCEL_SECOND_OUTPUT_FILE "${UTSURE_APP_TEST_MEDIA_DIR}/runner-hevc-parallel-cancel-b.mp4")
 file(MAKE_DIRECTORY "${UTSURE_APP_TEST_MEDIA_DIR}")
 file(WRITE "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
     "[Script Info]\n"
@@ -142,6 +181,7 @@ else()
 endif()
 
 if(UTSURE_APP_FFMPEG_EXECUTABLE)
+    set(UTSURE_APP_GENERATED_LIFECYCLE_MEDIA_OUTPUTS)
     add_custom_command(
         OUTPUT "${UTSURE_APP_LIFECYCLE_MAIN_FILE}"
         COMMAND "${UTSURE_APP_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
@@ -160,11 +200,58 @@ if(UTSURE_APP_FFMPEG_EXECUTABLE)
             "${UTSURE_APP_LIFECYCLE_MAIN_FILE}"
         VERBATIM
     )
+    list(APPEND UTSURE_APP_GENERATED_LIFECYCLE_MEDIA_OUTPUTS "${UTSURE_APP_LIFECYCLE_MAIN_FILE}")
+
+    if(UTSURE_APP_FFMPEG_HAS_LIBX265)
+        add_custom_command(
+            OUTPUT "${UTSURE_APP_LIFECYCLE_HEVC_MAIN_FILE}"
+            COMMAND "${UTSURE_APP_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+                -f lavfi -i "testsrc2=size=320x180:rate=24000/1001"
+                -f lavfi -i "sine=frequency=720:sample_rate=48000:duration=15"
+                -t 15
+                -filter_complex "[0:v]setpts=PTS/1.5[v];[1:a]atempo=1.5[a]"
+                -map "[v]"
+                -map "[a]"
+                -c:v libx265
+                -preset ultrafast
+                -x265-params "log-level=error:keyint=24:min-keyint=24:scenecut=0"
+                -pix_fmt yuv420p
+                -c:a aac
+                -b:a 96k
+                -shortest
+                "${UTSURE_APP_LIFECYCLE_HEVC_MAIN_FILE}"
+            VERBATIM
+        )
+        list(APPEND UTSURE_APP_GENERATED_LIFECYCLE_MEDIA_OUTPUTS "${UTSURE_APP_LIFECYCLE_HEVC_MAIN_FILE}")
+
+        if(UTSURE_APP_FFMPEG_HAS_LIBX265_YUV420P10LE)
+            add_custom_command(
+                OUTPUT "${UTSURE_APP_LIFECYCLE_HEVC10_MAIN_FILE}"
+                COMMAND "${UTSURE_APP_FFMPEG_EXECUTABLE}" -hide_banner -loglevel error -y
+                    -f lavfi -i "testsrc2=size=320x180:rate=24000/1001"
+                    -f lavfi -i "sine=frequency=880:sample_rate=48000:duration=6"
+                    -t 6
+                    -filter_complex "[0:v]format=yuv420p10le[v]"
+                    -map "[v]"
+                    -map 1:a
+                    -c:v libx265
+                    -preset ultrafast
+                    -x265-params "profile=main10:log-level=error:keyint=24:min-keyint=24:scenecut=0"
+                    -pix_fmt yuv420p10le
+                    -c:a aac
+                    -b:a 96k
+                    -shortest
+                    "${UTSURE_APP_LIFECYCLE_HEVC10_MAIN_FILE}"
+                VERBATIM
+            )
+            list(APPEND UTSURE_APP_GENERATED_LIFECYCLE_MEDIA_OUTPUTS "${UTSURE_APP_LIFECYCLE_HEVC10_MAIN_FILE}")
+        endif()
+    endif()
 
     add_custom_target(
         utsure_app_generate_lifecycle_media
         DEPENDS
-            "${UTSURE_APP_LIFECYCLE_MAIN_FILE}"
+            ${UTSURE_APP_GENERATED_LIFECYCLE_MEDIA_OUTPUTS}
             "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
     )
 else()
@@ -232,6 +319,67 @@ if(UTSURE_APP_FFMPEG_EXECUTABLE)
             "${UTSURE_APP_PARALLEL_CANCEL_FIRST_OUTPUT_FILE}"
             "${UTSURE_APP_PARALLEL_CANCEL_SECOND_OUTPUT_FILE}"
     )
+
+    if(UTSURE_APP_FFMPEG_HAS_LIBX265)
+        add_test(
+            NAME utsure.app.encode_job_runner.hevc_single_no_subtitle
+            COMMAND utsure_app_encode_job_runner_lifecycle_tests --real-single-encode
+                "runner_lifecycle.hevc_single_no_subtitle"
+                "${UTSURE_APP_LIFECYCLE_HEVC_MAIN_FILE}"
+                "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
+                "${UTSURE_APP_HEVC_SINGLE_NO_SUBTITLE_OUTPUT_FILE}"
+                "0"
+        )
+
+        add_test(
+            NAME utsure.app.encode_job_runner.hevc_single_subtitle
+            COMMAND utsure_app_encode_job_runner_lifecycle_tests --real-single-encode
+                "runner_lifecycle.hevc_single_subtitle"
+                "${UTSURE_APP_LIFECYCLE_HEVC_MAIN_FILE}"
+                "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
+                "${UTSURE_APP_HEVC_SINGLE_SUBTITLE_OUTPUT_FILE}"
+                "1"
+        )
+
+        add_test(
+            NAME utsure.app.encode_job_runner.hevc_parallel_no_subtitle
+            COMMAND utsure_app_encode_job_runner_lifecycle_tests --real-parallel-pair
+                "runner_lifecycle.hevc_parallel_no_subtitle"
+                "hevc"
+                "${UTSURE_APP_LIFECYCLE_HEVC_MAIN_FILE}"
+                "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
+                "${UTSURE_APP_HEVC_PARALLEL_NO_SUBTITLE_FIRST_OUTPUT_FILE}"
+                "${UTSURE_APP_HEVC_PARALLEL_NO_SUBTITLE_SECOND_OUTPUT_FILE}"
+                "0"
+                "0"
+        )
+
+        add_test(
+            NAME utsure.app.encode_job_runner.hevc_parallel_subtitle
+            COMMAND utsure_app_encode_job_runner_lifecycle_tests --real-parallel-pair
+                "runner_lifecycle.hevc_parallel_subtitle"
+                "hevc"
+                "${UTSURE_APP_LIFECYCLE_HEVC_MAIN_FILE}"
+                "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
+                "${UTSURE_APP_HEVC_PARALLEL_SUBTITLE_FIRST_OUTPUT_FILE}"
+                "${UTSURE_APP_HEVC_PARALLEL_SUBTITLE_SECOND_OUTPUT_FILE}"
+                "1"
+                "0"
+        )
+
+        add_test(
+            NAME utsure.app.encode_job_runner.hevc_parallel_cancel_one
+            COMMAND utsure_app_encode_job_runner_lifecycle_tests --real-parallel-pair
+                "runner_lifecycle.hevc_parallel_cancel_one"
+                "hevc"
+                "${UTSURE_APP_LIFECYCLE_HEVC_MAIN_FILE}"
+                "${UTSURE_APP_LIFECYCLE_SUBTITLE_FILE}"
+                "${UTSURE_APP_HEVC_PARALLEL_CANCEL_FIRST_OUTPUT_FILE}"
+                "${UTSURE_APP_HEVC_PARALLEL_CANCEL_SECOND_OUTPUT_FILE}"
+                "0"
+                "1"
+        )
+    endif()
 else()
     add_test(
         NAME utsure.app.encode_job_runner.lifecycle
@@ -252,6 +400,23 @@ if(UTSURE_APP_FFMPEG_EXECUTABLE)
         ENVIRONMENT "UTSURE_FONTCOLLECTOR_PATH=${UTSURE_APP_TEST_FONTCOLLECTOR_STUB}"
         TIMEOUT 90
     )
+    if(UTSURE_APP_FFMPEG_HAS_LIBX265)
+        set_tests_properties(
+            utsure.app.encode_job_runner.hevc_single_no_subtitle
+            utsure.app.encode_job_runner.hevc_single_subtitle
+            PROPERTIES
+                ENVIRONMENT "UTSURE_FONTCOLLECTOR_PATH=${UTSURE_APP_TEST_FONTCOLLECTOR_STUB}"
+                TIMEOUT 90
+        )
+        set_tests_properties(
+            utsure.app.encode_job_runner.hevc_parallel_no_subtitle
+            utsure.app.encode_job_runner.hevc_parallel_subtitle
+            utsure.app.encode_job_runner.hevc_parallel_cancel_one
+            PROPERTIES
+                ENVIRONMENT "UTSURE_FONTCOLLECTOR_PATH=${UTSURE_APP_TEST_FONTCOLLECTOR_STUB}"
+                TIMEOUT 120
+        )
+    endif()
 endif()
 
 utsure_label_tests_matching("^utsure\\.app\\.settings\\." unit smoke)
@@ -259,3 +424,4 @@ utsure_label_tests_matching("^utsure\\.app\\.ui_font$" integration smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.lifecycle$" integration smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.real_cancel_destroy$" integration media smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.parallel_smokes$" integration media smoke)
+utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.hevc_" integration media smoke)

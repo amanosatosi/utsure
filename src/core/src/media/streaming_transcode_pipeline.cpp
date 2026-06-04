@@ -15,6 +15,7 @@ extern "C" {
 #include <libavutil/mathematics.h>
 #include <libavutil/opt.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/pixdesc.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
@@ -26,6 +27,7 @@ extern "C" {
 #include <cstddef>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <exception>
@@ -329,6 +331,8 @@ struct ResolvedVideoFrameTiming final {
 struct StreamingVideoFrame final {
     FrameHandle native_frame{};
     DecodedVideoFrame metadata{};
+    std::string source_codec_name{"unknown"};
+    AVCodecID source_codec_id{AV_CODEC_ID_NONE};
 };
 
 struct PendingVideoFrameInput final {
@@ -570,6 +574,9 @@ struct StreamingFailureContext final {
     std::string segment_name{};
     std::string output_path{};
     std::string codec{};
+    std::string source_codec{};
+    std::string frame_format{};
+    std::string frame_linesizes{};
     std::string resolution{};
     std::int64_t frame_index{-1};
     std::optional<std::int64_t> pts{};
@@ -602,6 +609,15 @@ std::string format_failure_context(const StreamingFailureContext &context) {
     }
     if (!context.codec.empty()) {
         stream << ", codec=" << context.codec;
+    }
+    if (!context.source_codec.empty()) {
+        stream << ", source_codec=" << context.source_codec;
+    }
+    if (!context.frame_format.empty()) {
+        stream << ", frame_format=" << context.frame_format;
+    }
+    if (!context.frame_linesizes.empty()) {
+        stream << ", frame_linesizes=" << context.frame_linesizes;
     }
     if (!context.resolution.empty()) {
         stream << ", resolution=" << context.resolution;
@@ -985,6 +1001,144 @@ std::string format_codec_threading_log(
     message += ", active_thread_type=";
     message += detail::format_ffmpeg_thread_type_detail(thread_type);
     return message;
+}
+
+std::string format_thread_count(const int thread_count) {
+    return thread_count > 0 ? std::to_string(thread_count) : std::string("auto");
+}
+
+std::string pixel_format_name(const AVPixelFormat pixel_format) {
+    if (pixel_format == AV_PIX_FMT_NONE) {
+        return "unknown";
+    }
+
+    const char *name = av_get_pix_fmt_name(pixel_format);
+    return name != nullptr ? std::string(name) : "unknown";
+}
+
+std::string codec_name_from_id(const AVCodecID codec_id) {
+    const char *name = avcodec_get_name(codec_id);
+    return name != nullptr && std::string_view(name).size() > 0U ? std::string(name) : "unknown";
+}
+
+std::string format_codec_id_detail(const AVCodecID codec_id) {
+    return codec_name_from_id(codec_id) + "(" + std::to_string(static_cast<int>(codec_id)) + ")";
+}
+
+std::string codec_profile_name(const AVCodecID codec_id, const int profile) {
+    if (profile == FF_PROFILE_UNKNOWN) {
+        return "unknown";
+    }
+
+    const char *name = avcodec_profile_name(codec_id, profile);
+    return name != nullptr ? std::string(name) : "unknown(" + std::to_string(profile) + ")";
+}
+
+std::string named_color_value(const char *name, const int value, const int unspecified_value) {
+    if (value == unspecified_value) {
+        return "unknown";
+    }
+
+    return name != nullptr ? std::string(name) : "unknown(" + std::to_string(value) + ")";
+}
+
+std::string color_range_name(const AVColorRange range) {
+    return named_color_value(av_color_range_name(range), static_cast<int>(range), AVCOL_RANGE_UNSPECIFIED);
+}
+
+std::string color_space_name(const AVColorSpace color_space) {
+    return named_color_value(av_color_space_name(color_space), static_cast<int>(color_space), AVCOL_SPC_UNSPECIFIED);
+}
+
+std::string color_transfer_name(const AVColorTransferCharacteristic transfer) {
+    return named_color_value(av_color_transfer_name(transfer), static_cast<int>(transfer), AVCOL_TRC_UNSPECIFIED);
+}
+
+std::string color_primaries_name(const AVColorPrimaries primaries) {
+    return named_color_value(av_color_primaries_name(primaries), static_cast<int>(primaries), AVCOL_PRI_UNSPECIFIED);
+}
+
+std::string format_color_fields(
+    const AVColorRange range,
+    const AVColorSpace color_space,
+    const AVColorTransferCharacteristic transfer,
+    const AVColorPrimaries primaries
+) {
+    return "color_range=" + color_range_name(range) +
+        ", color_space=" + color_space_name(color_space) +
+        ", color_transfer=" + color_transfer_name(transfer) +
+        ", color_primaries=" + color_primaries_name(primaries);
+}
+
+std::string format_frame_linesizes(const int linesize[4]) {
+    std::ostringstream stream;
+    stream << '[' << linesize[0] << ',' << linesize[1] << ',' << linesize[2] << ',' << linesize[3] << ']';
+    return stream.str();
+}
+
+std::string format_avframe_linesizes(const AVFrame &frame) {
+    return format_frame_linesizes(frame.linesize);
+}
+
+bool env_flag_enabled(const char *name) noexcept {
+    const char *raw_value = std::getenv(name);
+    if (raw_value == nullptr) {
+        return false;
+    }
+
+    const std::string_view value(raw_value);
+    return !value.empty() && value != "0" && value != "false" && value != "FALSE" &&
+        value != "off" && value != "OFF" && value != "no" && value != "NO";
+}
+
+bool native_direct_encode_disabled_by_env() noexcept {
+    return env_flag_enabled("UTSURE_DISABLE_NATIVE_DIRECT_ENCODE");
+}
+
+bool source_codec_is_hevc(const AVCodecID codec_id) noexcept {
+    return codec_id == AV_CODEC_ID_HEVC;
+}
+
+std::string format_streaming_frame_error_context(
+    const std::string_view stage,
+    const StreamingVideoFrame &video_frame,
+    const AVFrame *native_frame
+) {
+    std::ostringstream stream;
+    stream << "stage=" << stage
+           << ", source_codec=" << video_frame.source_codec_name
+           << ", source_codec_id=" << static_cast<int>(video_frame.source_codec_id)
+           << ", source_codec_detail=" << format_codec_id_detail(video_frame.source_codec_id)
+           << ", frame_index=" << video_frame.metadata.frame_index;
+    if (video_frame.metadata.timestamp.source_pts.has_value()) {
+        stream << ", pts=" << *video_frame.metadata.timestamp.source_pts;
+    }
+    stream << ", pts_us=" << video_frame.metadata.timestamp.start_microseconds;
+    if (native_frame != nullptr) {
+        stream << ", frame_format=" << pixel_format_name(static_cast<AVPixelFormat>(native_frame->format))
+               << ", width=" << native_frame->width
+               << ", height=" << native_frame->height
+               << ", linesize=" << format_avframe_linesizes(*native_frame);
+    } else {
+        stream << ", frame_format=" << to_string(video_frame.metadata.pixel_format)
+               << ", width=" << video_frame.metadata.width
+               << ", height=" << video_frame.metadata.height;
+        if (!video_frame.metadata.planes.empty()) {
+            stream << ", linesize=[" << video_frame.metadata.planes.front().line_stride_bytes << ",0,0,0]";
+        } else {
+            stream << ", linesize=[0,0,0,0]";
+        }
+    }
+    return stream.str();
+}
+
+std::string format_memory_snapshot_suffix() {
+    if (const auto memory = sample_process_memory(); memory.has_value()) {
+        return ", rss=" + format_bytes(memory->rss_bytes) +
+            ", peak_rss=" + format_bytes(memory->peak_rss_bytes);
+    }
+
+    return ", rss=unavailable, peak_rss=unavailable";
 }
 
 std::string format_performance_metrics_log(const StreamingPerformanceMetrics &metrics) {
@@ -1555,7 +1709,10 @@ FormatContextHandle open_format_context(
 OpenedCodecContext open_decoder_context(
     AVStream &stream,
     const TranscodeThreadingSettings &threading_settings,
-    const std::uint32_t logical_core_count
+    const std::uint32_t logical_core_count,
+    const std::function<void(const std::string &)> &log_callback = {},
+    const std::string_view log_label = {},
+    const VideoStreamInfo *inspected_video_stream = nullptr
 ) {
     if (stream.codecpar == nullptr) {
         throw std::runtime_error("The selected stream does not expose codec parameters.");
@@ -1588,6 +1745,33 @@ OpenedCodecContext open_decoder_context(
         codec_context->thread_type = threading.thread_type;
     }
 
+    if (log_callback) {
+        std::ostringstream message;
+        message << "Video decoder open start";
+        if (!log_label.empty()) {
+            message << " (" << log_label << ")";
+        }
+        message << ": inspection_codec="
+                << (inspected_video_stream != nullptr ? inspected_video_stream->codec_name : "unknown")
+                << ", inspection_pixel_format="
+                << (inspected_video_stream != nullptr ? inspected_video_stream->pixel_format_name : "unknown")
+                << ", stream_codec=" << ffmpeg_support::codec_name_from_parameters(*stream.codecpar)
+                << ", stream_codec_id=" << static_cast<int>(stream.codecpar->codec_id)
+                << ", profile=" << codec_profile_name(stream.codecpar->codec_id, stream.codecpar->profile)
+                << ", stream_pixel_format=" << ffmpeg_support::pixel_format_name_from_parameters(*stream.codecpar)
+                << ", " << format_color_fields(
+                    stream.codecpar->color_range,
+                    stream.codecpar->color_space,
+                    stream.codecpar->color_trc,
+                    stream.codecpar->color_primaries
+                )
+                << ", decoder=" << decoder->name
+                << ", requested_thread_count=" << format_thread_count(threading.thread_count)
+                << ", requested_thread_type=" << detail::format_ffmpeg_thread_type_detail(threading.thread_type)
+                << '.';
+        emit_runtime_log(log_callback, message.str());
+    }
+
     const auto open_result = avcodec_open2(codec_context.get(), decoder, nullptr);
     if (open_result < 0) {
         throw std::runtime_error(
@@ -1598,6 +1782,20 @@ OpenedCodecContext open_decoder_context(
 
     const int actual_thread_count = codec_context->thread_count;
     const int actual_thread_type = detail::active_codec_thread_type(*codec_context);
+
+    if (log_callback) {
+        std::ostringstream message;
+        message << "Video decoder open end";
+        if (!log_label.empty()) {
+            message << " (" << log_label << ")";
+        }
+        message << ": decoder=" << decoder->name
+                << ", codec_context_pix_fmt=" << pixel_format_name(codec_context->pix_fmt)
+                << ", actual_thread_count=" << format_thread_count(actual_thread_count)
+                << ", actual_thread_type=" << detail::format_ffmpeg_thread_type_detail(actual_thread_type)
+                << '.';
+        emit_runtime_log(log_callback, message.str());
+    }
 
     return OpenedCodecContext{
         .context = std::move(codec_context),
@@ -1628,7 +1826,8 @@ SegmentDecoderResources open_segment_resources(
     const bool decode_audio,
     const TranscodeThreadingSettings &threading_settings,
     const std::uint32_t logical_core_count,
-    const std::function<bool()> &cancellation_requested
+    const std::function<bool()> &cancellation_requested,
+    const std::function<void(const std::string &)> &log_callback
 ) {
     const auto input_path_string = segment_plan.source_path.lexically_normal().string();
     auto interrupt_context = make_cancellation_interrupt_context(cancellation_requested);
@@ -1643,7 +1842,14 @@ SegmentDecoderResources open_segment_resources(
     }
 
     auto *video_stream = format_context->streams[video_stream_info.stream_index];
-    auto opened_video_decoder = open_decoder_context(*video_stream, threading_settings, logical_core_count);
+    auto opened_video_decoder = open_decoder_context(
+        *video_stream,
+        threading_settings,
+        logical_core_count,
+        log_callback,
+        std::string(timeline::to_string(segment_plan.kind)) + " segment",
+        &video_stream_info
+    );
 
     CodecContextHandle audio_decoder{};
     AVStream *audio_stream = nullptr;
@@ -1797,7 +2003,11 @@ StreamingVideoFrame build_streaming_video_frame_metadata(
             .sample_aspect_ratio = choose_sample_aspect_ratio(source_frame, stream),
             .pixel_format = NormalizedVideoPixelFormat::unknown,
             .planes = {}
-        }
+        },
+        .source_codec_name = stream.codecpar != nullptr
+            ? ffmpeg_support::codec_name_from_parameters(*stream.codecpar)
+            : std::string("unknown"),
+        .source_codec_id = stream.codecpar != nullptr ? stream.codecpar->codec_id : AV_CODEC_ID_NONE
     };
 }
 
@@ -1814,7 +2024,10 @@ void populate_normalized_video_frame_pixels(
 ) {
     const auto source_pixel_format = static_cast<AVPixelFormat>(source_frame.format);
     if (source_pixel_format == AV_PIX_FMT_NONE) {
-        throw std::runtime_error("The video decoder returned a frame without a usable pixel format.");
+        throw std::runtime_error(
+            "The video decoder returned a frame without a usable pixel format. " +
+            format_streaming_frame_error_context("subtitle_decode_normalization", normalized_frame, &source_frame)
+        );
     }
 
     if (!scale_context ||
@@ -1835,7 +2048,10 @@ void populate_normalized_video_frame_pixels(
         );
 
         if (raw_scale_context == nullptr) {
-            throw std::runtime_error("Failed to create an FFmpeg scaling context for streaming decode normalization.");
+            throw std::runtime_error(
+                "Failed to create an FFmpeg scaling context for streaming decode normalization. " +
+                format_streaming_frame_error_context("subtitle_decode_sws_getContext", normalized_frame, &source_frame)
+            );
         }
 
         scale_context.reset(raw_scale_context);
@@ -1885,7 +2101,11 @@ void populate_normalized_video_frame_pixels(
         destination_linesize
     );
     if (scale_result <= 0) {
-        throw std::runtime_error("FFmpeg did not produce normalized video output for a decoded streaming frame.");
+        throw std::runtime_error(
+            "FFmpeg did not produce normalized video output for a decoded streaming frame. sws_scale_result=" +
+            std::to_string(scale_result) + ". " +
+            format_streaming_frame_error_context("subtitle_decode_sws_scale", normalized_frame, &source_frame)
+        );
     }
 
     normalized_frame.metadata.width = target_width;
@@ -1921,6 +2141,8 @@ StreamingVideoFrame clone_streaming_video_frame(const StreamingVideoFrame &sourc
         cloned_frame.native_frame = clone_frame(*source_frame.native_frame);
     }
     cloned_frame.metadata = source_frame.metadata;
+    cloned_frame.source_codec_name = source_frame.source_codec_name;
+    cloned_frame.source_codec_id = source_frame.source_codec_id;
     return cloned_frame;
 }
 
@@ -2735,6 +2957,7 @@ public:
         const std::optional<AudioOutputPlan> &audio_plan,
         std::optional<AudioCopyTemplate> audio_copy_template,
         const std::uint32_t logical_core_count,
+        std::function<void(const std::string &)> log_callback = {},
         std::function<bool()> cancellation_requested = {}
     )
         : request_(request),
@@ -2742,6 +2965,7 @@ public:
           resolved_audio_output_(resolved_audio_output),
           audio_plan_(audio_plan),
           audio_copy_template_(std::move(audio_copy_template)),
+          log_callback_(std::move(log_callback)),
           cancellation_requested_(std::move(cancellation_requested)),
           interrupt_context_(make_cancellation_interrupt_context(cancellation_requested_)),
           partial_output_cleanup_(request.output_path.lexically_normal()) {
@@ -2831,6 +3055,35 @@ public:
 
     [[nodiscard]] OutputVideoCodec video_codec() const noexcept {
         return request_.video_settings.codec;
+    }
+
+    [[nodiscard]] std::string native_direct_encode_decision_for_diagnostics(
+        const AVFrame &source_frame,
+        const AVCodecID source_codec_id,
+        const bool subtitle_path
+    ) const {
+        if (subtitle_path) {
+            return "sws_scale (subtitle burn-in normalizes decoded frames through RGBA)";
+        }
+
+        if (!can_encode_native_frame_directly(source_frame)) {
+            return "sws_scale (source frame " + std::to_string(source_frame.width) + "x" +
+                std::to_string(source_frame.height) + " " +
+                pixel_format_name(static_cast<AVPixelFormat>(source_frame.format)) +
+                " does not match encoder " + std::to_string(video_codec_context_->width) + "x" +
+                std::to_string(video_codec_context_->height) + " " + pixel_format_name(video_codec_context_->pix_fmt) +
+                ")";
+        }
+
+        if (native_direct_encode_disabled_by_env()) {
+            return "sws_scale (UTSURE_DISABLE_NATIVE_DIRECT_ENCODE is enabled)";
+        }
+
+        if (source_codec_is_hevc(source_codec_id)) {
+            return "sws_scale (HEVC source native-direct bypass)";
+        }
+
+        return "native_direct_encode";
     }
 
     void push_frame(StreamingVideoFrame video_frame) {
@@ -3050,7 +3303,8 @@ private:
     void ensure_video_scale_context(
         const int source_width,
         const int source_height,
-        const AVPixelFormat source_pixel_format
+        const AVPixelFormat source_pixel_format,
+        const std::string &error_context
     ) {
         if (!scale_context_ ||
             video_scale_source_width_ != source_width ||
@@ -3069,7 +3323,9 @@ private:
                 nullptr
             );
             if (raw_scale_context == nullptr) {
-                throw std::runtime_error("Failed to create the streaming encode scaling context.");
+                throw std::runtime_error(
+                    "Failed to create the streaming encode scaling context. " + error_context
+                );
             }
 
             scale_context_.reset(raw_scale_context);
@@ -3079,10 +3335,73 @@ private:
         }
     }
 
+    [[nodiscard]] std::optional<std::string> native_direct_encode_bypass_reason(
+        const StreamingVideoFrame &video_frame
+    ) const {
+        if (native_direct_encode_disabled_by_env()) {
+            return "UTSURE_DISABLE_NATIVE_DIRECT_ENCODE is enabled";
+        }
+
+        if (source_codec_is_hevc(video_frame.source_codec_id)) {
+            return "HEVC source native-direct bypass";
+        }
+
+        return std::nullopt;
+    }
+
+    void log_native_direct_encode_used_once(const StreamingVideoFrame &video_frame, const AVFrame &source_frame) {
+        if (logged_native_direct_encode_used_) {
+            return;
+        }
+
+        logged_native_direct_encode_used_ = true;
+        emit_runtime_log(
+            log_callback_,
+            "Native direct encode used: source_codec=" + video_frame.source_codec_name +
+                ", frame_format=" + pixel_format_name(static_cast<AVPixelFormat>(source_frame.format)) +
+                ", width=" + std::to_string(source_frame.width) +
+                ", height=" + std::to_string(source_frame.height) +
+                ", linesize=" + format_avframe_linesizes(source_frame) + "."
+        );
+    }
+
+    void log_native_direct_encode_bypassed_once(
+        const StreamingVideoFrame &video_frame,
+        const AVFrame &source_frame,
+        std::string reason
+    ) {
+        if (logged_native_direct_encode_bypassed_) {
+            return;
+        }
+
+        logged_native_direct_encode_bypassed_ = true;
+        emit_runtime_log(
+            log_callback_,
+            "Native direct encode bypassed: reason=" + std::move(reason) +
+                ", source_codec=" + video_frame.source_codec_name +
+                ", frame_format=" + pixel_format_name(static_cast<AVPixelFormat>(source_frame.format)) +
+                ", width=" + std::to_string(source_frame.width) +
+                ", height=" + std::to_string(source_frame.height) +
+                ", linesize=" + format_avframe_linesizes(source_frame) + "."
+        );
+    }
+
     AVFrame *prepare_video_encoder_input_frame(StreamingVideoFrame &video_frame) {
         if (video_frame.native_frame && can_encode_native_frame_directly(*video_frame.native_frame)) {
-            apply_output_video_timing(*video_frame.native_frame, video_frame);
-            return video_frame.native_frame.get();
+            if (const auto bypass_reason = native_direct_encode_bypass_reason(video_frame);
+                !bypass_reason.has_value()) {
+                log_native_direct_encode_used_once(video_frame, *video_frame.native_frame);
+                apply_output_video_timing(*video_frame.native_frame, video_frame);
+                return video_frame.native_frame.get();
+            } else {
+                log_native_direct_encode_bypassed_once(video_frame, *video_frame.native_frame, *bypass_reason);
+            }
+        } else if (video_frame.native_frame) {
+            log_native_direct_encode_bypassed_once(
+                video_frame,
+                *video_frame.native_frame,
+                "source frame shape or pixel format differs from encoder"
+            );
         }
 
         AVFrame &encoded_frame = prepare_reusable_video_encode_frame();
@@ -3090,13 +3409,21 @@ private:
         if (video_frame.native_frame) {
             const auto source_pixel_format = static_cast<AVPixelFormat>(video_frame.native_frame->format);
             if (source_pixel_format == AV_PIX_FMT_NONE) {
-                throw std::runtime_error("The streaming encoder received a native frame without a usable pixel format.");
+                throw std::runtime_error(
+                    "The streaming encoder received a native frame without a usable pixel format. " +
+                    format_streaming_frame_error_context("encode_native_format", video_frame, video_frame.native_frame.get())
+                );
             }
 
             ensure_video_scale_context(
                 video_frame.native_frame->width,
                 video_frame.native_frame->height,
-                source_pixel_format
+                source_pixel_format,
+                format_streaming_frame_error_context(
+                    "encode_native_sws_getContext",
+                    video_frame,
+                    video_frame.native_frame.get()
+                )
             );
 
             const auto scale_result = sws_scale(
@@ -3110,7 +3437,13 @@ private:
             );
             if (scale_result <= 0) {
                 throw std::runtime_error(
-                    "FFmpeg failed to convert a native streaming frame into the encoder pixel format."
+                    "FFmpeg failed to convert a native streaming frame into the encoder pixel format. sws_scale_result=" +
+                    std::to_string(scale_result) + ". " +
+                    format_streaming_frame_error_context(
+                        "encode_native_sws_scale",
+                        video_frame,
+                        video_frame.native_frame.get()
+                    )
                 );
             }
 
@@ -3127,7 +3460,12 @@ private:
             "The streaming encoder subtitle handoff"
         );
 
-        ensure_video_scale_context(video_frame.metadata.width, video_frame.metadata.height, AV_PIX_FMT_RGBA);
+        ensure_video_scale_context(
+            video_frame.metadata.width,
+            video_frame.metadata.height,
+            AV_PIX_FMT_RGBA,
+            format_streaming_frame_error_context("encode_rgba_sws_getContext", video_frame, nullptr)
+        );
 
         const std::uint8_t *source_data[4] = {
             video_frame.metadata.planes.front().bytes.data(),
@@ -3152,7 +3490,11 @@ private:
             encoded_frame.linesize
         );
         if (scale_result <= 0) {
-            throw std::runtime_error("FFmpeg failed to convert a streaming frame into the encoder pixel format.");
+            throw std::runtime_error(
+                "FFmpeg failed to convert a streaming frame into the encoder pixel format. sws_scale_result=" +
+                std::to_string(scale_result) + ". " +
+                format_streaming_frame_error_context("encode_rgba_sws_scale", video_frame, nullptr)
+            );
         }
 
         apply_output_video_timing(encoded_frame, video_frame);
@@ -3465,6 +3807,7 @@ private:
     ResolvedAudioOutputPlan resolved_audio_output_{};
     std::optional<AudioOutputPlan> audio_plan_{};
     std::optional<AudioCopyTemplate> audio_copy_template_{};
+    std::function<void(const std::string &)> log_callback_{};
     std::function<bool()> cancellation_requested_{};
     std::shared_ptr<CancellationInterruptContext> interrupt_context_{};
     PartialOutputCleanupGuard partial_output_cleanup_;
@@ -3480,6 +3823,8 @@ private:
     int video_scale_source_width_{0};
     int video_scale_source_height_{0};
     AVPixelFormat video_scale_source_pixel_format_{AV_PIX_FMT_NONE};
+    bool logged_native_direct_encode_used_{false};
+    bool logged_native_direct_encode_bypassed_{false};
     std::vector<std::vector<float>> pending_audio_channels_{};
     std::optional<std::int64_t> pending_audio_start_pts_{};
     std::int64_t pending_audio_sample_count_{0};
@@ -3489,6 +3834,57 @@ private:
     int video_encoder_thread_type_{0};
     bool finalized_{false};
 };
+
+std::string format_first_decoded_video_frame_log(
+    const std::string_view segment_name,
+    const AVFrame &decoded_frame,
+    const StreamingVideoFrame &streaming_frame,
+    const SegmentDecoderResources &resources,
+    const StreamingOutputSession &output_session,
+    const bool segment_uses_subtitle_path
+) {
+    const auto frame_pixel_format = static_cast<AVPixelFormat>(decoded_frame.format);
+    const AVCodecID source_codec_id = streaming_frame.source_codec_id;
+    const int decoder_profile = resources.video_decoder != nullptr
+        ? resources.video_decoder->profile
+        : FF_PROFILE_UNKNOWN;
+    const AVPixelFormat decoder_pixel_format = resources.video_decoder != nullptr
+        ? resources.video_decoder->pix_fmt
+        : AV_PIX_FMT_NONE;
+    std::ostringstream message;
+    message << "First decoded video frame diagnostics: segment=" << segment_name
+            << ", source_codec=" << streaming_frame.source_codec_name
+            << ", source_codec_id=" << static_cast<int>(source_codec_id)
+            << ", source_codec_detail=" << format_codec_id_detail(source_codec_id)
+            << ", profile=" << codec_profile_name(source_codec_id, decoder_profile)
+            << ", decoder="
+            << (resources.video_decoder != nullptr && resources.video_decoder->codec != nullptr
+                ? resources.video_decoder->codec->name
+                : "unknown")
+            << ", codec_context_pix_fmt=" << pixel_format_name(decoder_pixel_format)
+            << ", frame_format=" << pixel_format_name(frame_pixel_format)
+            << ", width=" << decoded_frame.width
+            << ", height=" << decoded_frame.height
+            << ", linesize=" << format_avframe_linesizes(decoded_frame)
+            << ", " << format_color_fields(
+                decoded_frame.color_range,
+                decoded_frame.colorspace,
+                decoded_frame.color_trc,
+                decoded_frame.color_primaries
+            )
+            << ", decoder_thread_count=" << format_thread_count(resources.video_decoder_thread_count)
+            << ", decoder_active_thread_type="
+            << detail::format_ffmpeg_thread_type_detail(resources.video_decoder_thread_type)
+            << ", frame_output_path="
+            << output_session.native_direct_encode_decision_for_diagnostics(
+                decoded_frame,
+                source_codec_id,
+                segment_uses_subtitle_path
+            )
+            << format_memory_snapshot_suffix()
+            << '.';
+    return message.str();
+}
 
 VideoOutputPlan build_video_output_plan(const timeline::TimelinePlan &timeline_plan) {
     if (timeline_plan.segments.empty() || timeline_plan.main_segment_index >= timeline_plan.segments.size()) {
@@ -3865,10 +4261,14 @@ SegmentProcessResult process_segment(
     const bool copy_audio = resolved_audio_plan != nullptr && resolved_audio_plan->copies_audio();
     const bool segment_uses_subtitle_path = segment_plan.subtitles_enabled && subtitle_settings.has_value();
     const auto segment_name = std::string(timeline::to_string(segment_plan.kind));
+    const auto source_codec_name = segment_plan.inspected_source_info.primary_video_stream.has_value()
+        ? segment_plan.inspected_source_info.primary_video_stream->codec_name
+        : std::string("unknown");
     failure_context.stage = "segment_start";
     failure_context.segment_name = segment_name;
     failure_context.output_path = filesystem::path_to_utf8_string(output_session.output_path());
     failure_context.codec = to_string(output_session.video_codec());
+    failure_context.source_codec = source_codec_name;
     failure_context.resolution =
         std::to_string(video_output_plan.width) + "x" + std::to_string(video_output_plan.height);
     failure_context.video_queue_depth = queue_limits.video_frame_queue_depth;
@@ -3882,7 +4282,8 @@ SegmentProcessResult process_segment(
         encode_audio,
         threading_settings,
         runtime_behavior.effective_logical_core_count,
-        cancellation_requested
+        cancellation_requested,
+        log_callback
     );
     seek_segment_to_trim_start(segment_plan, resources);
     PacketHandle demux_packet = allocate_packet();
@@ -3918,7 +4319,7 @@ SegmentProcessResult process_segment(
                    ", diagnostics " + runtime_behavior.subtitle_diagnostics_mode +
                    ", subtitle worker(s) " + std::to_string(runtime_behavior.subtitle_processing_worker_count) +
                    ", video worker(s) " + std::to_string(runtime_behavior.video_processing_worker_count) + '.')
-                : "subtitle-free native-frame fast path.")
+                : "subtitle-free native-frame candidate path; HEVC sources and UTSURE_DISABLE_NATIVE_DIRECT_ENCODE use sws_scale.")
     );
     emit_runtime_log(
         log_callback,
@@ -3926,6 +4327,7 @@ SegmentProcessResult process_segment(
             ", source='" + filesystem::path_to_utf8_string(segment_plan.source_path.lexically_normal()) +
             "', output='" + failure_context.output_path +
             "', codec=" + failure_context.codec +
+            ", source_codec=" + source_codec_name +
             ", resolution=" + failure_context.resolution +
             ", video_queue_depth=" + std::to_string(queue_limits.video_frame_queue_depth) +
             ", audio_queue_depth=" + std::to_string(queue_limits.decoded_audio_block_queue_depth) +
@@ -4014,6 +4416,7 @@ SegmentProcessResult process_segment(
     std::int64_t decoded_segment_audio_samples = 0;
     std::int64_t emitted_segment_audio_samples = 0;
     std::int64_t decoded_video_frame_index = 0;
+    bool first_decoded_video_frame_logged = false;
     const std::int64_t segment_output_start_pts = next_output_video_pts;
     const std::optional<std::int64_t> authoritative_segment_end_pts = estimated_segment_duration_pts.has_value()
         ? std::optional<std::int64_t>(segment_output_start_pts + *estimated_segment_duration_pts)
@@ -4375,24 +4778,20 @@ SegmentProcessResult process_segment(
             rescale_to_microseconds(frame_end_pts, timeline_plan.output_video_time_base)
         );
         if ((next_output_frame_index + 1) == 1 || ((next_output_frame_index + 1) % 300) == 0) {
-            std::string memory_suffix{};
-            if (const auto memory = sample_process_memory(); memory.has_value()) {
-                memory_suffix = ", rss=" + format_bytes(memory->rss_bytes) +
-                    ", peak_rss=" + format_bytes(memory->peak_rss_bytes);
-            }
             emit_runtime_log(
                 log_callback,
                 "Streaming frame checkpoint: segment=" + segment_name +
                     ", frame=" + std::to_string(next_output_frame_index) +
                     ", pts=" + std::to_string(timing.output_pts) +
                     ", pts_us=" + std::to_string(*failure_context.pts_us) +
+                    ", source_codec=" + video_frame.source_codec_name +
                     ", video_queue_depth=" + std::to_string(video_frame_processor ? video_frame_processor->outstanding_count() : 0U) +
                     ", audio_queue_depth=" + std::to_string(decoded_audio_queue.size()) +
                     ", decoder_threads=" + std::to_string(resources.video_decoder_thread_count) +
                     ", encoder_threads=" + std::to_string(runtime_behavior.selected_video_encoder_thread_count) +
                     ", video_workers=" + std::to_string(runtime_behavior.video_processing_worker_count) +
                     ", subtitle_workers=" + std::to_string(runtime_behavior.subtitle_processing_worker_count) +
-                    memory_suffix + "."
+                    format_memory_snapshot_suffix() + "."
             );
         }
         ++next_output_frame_index;
@@ -4669,6 +5068,22 @@ SegmentProcessResult process_segment(
             );
             failure_context.pts = streaming_frame.metadata.timestamp.source_pts;
             failure_context.pts_us = streaming_frame.metadata.timestamp.start_microseconds;
+            failure_context.frame_format = pixel_format_name(static_cast<AVPixelFormat>(decoded_video_frame->format));
+            failure_context.frame_linesizes = format_avframe_linesizes(*decoded_video_frame);
+            if (!first_decoded_video_frame_logged) {
+                emit_runtime_log(
+                    log_callback,
+                    format_first_decoded_video_frame_log(
+                        segment_name,
+                        *decoded_video_frame,
+                        streaming_frame,
+                        resources,
+                        output_session,
+                        segment_uses_subtitle_path
+                    )
+                );
+                first_decoded_video_frame_logged = true;
+            }
             streaming_frame.native_frame = move_frame(*decoded_video_frame);
             process_video_frame(std::move(streaming_frame));
             ++decoded_video_frame_index;
@@ -5449,6 +5864,7 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
             audio_output_plan,
             std::move(audio_copy_template),
             runtime_behavior.effective_logical_core_count,
+            request.log_callback,
             request.cancellation_requested
         );
         throw_if_cancellation_requested(request.cancellation_requested);

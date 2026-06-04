@@ -1261,6 +1261,31 @@ Implemented:
   * Update the app structure smoke summary to describe the compact Profiles/Resolution row and revised Video/Audio groups.
   * Follow-up equalized the Profiles/Resolution and Video/Audio group spacing, removed the Resolution `Output` label, limited combo content growth so long audio-track names do not squeeze Video, and reduced built-in/loadable profiles to `Default` and `Low Size`.
 
+### M36 HEVC source crash reproduction and diagnostics
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Reproduce the reported HEVC/H.265 source crash in CI with generated app/controller media.
+  * Add first-frame FFmpeg decode diagnostics and HEVC decoder-open diagnostics around the existing streaming path.
+  * Harden native decoded-frame handoff with a HEVC-focused bypass and structured swscale/frame-shape errors.
+  * Do not redesign parallel mode, touch GUI profile layout, or change subtitle architecture without test evidence.
+
+Implementation approach:
+  * Keep existing H.264 app real-media smokes and add separate HEVC CTest modes using libx265-generated sources.
+  * Route HEVC yuv420p decoded frames through sws_scale before encoder submission so the encoder receives a fresh owned frame while diagnostics identify the decoded shape.
+  * Emit source codec, decoder, pixel format, linesize, color, thread, queue, and RSS/peak RSS diagnostics from the core pipeline and app smoke runner.
+
+Implemented:
+  * Added libx265 detection that fails CI configuration loudly when HEVC source tests cannot be registered.
+  * Added generated yuv420p HEVC app media with audio, plus optional yuv420p10le HEVC media when the local libx265 encoder advertises that pixel format.
+  * Added separate app/controller CTest entries for HEVC single no-subtitle, single subtitle burn-in, parallel no-subtitle, parallel subtitle burn-in, and parallel cancel-one.
+  * Added decoder-open logs for inspected codec/pixel format, stream codec id/profile/pixel format/color fields, decoder name, requested threading, and actual post-open threading/pixel format.
+  * Added first decoded-frame diagnostics with actual AVFrame format, linesizes, dimensions, color fields, decoder threading, RSS/peak RSS, and native-direct versus sws_scale decision.
+  * Added HEVC source native-direct bypass, plus `UTSURE_DISABLE_NATIVE_DIRECT_ENCODE` as a broader diagnostic switch.
+  * Added structured sws_getContext/sws_scale/frame-format error context with source codec, frame format, linesizes, stage, frame index, and PTS.
+  * Expanded app parallel resource logs with source codec and frame queue depth while preserving existing H.264 real smokes.
+
 ## Immediate next milestone
 
-Re-run GitHub Actions for M27/M28/M29/M30/M31/M32/M33/M34/M35 validation.
+Finish M36 and re-run GitHub Actions for M27/M28/M29/M30/M31/M32/M33/M34/M35/M36 validation.

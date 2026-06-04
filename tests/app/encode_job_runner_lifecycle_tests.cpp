@@ -14,12 +14,14 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -65,6 +67,7 @@ std::optional<ProcessMemorySnapshot> sample_process_memory() noexcept {
 
 void log_parallel_resource_context(
     const char *label,
+    const char *source_codec,
     const int active_job_count,
     const int runner_slot_index,
     const int job_index,
@@ -74,11 +77,13 @@ void log_parallel_resource_context(
               << ".active_jobs=" << active_job_count
               << " runner_slot=" << runner_slot_index
               << " job_index=" << job_index
+              << " source_codec=" << source_codec
               << " planned_decoder_threads=" << summary.decoder_threads_per_job
               << " planned_encoder_threads=" << summary.encoder_threads_per_job
               << " estimated_video_workers=" << summary.video_workers_per_job
               << " estimated_subtitle_workers=" << summary.subtitle_workers_per_job
               << " estimated_total_threads=" << summary.estimated_total_threads
+              << " frame_queue_depth=" << summary.video_frame_queue_depth
               << " overcommit=" << (summary.estimated_threads_exceed_usable_cores ? 1 : 0);
     if (const auto memory = sample_process_memory(); memory.has_value()) {
         std::cout << " current_rss=" << memory->rss_bytes
@@ -122,6 +127,33 @@ void log_real_parallel_state(
         std::cerr << " current_rss=unavailable peak_rss=unavailable";
     }
     std::cerr << '\n';
+}
+
+std::string to_utf8_string(const QString &text) {
+    const auto bytes = text.toUtf8();
+    return std::string(bytes.constData(), static_cast<std::size_t>(bytes.size()));
+}
+
+void log_controller_line(
+    const char *label,
+    const char *runner_slot,
+    const QString &line
+) {
+    std::cout << label << "." << runner_slot << ".log=" << to_utf8_string(line) << '\n';
+}
+
+bool parse_bool_argument(const std::string_view value, bool &parsed_value) {
+    if (value == "1" || value == "true" || value == "yes") {
+        parsed_value = true;
+        return true;
+    }
+
+    if (value == "0" || value == "false" || value == "no") {
+        parsed_value = false;
+        return true;
+    }
+
+    return false;
 }
 
 int fail(const char *message) {
@@ -749,8 +781,78 @@ int run_parallel_controller_smoke_assertion() {
     return 0;
 }
 
+int run_real_single_encode_assertion(
+    const char *label,
+    const std::filesystem::path &input_path,
+    const std::filesystem::path &subtitle_path,
+    const std::filesystem::path &output_path,
+    const bool burn_subtitles
+) {
+    bool streaming_seen = false;
+    bool finished = false;
+    bool succeeded = false;
+    bool canceled = false;
+    QString status_text;
+    QString details_text;
+
+    EncodeJobRunnerController controller;
+    QObject::connect(
+        &controller,
+        &EncodeJobRunnerController::log_message,
+        &controller,
+        [label](const QString &line) {
+            log_controller_line(label, "single", line);
+        }
+    );
+    QObject::connect(
+        &controller,
+        &EncodeJobRunnerController::progress_changed,
+        &controller,
+        [&streaming_seen](const EncodeJobProgress &progress) {
+            if (progress.stage == EncodeJobStage::encoding_output) {
+                streaming_seen = true;
+            }
+        }
+    );
+    QObject::connect(
+        &controller,
+        &EncodeJobRunnerController::job_finished,
+        &controller,
+        [&](
+            const bool job_succeeded,
+            const bool job_canceled,
+            const QString &job_status_text,
+            const QString &job_details_text,
+            const QString &
+        ) {
+            finished = true;
+            succeeded = job_succeeded;
+            canceled = job_canceled;
+            status_text = job_status_text;
+            details_text = job_details_text;
+        }
+    );
+
+    if (!controller.start_job(make_real_encode_job(input_path, subtitle_path, output_path, burn_subtitles))) {
+        return fail("Controller refused to start the real single encode job.");
+    }
+    if (!wait_until([&]() { return finished; }, 30000)) {
+        std::cerr << label << ".streaming_seen=" << (streaming_seen ? 1 : 0) << '\n';
+        return fail("Real single encode smoke did not finish before timeout.");
+    }
+    if (!succeeded || canceled) {
+        std::cerr << label << ".status=" << to_utf8_string(status_text) << '\n'
+                  << label << ".details=" << to_utf8_string(details_text) << '\n';
+        return fail("Real single encode smoke did not complete successfully.");
+    }
+
+    std::cout << label << "=ok\n";
+    return 0;
+}
+
 int run_real_parallel_pair_assertion(
     const char *label,
+    const char *source_codec,
     const std::filesystem::path &input_path,
     const std::filesystem::path &subtitle_path,
     const std::filesystem::path &first_output_path,
@@ -777,10 +879,30 @@ int run_real_parallel_pair_assertion(
     bool second_succeeded = false;
     bool first_canceled = false;
     bool second_canceled = false;
+    QString first_status_text;
+    QString second_status_text;
+    QString first_details_text;
+    QString second_details_text;
     std::atomic_bool first_cancel_requested{false};
 
     EncodeJobRunnerController first_controller;
     EncodeJobRunnerController second_controller;
+    QObject::connect(
+        &first_controller,
+        &EncodeJobRunnerController::log_message,
+        &first_controller,
+        [label](const QString &line) {
+            log_controller_line(label, "first", line);
+        }
+    );
+    QObject::connect(
+        &second_controller,
+        &EncodeJobRunnerController::log_message,
+        &second_controller,
+        [label](const QString &line) {
+            log_controller_line(label, "second", line);
+        }
+    );
     QObject::connect(
         &first_controller,
         &EncodeJobRunnerController::progress_changed,
@@ -814,25 +936,41 @@ int run_real_parallel_pair_assertion(
         &first_controller,
         &EncodeJobRunnerController::job_finished,
         &first_controller,
-        [&](const bool succeeded, const bool canceled, const QString &, const QString &, const QString &) {
+        [&](
+            const bool succeeded,
+            const bool canceled,
+            const QString &status_text,
+            const QString &details_text,
+            const QString &
+        ) {
             first_finished = true;
             first_succeeded = succeeded;
             first_canceled = canceled;
+            first_status_text = status_text;
+            first_details_text = details_text;
         }
     );
     QObject::connect(
         &second_controller,
         &EncodeJobRunnerController::job_finished,
         &second_controller,
-        [&](const bool succeeded, const bool canceled, const QString &, const QString &, const QString &) {
+        [&](
+            const bool succeeded,
+            const bool canceled,
+            const QString &status_text,
+            const QString &details_text,
+            const QString &
+        ) {
             second_finished = true;
             second_succeeded = succeeded;
             second_canceled = canceled;
+            second_status_text = status_text;
+            second_details_text = details_text;
         }
     );
 
-    log_parallel_resource_context(label, 2, 0, 0, resource_summary);
-    log_parallel_resource_context(label, 2, 1, 1, resource_summary);
+    log_parallel_resource_context(label, source_codec, 2, 0, 0, resource_summary);
+    log_parallel_resource_context(label, source_codec, 2, 1, 1, resource_summary);
     if (!first_controller.start_job(make_real_encode_job(input_path, subtitle_path, first_output_path, burn_subtitles)) ||
         !second_controller.start_job(make_real_encode_job(input_path, subtitle_path, second_output_path, burn_subtitles))) {
         return fail("Real parallel smoke could not start both encode jobs.");
@@ -910,6 +1048,10 @@ int run_real_parallel_pair_assertion(
             return fail("Real parallel cancel smoke did not preserve cancel-one/success-other outcomes.");
         }
     } else if (!first_succeeded || !second_succeeded || first_canceled || second_canceled) {
+        std::cerr << label << ".first_status=" << to_utf8_string(first_status_text) << '\n'
+                  << label << ".first_details=" << to_utf8_string(first_details_text) << '\n'
+                  << label << ".second_status=" << to_utf8_string(second_status_text) << '\n'
+                  << label << ".second_details=" << to_utf8_string(second_details_text) << '\n';
         log_real_parallel_state(
             label,
             "unexpected_success_outcome",
@@ -926,7 +1068,7 @@ int run_real_parallel_pair_assertion(
         return fail("Real parallel smoke did not complete both jobs successfully.");
     }
 
-    log_parallel_resource_context(label, 0, 0, 0, resource_summary);
+    log_parallel_resource_context(label, source_codec, 0, 0, 0, resource_summary);
     if (const auto final_memory = sample_process_memory(); initial_memory.has_value() && final_memory.has_value()) {
         std::cout << label
                   << ".current_rss_initial=" << initial_memory->rss_bytes
@@ -958,6 +1100,7 @@ int run_real_parallel_smoke_assertions(
     std::cout << "parallel_debug_matrix=no_subtitles,subtitles_normal,subtitles_serialized_with_UTSURE_SERIALIZE_SUBTITLE_SETUP=1\n";
     if (run_real_parallel_pair_assertion(
             "runner_lifecycle.real_parallel_no_subtitle",
+            "h264",
             input_path,
             subtitle_path,
             no_subtitle_first_output_path,
@@ -970,6 +1113,7 @@ int run_real_parallel_smoke_assertions(
 
     if (run_real_parallel_pair_assertion(
             "runner_lifecycle.real_parallel_subtitle",
+            "h264",
             input_path,
             subtitle_path,
             subtitle_first_output_path,
@@ -982,6 +1126,7 @@ int run_real_parallel_smoke_assertions(
 
     if (run_real_parallel_pair_assertion(
             "runner_lifecycle.real_parallel_cancel_one",
+            "h264",
             input_path,
             subtitle_path,
             cancel_first_output_path,
@@ -1099,6 +1244,45 @@ int main(int argc, char **argv) {
             return fail("Usage: utsure_app_encode_job_runner_lifecycle_tests --real-cancel-destroy <input> <subtitle> <cancel-output> <destroy-output>");
         }
         return run_real_cancel_and_destroy_assertion(argv[2], argv[3], argv[4], argv[5]);
+    }
+
+    if (argc >= 2 && std::string_view(argv[1]) == "--real-single-encode") {
+        if (argc != 7) {
+            return fail("Usage: utsure_app_encode_job_runner_lifecycle_tests --real-single-encode <label> <input> <subtitle> <output> <burn-subtitles:0|1>");
+        }
+        bool burn_subtitles = false;
+        if (!parse_bool_argument(argv[6], burn_subtitles)) {
+            return fail("Invalid --real-single-encode burn-subtitles value.");
+        }
+        return run_real_single_encode_assertion(
+            argv[2],
+            argv[3],
+            argv[4],
+            argv[5],
+            burn_subtitles
+        );
+    }
+
+    if (argc >= 2 && std::string_view(argv[1]) == "--real-parallel-pair") {
+        if (argc != 10) {
+            return fail("Usage: utsure_app_encode_job_runner_lifecycle_tests --real-parallel-pair <label> <source-codec> <input> <subtitle> <first-output> <second-output> <burn-subtitles:0|1> <cancel-first:0|1>");
+        }
+        bool burn_subtitles = false;
+        bool cancel_first = false;
+        if (!parse_bool_argument(argv[8], burn_subtitles) ||
+            !parse_bool_argument(argv[9], cancel_first)) {
+            return fail("Invalid --real-parallel-pair boolean value.");
+        }
+        return run_real_parallel_pair_assertion(
+            argv[2],
+            argv[3],
+            argv[4],
+            argv[5],
+            argv[6],
+            argv[7],
+            burn_subtitles,
+            cancel_first
+        );
     }
 
     if (argc >= 2 && std::string_view(argv[1]) == "--real-parallel-smokes") {
