@@ -290,6 +290,8 @@ endif()
 
 qt_add_executable(utsure_app_encode_job_runner_lifecycle_tests
     encode_job_runner_lifecycle_tests.cpp
+    "${CMAKE_SOURCE_DIR}/src/app/crash_dump_writer.cpp"
+    "${CMAKE_SOURCE_DIR}/src/app/crash_dump_writer.hpp"
     "${CMAKE_SOURCE_DIR}/src/app/encode_job_runner_controller.cpp"
     "${CMAKE_SOURCE_DIR}/src/app/encode_job_runner_controller.hpp"
     "${CMAKE_SOURCE_DIR}/src/app/encode_job_runner_worker.cpp"
@@ -312,7 +314,7 @@ target_link_libraries(utsure_app_encode_job_runner_lifecycle_tests
         utsure::encoder_core
 )
 if(WIN32)
-    target_link_libraries(utsure_app_encode_job_runner_lifecycle_tests PRIVATE psapi)
+    target_link_libraries(utsure_app_encode_job_runner_lifecycle_tests PRIVATE dbghelp psapi)
 endif()
 
 target_compile_features(utsure_app_encode_job_runner_lifecycle_tests PRIVATE cxx_std_20)

@@ -23,7 +23,9 @@
 #include <utility>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #include <dbghelp.h>
 #include <psapi.h>
@@ -529,17 +531,17 @@ BOOL write_minidump(const std::filesystem::path &dump_path, void *exception_poin
 }
 
 LONG WINAPI unhandled_exception_filter(EXCEPTION_POINTERS *exception_pointers) {
-    write_crash_dump_for_current_process(exception_pointers);
+    (void)write_crash_dump_for_current_process(exception_pointers);
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
 void terminate_handler() {
-    write_crash_dump_for_current_process(nullptr);
+    (void)write_crash_dump_for_current_process(nullptr);
     std::_Exit(3);
 }
 
 void signal_handler(int /*signal_number*/) {
-    write_crash_dump_for_current_process(nullptr);
+    (void)write_crash_dump_for_current_process(nullptr);
     std::_Exit(3);
 }
 #endif
@@ -548,7 +550,7 @@ void signal_handler(int /*signal_number*/) {
 
 std::filesystem::path raw_default_crash_dump_directory();
 
-std::filesystem::path cached_crash_dump_directory_for_crash_path_for_test() {
+std::filesystem::path crash_dump_directory_for_crash_path() {
     std::unique_lock lock(crash_directory_mutex(), std::try_to_lock);
     if (!lock.owns_lock() || cached_crash_dump_directory().empty()) {
         return raw_default_crash_dump_directory();
@@ -1091,7 +1093,7 @@ CrashDumpWriteResult write_crash_dump_for_current_process(void *exception_pointe
     }
     try {
         const unsigned long crashing_thread = current_thread_id();
-        const auto dump_directory = cached_crash_dump_directory_for_crash_path_for_test();
+        const auto dump_directory = crash_dump_directory_for_crash_path();
         const auto paths = make_crash_artifact_paths(
             dump_directory,
             current_unix_seconds(),

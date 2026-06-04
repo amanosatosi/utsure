@@ -145,7 +145,7 @@ void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job, con
         std::atomic_int &runner_slot;
         ~ActiveGuard() {
             active.store(false);
-            utsure::app::crash::end_active_encode_job(runner_slot.load());
+            (void)utsure::app::crash::end_active_encode_job(runner_slot.load());
             runner_slot.store(-1);
         }
     } active_guard{active_, runner_slot_index_};

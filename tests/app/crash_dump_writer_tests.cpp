@@ -9,7 +9,9 @@
 #include <system_error>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #endif
 
@@ -169,7 +171,7 @@ int assert_crash_path_directory_access_does_not_block_on_cache_lock() {
     unset_env_var("UTSURE_CRASH_DUMP_DIR");
 
     utsure::app::crash::hold_crash_dump_directory_lock_for_test(true);
-    const auto crash_path_directory = utsure::app::crash::cached_crash_dump_directory_for_crash_path_for_test();
+    const auto crash_path_directory = utsure::app::crash::crash_dump_directory_for_crash_path();
     utsure::app::crash::hold_crash_dump_directory_lock_for_test(false);
 
     if (crash_path_directory.lexically_normal() == override_dir) {
@@ -313,7 +315,7 @@ int assert_sidecar_write() {
 [[noreturn]] void crash_child_process() {
     utsure::app::crash::reset_crash_context_for_tests();
     utsure::app::crash::install_crash_handlers();
-    utsure::app::crash::begin_active_encode_job(3);
+    (void)utsure::app::crash::begin_active_encode_job(3);
     utsure::app::crash::update_crash_context(utsure::app::crash::CrashContextUpdate{
         .runner_slot_index = 3,
         .input_path = "child-input-hevc.mp4",
