@@ -232,6 +232,15 @@ int assert_crash_context_snapshot_and_json() {
         snapshot.pts != 2002 ||
         snapshot.current_rss_bytes != 345678 ||
         snapshot.peak_rss_bytes != 456789) {
+        std::cerr
+            << "snapshot.runner_slot_index=" << snapshot.runner_slot_index
+            << " active_job_count=" << snapshot.active_job_count
+            << " source_codec=" << snapshot.source_codec
+            << " frame_index=" << snapshot.frame_index
+            << " pts=" << snapshot.pts
+            << " current_rss_bytes=" << snapshot.current_rss_bytes
+            << " peak_rss_bytes=" << snapshot.peak_rss_bytes
+            << '\n';
         return fail("Crash context snapshot did not preserve expected update fields.");
     }
     if (collection.crashing_thread_id != 99UL ||

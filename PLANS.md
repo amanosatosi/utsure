@@ -1334,6 +1334,7 @@ Hardening follow-up:
   * Follow-up changed crash-path cached-directory access to use a non-blocking try-lock and immediate LocalAppData/temp fallback if the cache mutex is already held.
   * Follow-up fixed the app encode-runner lifecycle test link by compiling the crash dump writer into that target and linking `dbghelp` on Windows, then renamed the production crash-path directory accessor to remove the misleading `for_test` suffix.
   * Follow-up fixed crash context snapshots so runtime-log updates preserve explicit active-job counts while still updating the top-level and per-runner-slot frame/PTS/RSS fields.
+  * Follow-up made runtime-log parsing stop string values at whitespace as well as punctuation, and prevented live RSS enrichment from overwriting explicitly parsed RSS fields.
 
 Validation:
   * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.

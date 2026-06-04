@@ -262,7 +262,7 @@ std::optional<std::string> extract_value_after(std::string_view message, std::st
     }
 
     const std::size_t value_start = key_position + key.size();
-    std::size_t value_end = message.find_first_of(",.;\n", value_start);
+    std::size_t value_end = message.find_first_of(",.; \t\r\n", value_start);
     if (value_end == std::string_view::npos) {
         value_end = message.size();
     }
@@ -461,8 +461,12 @@ void update_memory_snapshot(CrashContextUpdate &update) noexcept {
     PROCESS_MEMORY_COUNTERS counters{};
     counters.cb = sizeof(counters);
     if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)) != 0) {
-        update.current_rss_bytes = static_cast<std::uint64_t>(counters.WorkingSetSize);
-        update.peak_rss_bytes = static_cast<std::uint64_t>(counters.PeakWorkingSetSize);
+        if (!update.current_rss_bytes.has_value()) {
+            update.current_rss_bytes = static_cast<std::uint64_t>(counters.WorkingSetSize);
+        }
+        if (!update.peak_rss_bytes.has_value()) {
+            update.peak_rss_bytes = static_cast<std::uint64_t>(counters.PeakWorkingSetSize);
+        }
     }
 }
 
