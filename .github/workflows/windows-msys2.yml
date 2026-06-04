@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: windows-latest
     env:
-      UTSURE_CMAKE_BUILD_TYPE: Release
+      UTSURE_CMAKE_BUILD_TYPE: RelWithDebInfo
       UTSURE_MSYS2_PREFIX: "/ucrt64"
       UTSURE_TOOLCHAIN_ID_PREFIX: "ucrt64-gcc"
       UTSURE_FFMPEG_SERIES: "7.1"
@@ -94,9 +94,19 @@ jobs:
       - name: Package portable bundle
         run: ./scripts/ci/windows-msys2-package-portable.sh
 
+      - name: Package debug symbols
+        run: bash ./scripts/ci/windows-msys2-package-symbols.sh
+
       - name: Upload portable artifact
         uses: actions/upload-artifact@v6
         with:
           name: encoder-windows-x64-portable
           if-no-files-found: error
           path: artifacts/encoder-windows-x64-portable.zip
+
+      - name: Upload symbols artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: utsure-windows-symbols-${{ github.sha }}
+          if-no-files-found: error
+          path: artifacts/utsure-windows-symbols-*.zip

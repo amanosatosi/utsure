@@ -1,8 +1,10 @@
 #include "encode_job_runner_worker.hpp"
 
+#include "crash_dump_writer.hpp"
 #include "utsure/core/filesystem/path_format.hpp"
 #include "utsure/core/job/encode_job_report.hpp"
 
+#include <cstdio>
 #include <filesystem>
 #include <optional>
 #include <sstream>
@@ -24,6 +26,10 @@ QString path_to_qstring(const std::filesystem::path &path) {
 #else
     return QString::fromStdString(path.lexically_normal().string());
 #endif
+}
+
+std::string path_to_utf8_string(const std::filesystem::path &path) {
+    return utsure::core::filesystem::path_to_utf8_string(path);
 }
 
 QString format_log_line(const utsure::core::job::EncodeJobLogMessage &message) {
@@ -78,6 +84,27 @@ void throw_if_canceled(const bool cancel_requested) {
     }
 }
 
+void update_crash_context_safely(const utsure::app::crash::CrashContextUpdate &update) noexcept {
+    try {
+        utsure::app::crash::update_crash_context(update);
+    } catch (...) {
+    }
+}
+
+void update_crash_progress_safely(const utsure::core::job::EncodeJobProgress &progress) noexcept {
+    try {
+        utsure::app::crash::update_crash_context_from_progress(progress);
+    } catch (...) {
+    }
+}
+
+void update_crash_log_safely(const std::string &message) noexcept {
+    try {
+        utsure::app::crash::update_crash_context_from_runtime_log(message);
+    } catch (...) {
+    }
+}
+
 }  // namespace
 
 EncodeJobRunnerWorker::EncodeJobRunnerWorker(QObject *parent)
@@ -101,10 +128,22 @@ EncodeJobRunnerWorker::EncodeJobRunnerWorker(RunFunction run_function, QObject *
 void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
     active_.store(true);
     last_progress_.reset();
+    update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
+        .input_path = path_to_utf8_string(job.input.main_source_path),
+        .output_path = path_to_utf8_string(job.output.output_path),
+        .video_output_codec = utsure::core::media::to_string(job.output.video.codec),
+        .current_stage = "worker_run_job",
+        .subtitle_enabled = job.subtitles.has_value(),
+        .cancellation_requested = false
+    });
     struct ActiveGuard final {
         std::atomic_bool &active;
         ~ActiveGuard() {
             active.store(false);
+            update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
+                .current_stage = "worker_idle",
+                .cancellation_requested = false
+            });
         }
     } active_guard{active_};
     try {
@@ -117,6 +156,11 @@ void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
         });
 
         if (result.succeeded()) {
+            update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
+                .output_path = path_to_utf8_string(result.encode_job_summary->encoded_media_summary.output_path),
+                .current_stage = "completed",
+                .cancellation_requested = false
+            });
             emit job_finished(
                 true,
                 false,
@@ -124,10 +168,16 @@ void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
                 format_success_details(*result.encode_job_summary),
                 path_to_qstring(result.encode_job_summary->encoded_media_summary.output_path)
             );
+            std::fflush(stderr);
+            std::fflush(stdout);
             return;
         }
 
         const bool canceled = result.error->canceled;
+        update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
+            .current_stage = canceled ? std::string("canceled") : std::string("handled_failure"),
+            .cancellation_requested = canceled
+        });
         emit job_finished(
             false,
             canceled,
@@ -135,7 +185,13 @@ void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
             format_error_details(*result.error),
             to_qstring(result.error->output_path)
         );
+        std::fflush(stderr);
+        std::fflush(stdout);
     } catch (const std::exception &exception) {
+        update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
+            .current_stage = "worker_exception",
+            .last_log_message = exception.what()
+        });
         const auto main_source_path = path_to_qstring(job.input.main_source_path);
         const auto output_path = path_to_qstring(job.output.output_path);
         const QString problem = QString("Encode failed: The encode worker caught an unexpected runtime failure.");
@@ -145,7 +201,12 @@ void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
             .arg(to_qstring(exception.what())) +
             format_last_progress_context();
         emit job_finished(false, false, problem, details, output_path);
+        std::fflush(stderr);
+        std::fflush(stdout);
     } catch (...) {
+        update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
+            .current_stage = "worker_unknown_exception"
+        });
         const auto main_source_path = path_to_qstring(job.input.main_source_path);
         const auto output_path = path_to_qstring(job.output.output_path);
         const QString problem = QString("Encode failed: The encode worker caught an unknown runtime failure.");
@@ -154,15 +215,25 @@ void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job) {
             .arg(output_path) +
             format_last_progress_context();
         emit job_finished(false, false, problem, details, output_path);
+        std::fflush(stderr);
+        std::fflush(stdout);
     }
 }
 
 void EncodeJobRunnerWorker::request_cancel() noexcept {
     cancel_requested_.store(true);
+    try {
+        utsure::app::crash::mark_crash_context_cancellation_requested(true);
+    } catch (...) {
+    }
 }
 
 void EncodeJobRunnerWorker::clear_cancel_request() noexcept {
     cancel_requested_.store(false);
+    try {
+        utsure::app::crash::mark_crash_context_cancellation_requested(false);
+    } catch (...) {
+    }
 }
 
 bool EncodeJobRunnerWorker::cancel_requested() const noexcept {
@@ -192,10 +263,12 @@ QString EncodeJobRunnerWorker::format_last_progress_context() const {
 void EncodeJobRunnerWorker::on_progress(const utsure::core::job::EncodeJobProgress &progress) {
     throw_if_canceled(cancel_requested());
     last_progress_ = progress;
+    update_crash_progress_safely(progress);
     emit progress_changed(progress);
 }
 
 void EncodeJobRunnerWorker::on_log(const utsure::core::job::EncodeJobLogMessage &message) {
     throw_if_canceled(cancel_requested());
+    update_crash_log_safely(message.message);
     emit log_message(format_log_line(message));
 }

@@ -1,6 +1,7 @@
 #include "main_window.hpp"
 
 #include "app_settings.hpp"
+#include "crash_dump_writer.hpp"
 #include "ui_font.hpp"
 #include "utsure/core/build_info.hpp"
 
@@ -71,6 +72,9 @@ QIcon load_svg_icon(const QString &resource_path, const QSize &icon_size) {
 }  // namespace
 
 int main(int argc, char *argv[]) {
+    utsure::app::crash::configure_crash_log_flushing();
+    utsure::app::crash::install_crash_handlers();
+
     QApplication app(argc, argv);
     QApplication::setApplicationName(to_qstring(utsure::core::BuildInfo::project_name()));
     QApplication::setApplicationVersion(to_qstring(utsure::core::BuildInfo::project_version()));
@@ -87,6 +91,18 @@ int main(int argc, char *argv[]) {
     }
     if (!settings_load_result.warning.trimmed().isEmpty()) {
         qWarning().noquote() << settings_load_result.warning;
+    }
+    const auto recent_crash_artifacts = utsure::app::crash::find_recent_crash_artifacts(
+        utsure::app::crash::default_crash_dump_directory(),
+        3
+    );
+    for (const auto &artifact : recent_crash_artifacts) {
+        qWarning().noquote()
+            << "Recent utsure crash dump found:"
+            << QString::fromStdWString(artifact.dump_path.wstring())
+            << "sidecar:"
+            << QString::fromStdWString(artifact.sidecar_path.wstring())
+            << "Please include these when reporting a crash.";
     }
 
     QCommandLineParser parser;

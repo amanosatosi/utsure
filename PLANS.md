@@ -1296,4 +1296,35 @@ Follow-up completed:
 
 ## Immediate next milestone
 
-Re-run GitHub Actions for M27/M28/M29/M30/M31/M32/M33/M34/M35/M36 validation.
+### M37 Windows crash dump support
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Add Windows minidump writing for hard crashes without changing encode behavior.
+  * Record a lightweight last-known encode context that worker/controller threads can update safely.
+  * Preserve normal logging and add crash dump discoverability on next startup.
+  * Add CI symbol artifacts and developer documentation for dump collection/analysis.
+
+Implementation approach:
+  * Add an app-side crash dump writer module with Windows-only DbgHelp integration and cross-platform no-op/testable helpers.
+  * Install crash handlers early in `main()` before heavy Qt startup work.
+  * Update crash context from app encode runner lifecycle, progress, cancellation, and runtime log messages.
+  * Keep tests focused on path construction, context snapshots, and sidecar JSON writing; do not intentionally crash normal CI.
+
+Implemented:
+  * Added an app-side crash dump writer that installs Windows unhandled-exception, terminate, and signal handlers early in `main()`.
+  * Writes `%LOCALAPPDATA%/Utsure/crash-dumps/*.dmp` plus JSON sidecar context, using normal dumps by default and full dumps when `UTSURE_FULL_CRASH_DUMP=1`.
+  * Records last-known encode context from app controller/worker lifecycle, progress updates, cancellation state, and runtime diagnostic logs.
+  * Flushes stdout/stderr around terminal worker results and warns on startup when recent crash dumps are present.
+  * Added focused crash-dump helper tests for path construction, context JSON, and sidecar writing without intentionally crashing CI.
+  * Switched Windows CI builds to `RelWithDebInfo`, uploads a separate symbols artifact, and strips root portable binaries before zipping to avoid unnecessary normal bundle bloat.
+  * Added developer documentation for collecting crash dumps and matching them with CI symbols.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included `git diff --check` and a targeted `QThread::terminate` search over source, tests, scripts, and workflows.
+
+## Immediate next milestone
+
+Re-run GitHub Actions for M27/M28/M29/M30/M31/M32/M33/M34/M35/M36/M37 validation.

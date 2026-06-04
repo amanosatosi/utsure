@@ -61,6 +61,34 @@ add_test(
 
 set_tests_properties(utsure.app.ui_font PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
+add_executable(utsure_app_crash_dump_writer_tests
+    crash_dump_writer_tests.cpp
+    "${CMAKE_SOURCE_DIR}/src/app/crash_dump_writer.cpp"
+    "${CMAKE_SOURCE_DIR}/src/app/crash_dump_writer.hpp"
+)
+
+target_include_directories(utsure_app_crash_dump_writer_tests
+    PRIVATE
+        "${CMAKE_SOURCE_DIR}/src/app"
+)
+
+target_link_libraries(utsure_app_crash_dump_writer_tests
+    PRIVATE
+        utsure::encoder_core
+)
+if(WIN32)
+    target_link_libraries(utsure_app_crash_dump_writer_tests PRIVATE dbghelp psapi)
+endif()
+
+target_compile_features(utsure_app_crash_dump_writer_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_app_crash_dump_writer_tests)
+
+add_test(
+    NAME utsure.app.crash_dump_writer
+    COMMAND utsure_app_crash_dump_writer_tests
+)
+
 find_program(UTSURE_APP_FFMPEG_EXECUTABLE NAMES ffmpeg)
 if(NOT UTSURE_APP_FFMPEG_EXECUTABLE AND DEFINED ENV{CI})
     message(FATAL_ERROR "ffmpeg is required in CI for the app encode-runner real cancel/destroy lifecycle smoke.")
@@ -421,6 +449,7 @@ endif()
 
 utsure_label_tests_matching("^utsure\\.app\\.settings\\." unit smoke)
 utsure_label_tests_matching("^utsure\\.app\\.ui_font$" integration smoke)
+utsure_label_tests_matching("^utsure\\.app\\.crash_dump_writer$" unit smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.lifecycle$" integration smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.real_cancel_destroy$" integration media smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.parallel_smokes$" integration media smoke)

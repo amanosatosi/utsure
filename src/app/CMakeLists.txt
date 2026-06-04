@@ -9,6 +9,8 @@ set_source_files_properties(
 qt_add_executable(utsure_encoder_app WIN32
     app_settings.cpp
     app_settings.hpp
+    crash_dump_writer.cpp
+    crash_dump_writer.hpp
     encode_job_duplicate.cpp
     encode_job_duplicate.hpp
     encode_job_runner_controller.cpp
@@ -87,7 +89,7 @@ if(WIN32)
             OBJECT_DEPENDS "${utsure_windows_icon_ico}"
     )
 
-    target_link_libraries(utsure_encoder_app PRIVATE dwmapi psapi)
+    target_link_libraries(utsure_encoder_app PRIVATE dbghelp dwmapi psapi)
     utsure_enable_warnings(utsure_svg_to_ico)
 endif()
 

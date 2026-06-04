@@ -57,6 +57,7 @@ private:
 
     QThread *worker_thread_{nullptr};
     EncodeJobRunnerWorker *worker_{nullptr};
+    int runner_slot_index_{-1};
     RunnerState state_{RunnerState::idle};
     bool shutting_down_{false};
 };

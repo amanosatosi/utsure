@@ -123,6 +123,24 @@ write_bundle_manifest() {
   } | LC_ALL=C sort > "${bundle_manifest}"
 }
 
+strip_portable_debug_symbols() {
+  if [[ "${UTSURE_STRIP_PORTABLE_DEBUG:-ON}" != "ON" ]]; then
+    return 0
+  fi
+
+  if ! command -v strip >/dev/null 2>&1; then
+    echo "Portable packaging expected strip to be available for RelWithDebInfo bundle slimming."
+    exit 1
+  fi
+
+  while IFS= read -r binary_path; do
+    strip --strip-debug "${binary_path}" || {
+      echo "Failed to strip debug symbols from '${binary_path}'."
+      exit 1
+    }
+  done < <(find "${bundle_dir}" -maxdepth 1 -type f \( -name '*.exe' -o -name '*.dll' \) | LC_ALL=C sort)
+}
+
 copy_fontcollector_tool() {
   if [[ "${package_fontcollector}" != "ON" ]]; then
     return 0
@@ -227,6 +245,8 @@ done
     printf '%s\n' "${dependency_name}"
   done
 } | LC_ALL=C sort > "${non_qt_runtime_manifest}"
+
+strip_portable_debug_symbols
 
 write_bundle_manifest
 
