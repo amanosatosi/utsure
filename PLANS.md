@@ -1331,6 +1331,7 @@ Hardening follow-up:
   * Extended symbols packaging to capture unstripped build-tree project DLLs if any are introduced later, while portable stripping remains limited to root bundle binaries.
   * Follow-up changed crash dump directory resolution to happen during normal startup, with priority `UTSURE_CRASH_DUMP_DIR`, `crash-dumps` beside `utsure.exe`, then `%LOCALAPPDATA%/Utsure/crash-dumps`.
   * Follow-up caches the resolved dump directory for the crash path, so the handler does not rediscover environment/executable paths before calling `MiniDumpWriteDump`.
+  * Follow-up changed crash-path cached-directory access to use a non-blocking try-lock and immediate LocalAppData/temp fallback if the cache mutex is already held.
 
 Validation:
   * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.

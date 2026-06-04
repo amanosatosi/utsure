@@ -101,6 +101,8 @@ struct CrashDumpDirectoryResolutionOptions final {
 };
 
 [[nodiscard]] std::filesystem::path default_crash_dump_directory();
+[[nodiscard]] std::filesystem::path cached_crash_dump_directory_for_crash_path_for_test();
+void hold_crash_dump_directory_lock_for_test(bool hold);
 [[nodiscard]] std::filesystem::path resolve_crash_dump_directory_for_test(
     const CrashDumpDirectoryResolutionOptions &options
 );

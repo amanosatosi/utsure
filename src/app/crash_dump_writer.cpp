@@ -548,6 +548,25 @@ void signal_handler(int /*signal_number*/) {
 
 std::filesystem::path raw_default_crash_dump_directory();
 
+std::filesystem::path cached_crash_dump_directory_for_crash_path_for_test() {
+    std::unique_lock lock(crash_directory_mutex(), std::try_to_lock);
+    if (!lock.owns_lock() || cached_crash_dump_directory().empty()) {
+        return raw_default_crash_dump_directory();
+    }
+    return cached_crash_dump_directory();
+}
+
+void hold_crash_dump_directory_lock_for_test(const bool hold) {
+    static auto *held_lock = new std::optional<std::unique_lock<std::mutex>>();
+    if (hold) {
+        if (!held_lock->has_value()) {
+            held_lock->emplace(crash_directory_mutex());
+        }
+        return;
+    }
+    held_lock->reset();
+}
+
 std::filesystem::path default_crash_dump_directory() {
     {
         const std::lock_guard lock(crash_directory_mutex());
@@ -1072,14 +1091,7 @@ CrashDumpWriteResult write_crash_dump_for_current_process(void *exception_pointe
     }
     try {
         const unsigned long crashing_thread = current_thread_id();
-        std::filesystem::path dump_directory{};
-        {
-            const std::lock_guard lock(crash_directory_mutex());
-            dump_directory = cached_crash_dump_directory();
-        }
-        if (dump_directory.empty()) {
-            dump_directory = raw_default_crash_dump_directory();
-        }
+        const auto dump_directory = cached_crash_dump_directory_for_crash_path_for_test();
         const auto paths = make_crash_artifact_paths(
             dump_directory,
             current_unix_seconds(),

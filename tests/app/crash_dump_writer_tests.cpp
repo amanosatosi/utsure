@@ -157,6 +157,33 @@ int assert_cached_crash_dump_directory_is_used() {
     return 0;
 }
 
+int assert_crash_path_directory_access_does_not_block_on_cache_lock() {
+    utsure::app::crash::reset_crash_context_for_tests();
+    const auto root = std::filesystem::temp_directory_path() / "utsure-crash-cache-lock-tests";
+    const auto override_dir = (root / "cached").lexically_normal();
+    std::error_code error{};
+    std::filesystem::remove_all(root, error);
+
+    set_env_var("UTSURE_CRASH_DUMP_DIR", override_dir.string());
+    utsure::app::crash::initialize_crash_dump_directory();
+    unset_env_var("UTSURE_CRASH_DUMP_DIR");
+
+    utsure::app::crash::hold_crash_dump_directory_lock_for_test(true);
+    const auto crash_path_directory = utsure::app::crash::cached_crash_dump_directory_for_crash_path_for_test();
+    utsure::app::crash::hold_crash_dump_directory_lock_for_test(false);
+
+    if (crash_path_directory.lexically_normal() == override_dir) {
+        return fail("Crash-path directory access waited for or used the locked cached directory.");
+    }
+    if (crash_path_directory.empty()) {
+        return fail("Crash-path directory access did not return a fallback directory.");
+    }
+
+    std::filesystem::remove_all(root, error);
+    std::cout << "crash_dump_writer.cache_lock_fallback=ok\n";
+    return 0;
+}
+
 int assert_crash_context_snapshot_and_json() {
     utsure::app::crash::reset_crash_context_for_tests();
     utsure::app::crash::update_crash_context(utsure::app::crash::CrashContextUpdate{
@@ -357,6 +384,7 @@ int main(int argc, char *argv[]) {
         assert_crash_dump_directory_override() != 0 ||
         assert_crash_dump_directory_resolution_priority() != 0 ||
         assert_cached_crash_dump_directory_is_used() != 0 ||
+        assert_crash_path_directory_access_does_not_block_on_cache_lock() != 0 ||
         assert_crash_context_snapshot_and_json() != 0 ||
         assert_active_count_lifetime_helpers() != 0 ||
         assert_sidecar_write() != 0) {
