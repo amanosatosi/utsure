@@ -70,6 +70,7 @@ int assert_crash_path_helpers() {
 }
 
 int assert_crash_dump_directory_override() {
+    utsure::app::crash::reset_crash_context_for_tests();
     const auto override_dir = (std::filesystem::temp_directory_path() / "utsure-crash-override-tests").lexically_normal();
     set_env_var("UTSURE_CRASH_DUMP_DIR", override_dir.string());
     const auto resolved = utsure::app::crash::default_crash_dump_directory().lexically_normal();
@@ -79,6 +80,80 @@ int assert_crash_dump_directory_override() {
     }
 
     std::cout << "crash_dump_writer.directory_override=ok\n";
+    return 0;
+}
+
+int assert_crash_dump_directory_resolution_priority() {
+    const auto root = std::filesystem::temp_directory_path() / "utsure-crash-resolution-tests";
+    const auto override_dir = (root / "override").lexically_normal();
+    const auto exe_path = (root / "portable" / "utsure.exe").lexically_normal();
+    const auto local_app_data = (root / "localappdata").lexically_normal();
+    std::error_code error{};
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(exe_path.parent_path(), error);
+
+    const auto override_resolved = utsure::app::crash::resolve_crash_dump_directory_for_test(
+        utsure::app::crash::CrashDumpDirectoryResolutionOptions{
+            .override_directory = override_dir,
+            .executable_path = exe_path,
+            .local_app_data_directory = local_app_data
+        }
+    ).lexically_normal();
+    if (override_resolved != override_dir) {
+        return fail("Crash dump resolver did not prefer UTSURE_CRASH_DUMP_DIR.");
+    }
+
+    const auto portable_resolved = utsure::app::crash::resolve_crash_dump_directory_for_test(
+        utsure::app::crash::CrashDumpDirectoryResolutionOptions{
+            .executable_path = exe_path,
+            .local_app_data_directory = local_app_data
+        }
+    ).lexically_normal();
+    const auto expected_portable = (exe_path.parent_path() / "crash-dumps").lexically_normal();
+    if (portable_resolved != expected_portable || !std::filesystem::exists(expected_portable)) {
+        return fail("Crash dump resolver did not choose the portable executable directory.");
+    }
+
+    const auto fallback_resolved = utsure::app::crash::resolve_crash_dump_directory_for_test(
+        utsure::app::crash::CrashDumpDirectoryResolutionOptions{
+            .executable_path = exe_path,
+            .local_app_data_directory = local_app_data,
+            .simulate_portable_directory_failure = true
+        }
+    ).lexically_normal();
+    const auto expected_fallback = (local_app_data / "Utsure" / "crash-dumps").lexically_normal();
+    if (fallback_resolved != expected_fallback || !std::filesystem::exists(expected_fallback)) {
+        return fail("Crash dump resolver did not fall back to LocalAppData.");
+    }
+
+    std::filesystem::remove_all(root, error);
+    std::cout << "crash_dump_writer.directory_resolution=ok\n";
+    return 0;
+}
+
+int assert_cached_crash_dump_directory_is_used() {
+    utsure::app::crash::reset_crash_context_for_tests();
+    const auto root = std::filesystem::temp_directory_path() / "utsure-crash-cache-tests";
+    const auto override_dir = (root / "cached").lexically_normal();
+    std::error_code error{};
+    std::filesystem::remove_all(root, error);
+
+    set_env_var("UTSURE_CRASH_DUMP_DIR", override_dir.string());
+    utsure::app::crash::initialize_crash_dump_directory();
+    unset_env_var("UTSURE_CRASH_DUMP_DIR");
+
+    const auto cached = utsure::app::crash::default_crash_dump_directory().lexically_normal();
+    const auto paths = utsure::app::crash::make_crash_artifact_paths(
+        utsure::app::crash::default_crash_dump_directory(),
+        1700000000,
+        4321UL
+    );
+    if (cached != override_dir || paths.dump_path.parent_path().lexically_normal() != override_dir) {
+        return fail("Crash dump path construction did not use the cached resolved directory.");
+    }
+
+    std::filesystem::remove_all(root, error);
+    std::cout << "crash_dump_writer.cached_directory=ok\n";
     return 0;
 }
 
@@ -280,6 +355,8 @@ int main(int argc, char *argv[]) {
 #endif
     if (assert_crash_path_helpers() != 0 ||
         assert_crash_dump_directory_override() != 0 ||
+        assert_crash_dump_directory_resolution_priority() != 0 ||
+        assert_cached_crash_dump_directory_is_used() != 0 ||
         assert_crash_context_snapshot_and_json() != 0 ||
         assert_active_count_lifetime_helpers() != 0 ||
         assert_sidecar_write() != 0) {

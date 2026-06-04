@@ -42,6 +42,16 @@ CrashContextSnapshot &mutable_context() {
     return *context;
 }
 
+std::mutex &crash_directory_mutex() {
+    static auto *mutex = new std::mutex();
+    return *mutex;
+}
+
+std::filesystem::path &cached_crash_dump_directory() {
+    static auto *path = new std::filesystem::path();
+    return *path;
+}
+
 std::vector<CrashContextSnapshot> &mutable_runner_contexts() {
     static auto *contexts = new std::vector<CrashContextSnapshot>();
     return *contexts;
@@ -96,6 +106,25 @@ void populate_default_build_fields(CrashContextSnapshot &snapshot) {
     if (snapshot.git_commit.empty() || snapshot.git_commit == "unknown") {
         snapshot.git_commit = git_commit_from_environment();
     }
+}
+
+bool ensure_directory_writable(const std::filesystem::path &directory) {
+    std::error_code error{};
+    std::filesystem::create_directories(directory, error);
+    if (error) {
+        return false;
+    }
+
+    const auto probe_path = directory / ".utsure-crash-dump-write-test.tmp";
+    {
+        std::ofstream probe(probe_path, std::ios::binary | std::ios::trunc);
+        if (!probe) {
+            return false;
+        }
+        probe << "ok";
+    }
+    std::filesystem::remove(probe_path, error);
+    return true;
 }
 
 CrashContextSnapshot &runner_context_for_slot(const int runner_slot_index) {
@@ -404,6 +433,15 @@ std::filesystem::path local_app_data_directory() {
     return std::filesystem::current_path();
 }
 
+std::filesystem::path executable_path() {
+    std::array<wchar_t, 32768> buffer{};
+    const DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (length > 0 && length < buffer.size()) {
+        return std::filesystem::path(buffer.data());
+    }
+    return {};
+}
+
 std::filesystem::path crash_dump_directory_override() {
     std::array<wchar_t, MAX_PATH * 4> buffer{};
     const DWORD length = GetEnvironmentVariableW(
@@ -508,17 +546,85 @@ void signal_handler(int /*signal_number*/) {
 
 }  // namespace
 
+std::filesystem::path raw_default_crash_dump_directory();
+
 std::filesystem::path default_crash_dump_directory() {
-#if defined(_WIN32)
-    if (const auto override_directory = crash_dump_directory_override(); !override_directory.empty()) {
-        return override_directory;
+    {
+        const std::lock_guard lock(crash_directory_mutex());
+        if (!cached_crash_dump_directory().empty()) {
+            return cached_crash_dump_directory();
+        }
     }
+
+    initialize_crash_dump_directory();
+    const std::lock_guard lock(crash_directory_mutex());
+    if (!cached_crash_dump_directory().empty()) {
+        return cached_crash_dump_directory();
+    }
+    return raw_default_crash_dump_directory();
+}
+
+std::filesystem::path resolve_crash_dump_directory_for_test(
+    const CrashDumpDirectoryResolutionOptions &options
+) {
+    if (options.override_directory.has_value() && !options.override_directory->empty()) {
+        ensure_directory_writable(*options.override_directory);
+        return *options.override_directory;
+    }
+
+    if (options.executable_path.has_value() && !options.executable_path->empty()) {
+        const auto portable_directory = options.executable_path->parent_path() / "crash-dumps";
+        if (!options.simulate_portable_directory_failure && ensure_directory_writable(portable_directory)) {
+            return portable_directory;
+        }
+    }
+
+    std::filesystem::path local_directory{};
+    if (options.local_app_data_directory.has_value() && !options.local_app_data_directory->empty()) {
+        local_directory = *options.local_app_data_directory / "Utsure" / "crash-dumps";
+    } else {
+        local_directory = raw_default_crash_dump_directory();
+    }
+    ensure_directory_writable(local_directory);
+    return local_directory;
+}
+
+void initialize_crash_dump_directory() noexcept {
+    try {
+        CrashDumpDirectoryResolutionOptions options{};
+#if defined(_WIN32)
+        const auto override_directory = crash_dump_directory_override();
+        if (!override_directory.empty()) {
+            options.override_directory = override_directory;
+        }
+        options.executable_path = executable_path();
+        options.local_app_data_directory = local_app_data_directory();
+#else
+        const char *override_directory = std::getenv("UTSURE_CRASH_DUMP_DIR");
+        if (override_directory != nullptr && std::string_view(override_directory).size() > 0U) {
+            options.override_directory = std::filesystem::path(override_directory);
+        }
+        options.executable_path = std::filesystem::current_path() / "utsure";
+        options.local_app_data_directory = std::filesystem::temp_directory_path();
+#endif
+        auto resolved_directory = resolve_crash_dump_directory_for_test(options);
+        const std::lock_guard lock(crash_directory_mutex());
+        cached_crash_dump_directory() = std::move(resolved_directory);
+    } catch (...) {
+        try {
+            auto fallback = raw_default_crash_dump_directory();
+            ensure_directory_writable(fallback);
+            const std::lock_guard lock(crash_directory_mutex());
+            cached_crash_dump_directory() = std::move(fallback);
+        } catch (...) {
+        }
+    }
+}
+
+std::filesystem::path raw_default_crash_dump_directory() {
+#if defined(_WIN32)
     return local_app_data_directory() / "Utsure" / "crash-dumps";
 #else
-    const char *override_directory = std::getenv("UTSURE_CRASH_DUMP_DIR");
-    if (override_directory != nullptr && std::string_view(override_directory).size() > 0U) {
-        return std::filesystem::path(override_directory);
-    }
     return std::filesystem::temp_directory_path() / "Utsure" / "crash-dumps";
 #endif
 }
@@ -703,6 +809,10 @@ void reset_crash_context_for_tests() {
     active_encode_job_count_storage().store(0);
     current_thread_runner_slot = -1;
     populate_default_build_fields(mutable_context());
+    {
+        const std::lock_guard directory_lock(crash_directory_mutex());
+        cached_crash_dump_directory().clear();
+    }
 }
 
 void update_crash_context(const CrashContextUpdate &update) {
@@ -935,6 +1045,7 @@ void configure_crash_log_flushing() noexcept {
 }
 
 void install_crash_handlers() noexcept {
+    initialize_crash_dump_directory();
     try {
         update_crash_context(CrashContextUpdate{
             .build_version = current_build_version(),
@@ -961,17 +1072,20 @@ CrashDumpWriteResult write_crash_dump_for_current_process(void *exception_pointe
     }
     try {
         const unsigned long crashing_thread = current_thread_id();
+        std::filesystem::path dump_directory{};
+        {
+            const std::lock_guard lock(crash_directory_mutex());
+            dump_directory = cached_crash_dump_directory();
+        }
+        if (dump_directory.empty()) {
+            dump_directory = raw_default_crash_dump_directory();
+        }
         const auto paths = make_crash_artifact_paths(
-            default_crash_dump_directory(),
+            dump_directory,
             current_unix_seconds(),
             current_process_id()
         );
         result.paths = paths;
-        std::error_code error{};
-        std::filesystem::create_directories(paths.dump_path.parent_path(), error);
-        if (error) {
-            result.error_message = error.message();
-        }
 
 #if defined(_WIN32)
         result.dump_written = write_minidump(paths.dump_path, exception_pointers) != FALSE;

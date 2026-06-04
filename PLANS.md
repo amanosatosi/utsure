@@ -1329,6 +1329,8 @@ Hardening follow-up:
   * Kept access violations on the Windows unhandled-exception filter path with `EXCEPTION_POINTERS` by not registering a `SIGSEGV` handler.
   * Added a Windows-only controlled child-process crash smoke inside the crash dump writer test; the parent asserts `.dmp` output and sidecar context without crashing the test process.
   * Extended symbols packaging to capture unstripped build-tree project DLLs if any are introduced later, while portable stripping remains limited to root bundle binaries.
+  * Follow-up changed crash dump directory resolution to happen during normal startup, with priority `UTSURE_CRASH_DUMP_DIR`, `crash-dumps` beside `utsure.exe`, then `%LOCALAPPDATA%/Utsure/crash-dumps`.
+  * Follow-up caches the resolved dump directory for the crash path, so the handler does not rediscover environment/executable paths before calling `MiniDumpWriteDump`.
 
 Validation:
   * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.

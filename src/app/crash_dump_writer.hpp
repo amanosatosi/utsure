@@ -93,7 +93,17 @@ struct CrashDumpWriteResult final {
     std::string error_message{};
 };
 
+struct CrashDumpDirectoryResolutionOptions final {
+    std::optional<std::filesystem::path> override_directory{};
+    std::optional<std::filesystem::path> executable_path{};
+    std::optional<std::filesystem::path> local_app_data_directory{};
+    bool simulate_portable_directory_failure{false};
+};
+
 [[nodiscard]] std::filesystem::path default_crash_dump_directory();
+[[nodiscard]] std::filesystem::path resolve_crash_dump_directory_for_test(
+    const CrashDumpDirectoryResolutionOptions &options
+);
 [[nodiscard]] std::string make_crash_file_stem(std::int64_t unix_seconds, unsigned long process_id);
 [[nodiscard]] CrashArtifactPaths make_crash_artifact_paths(
     const std::filesystem::path &directory,
@@ -128,6 +138,7 @@ void mark_crash_context_cancellation_requested(bool requested);
 
 void configure_crash_log_flushing() noexcept;
 void install_crash_handlers() noexcept;
+void initialize_crash_dump_directory() noexcept;
 [[nodiscard]] CrashDumpWriteResult write_crash_dump_for_current_process(void *exception_pointers = nullptr) noexcept;
 
 }  // namespace utsure::app::crash
