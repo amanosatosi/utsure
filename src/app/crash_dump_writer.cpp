@@ -848,18 +848,12 @@ void update_crash_context(const CrashContextUpdate &update) {
     auto &snapshot = mutable_context();
     populate_default_build_fields(snapshot);
     apply_optional(snapshot, enriched_update);
-    if (!enriched_update.active_job_count.has_value()) {
-        snapshot.active_job_count = active_encode_job_count_storage().load();
-    }
 
     if (enriched_update.runner_slot_index.has_value()) {
         auto &runner_context = runner_context_for_slot(*enriched_update.runner_slot_index);
         populate_default_build_fields(runner_context);
         apply_optional(runner_context, enriched_update);
         runner_context.runner_slot_index = *enriched_update.runner_slot_index;
-        if (!enriched_update.active_job_count.has_value()) {
-            runner_context.active_job_count = active_encode_job_count_storage().load();
-        }
         last_updated_runner_slot() = *enriched_update.runner_slot_index;
     } else if (snapshot.runner_slot_index >= 0) {
         last_updated_runner_slot() = snapshot.runner_slot_index;
