@@ -5449,18 +5449,21 @@ private:
 PreparedSubtitleSession create_subtitle_session(
     subtitles::SubtitleRenderer &subtitle_renderer,
     const timeline::TimelinePlan &timeline_plan,
+    const VideoOutputPlan &video_output_plan,
     const job::EncodeJobSubtitleSettings &subtitle_settings,
     const std::function<void(const std::string &)> &log_callback
 ) {
-    const auto &main_segment_info = timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info;
-    const auto &video_stream = *main_segment_info.primary_video_stream;
+    if (timeline_plan.segments.empty() || timeline_plan.main_segment_index >= timeline_plan.segments.size()) {
+        throw std::runtime_error("Subtitle session creation requires a valid main timeline segment.");
+    }
+
     emit_runtime_log(log_callback, "Preparing ASS subtitle fonts with FontCollector.");
     auto prepared_request = subtitles::prepare_subtitle_render_session_request(subtitles::SubtitleRenderSessionCreateRequest{
         .subtitle_path = subtitle_settings.subtitle_path,
         .format_hint = subtitle_settings.format_hint,
-        .canvas_width = video_stream.width,
-        .canvas_height = video_stream.height,
-        .sample_aspect_ratio = normalize_sample_aspect_ratio(video_stream.sample_aspect_ratio)
+        .canvas_width = video_output_plan.width,
+        .canvas_height = video_output_plan.height,
+        .sample_aspect_ratio = video_output_plan.sample_aspect_ratio
     });
 
     if (!prepared_request.font_recovery_report.message.empty()) {
@@ -5896,6 +5899,7 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
             prepared_subtitle_session = create_subtitle_session(
                 *request.subtitle_renderer,
                 timeline_plan,
+                video_output_plan,
                 request.subtitle_settings->value(),
                 request.log_callback
             );

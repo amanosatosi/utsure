@@ -354,12 +354,32 @@ void validate_subtitle_session(
     }
 
     const auto &video_stream = *main_segment_info.primary_video_stream;
+    const auto resize_result = calculate_resize_dimensions(
+        ResizeSourceDimensions{
+            .width = video_stream.width,
+            .height = video_stream.height,
+            .sample_aspect_ratio = video_stream.sample_aspect_ratio
+        },
+        job.output.resize
+    );
+    if (!resize_result.succeeded()) {
+        append_issue(
+            issues,
+            EncodeJobPreflightIssueSeverity::error,
+            EncodeJobPreflightIssueCode::subtitle_validation_failed,
+            "Subtitle validation could not resolve the final output dimensions.",
+            resize_result.error_message
+        );
+        return;
+    }
+
+    const auto output_dimensions = *resize_result.dimensions;
     auto prepared_session_request = subtitles::prepare_subtitle_render_session_request(SubtitleRenderSessionCreateRequest{
         .subtitle_path = job.subtitles->subtitle_path,
         .format_hint = job.subtitles->format_hint,
-        .canvas_width = video_stream.width,
-        .canvas_height = video_stream.height,
-        .sample_aspect_ratio = video_stream.sample_aspect_ratio
+        .canvas_width = output_dimensions.width,
+        .canvas_height = output_dimensions.height,
+        .sample_aspect_ratio = output_dimensions.sample_aspect_ratio
     });
     if (subtitles::font_recovery_blocks_subtitle_rendering(prepared_session_request.font_recovery_report)) {
         append_issue(

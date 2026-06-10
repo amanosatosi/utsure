@@ -38,6 +38,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M31 Encoding profiles, resize presets, and audio track selection implemented; awaiting GitHub Actions validation.
 - [x] M32 Urgent subtitle/video sync correctness fix implemented; awaiting GitHub Actions validation.
 - [x] M33 Segment-local subtitle timing diagnostics and recombine investigation implemented; awaiting GitHub Actions validation.
+- [x] M38 Resize subtitle canvas crash/cutoff fix implemented; awaiting GitHub Actions validation.
 
 ## Active assumptions
 
@@ -1340,6 +1341,30 @@ Validation:
   * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
   * Static validation included `git diff --check` and a targeted `QThread::terminate` search over source, tests, scripts, and workflows.
 
+### M38 Resize subtitle canvas crash/cutoff fix
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Fix resized subtitle burn-in so the libassmod main-subtitle render canvas matches the final encoded output resolution.
+  * Use the provided Windows crash dump to guide the fix, without redesigning queue scheduling or broader subtitle architecture.
+  * Add focused regression coverage that proves resized main subtitles are rendered on the resized output canvas, not only clipped into it.
+
+Implementation approach:
+  * Keep frame normalization before subtitle burn-in, but create the main subtitle render-session template from `VideoOutputPlan` dimensions and sample aspect ratio.
+  * Preserve thumbnail overlay behavior, which already renders on the final output canvas.
+  * Tighten the resized timeline subtitle smoke to assert the libassmod renderer setup `frame_size` equals the resized output dimensions.
+
+Implemented:
+  * Parsed the provided Windows minidump enough to confirm an access violation in bundled `libass-9.dll` during the active resized subtitle encode.
+  * Changed streaming main-subtitle session creation to use final `VideoOutputPlan` canvas dimensions and sample aspect ratio instead of the inspected source stream dimensions.
+  * Aligned preflight subtitle validation with the same calculated final output dimensions.
+  * Tightened resized timeline subtitle tests to assert the libassmod renderer setup canvas is the resized output size.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included `git diff --check` and targeted searches for remaining source-dimension subtitle canvas setup.
+
 ## Immediate next milestone
 
-Re-run GitHub Actions for M27/M28/M29/M30/M31/M32/M33/M34/M35/M36/M37 validation.
+Re-run GitHub Actions for M27/M28/M29/M30/M31/M32/M33/M34/M35/M36/M37/M38 validation.

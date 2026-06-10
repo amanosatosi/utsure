@@ -2022,6 +2022,10 @@ int run_timeline_resize_burn_in_assertion(
         return fail("Resized timeline subtitle job did not encode the requested 160x90 output dimensions.");
     }
 
+    if (!observer_logs_contain_text(observer, "libassmod renderer setup: frame_size=160x90")) {
+        return fail("Resized timeline subtitle job did not create the libassmod renderer on the resized output canvas.");
+    }
+
     if (!observer_logs_contain_text(observer, "intro segment normalized toward the main output: raster 320x180 -> 160x90") ||
         !observer_logs_contain_text(observer, "outro segment normalized toward the main output: raster 320x180 -> 160x90")) {
         return fail("Resized timeline subtitle job did not normalize intro/outro toward the resized output dimensions.");
@@ -2154,6 +2158,10 @@ int run_timeline_thumbnail_resize_burn_in_assertion(
 
     if (!observer_logs_contain_text(observer, "normalized thumbnail source from 320x180 to 160x90")) {
         return fail("Resized thumbnail pre-roll did not log thumbnail normalization to the final output size.");
+    }
+
+    if (!observer_logs_contain_text(observer, "libassmod renderer setup: frame_size=160x90")) {
+        return fail("Resized thumbnail pre-roll timeline job did not create libassmod renderers on the resized output canvas.");
     }
 
     const MediaDecodeResult burned_output_decode = MediaDecoder::decode(burned_output_path);
