@@ -60,6 +60,11 @@ int assert_order_detection() {
         return fail("Show - 02v2 episode/version detection failed.");
     }
 
+    const auto spaced_version = BatchImportPlanner::detect_order_info("Show - 02 v3 1080p.mkv");
+    if (spaced_version.episode_number != 2 || spaced_version.version_number != 3) {
+        return fail("Show - 02 v3 episode/version detection failed.");
+    }
+
     const auto noise = BatchImportPlanner::detect_order_info("Movie 2024 1080p x265 10bit 5.1.mkv");
     if (noise.episode_number.has_value()) {
         return fail("Noise tokens were incorrectly detected as episode numbers.");

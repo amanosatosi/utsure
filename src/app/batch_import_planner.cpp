@@ -273,7 +273,11 @@ BatchImportOrderInfo BatchImportPlanner::detect_order_info(const std::filesystem
     }
 
     std::smatch version_match{};
-    if (std::regex_search(stem, version_match, std::regex(R"(\bv\s*([0-9]+)\b)", std::regex_constants::icase))) {
+    if (std::regex_search(
+            stem,
+            version_match,
+            std::regex(R"((?:\b[0-9]{1,4}\s*)?v\s*([0-9]+)\b)", std::regex_constants::icase)
+        )) {
         result.version_number = parse_int_token(version_match[1].str());
     }
 
