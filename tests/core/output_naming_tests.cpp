@@ -347,6 +347,36 @@ int assert_three_sources_generate_distinct_batch_paths(const std::filesystem::pa
     return 0;
 }
 
+int assert_reordering_changes_sequence_output_names(const std::filesystem::path &root) {
+    const auto source_directory = root / "Reorder";
+    const auto output_directory = root / "reorder-output";
+    std::filesystem::create_directories(source_directory);
+    std::filesystem::create_directories(output_directory);
+
+    const OutputNamingRequest first{
+        .source_path = source_directory / "episode-01.mkv",
+        .output_directory = output_directory,
+        .extension_hint = ".mp4",
+        .video_codec = OutputVideoCodec::h265
+    };
+    auto second = first;
+    second.source_path = source_directory / "episode-02.mkv";
+
+    const auto original = OutputNaming::reserve_batch(std::vector<OutputNamingRequest>{first, second});
+    const auto reversed = OutputNaming::reserve_batch(std::vector<OutputNamingRequest>{second, first});
+    if (original.size() != 2U || reversed.size() != 2U ||
+        original[0].file_name != "episode-01 - 01 x265.mp4" ||
+        original[1].file_name != "episode-02 - 02 x265.mp4" ||
+        reversed[0].file_name != "episode-02 - 01 x265.mp4" ||
+        reversed[1].file_name != "episode-01 - 02 x265.mp4") {
+        return fail("Queue order did not control sequence-number output names.");
+    }
+
+    std::cout << "reorder_sequence.0=" << reversed[0].file_name << '\n';
+    std::cout << "reorder_sequence.1=" << reversed[1].file_name << '\n';
+    return 0;
+}
+
 int assert_token_order_and_disabled_tokens(const std::filesystem::path &root) {
     const auto output_directory = root / "tokens";
     const auto source_path = root / "Token Series" / "episode-01.mkv";
@@ -899,6 +929,10 @@ int main() {
     }
 
     if (assert_three_sources_generate_distinct_batch_paths(root) != 0) {
+        return 1;
+    }
+
+    if (assert_reordering_changes_sequence_output_names(root) != 0) {
         return 1;
     }
 

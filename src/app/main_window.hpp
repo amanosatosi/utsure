@@ -30,6 +30,7 @@ class QCheckBox;
 class QComboBox;
 class QLineEdit;
 class QMimeData;
+class QModelIndex;
 class PreviewAudioController;
 class PreviewFrameRendererController;
 class PreviewSurfaceWidget;
@@ -66,9 +67,16 @@ public:
         QString source_name{};
         QString type_label{};
         bool checked{true};
+        int original_import_index{0};
+        std::optional<int> detected_season_number{};
+        std::optional<int> detected_episode_number{};
+        std::optional<int> detected_version_number{};
+        int queue_order_index{0};
+        bool queue_order_manual{false};
         UiJobState state{UiJobState::queued};
         QString output_name_custom_text{};
         QString output_path{};
+        bool output_path_is_auto{true};
         bool output_path_manual_override{false};
         bool same_as_input{true};
         bool subtitle_enabled{false};
@@ -165,15 +173,18 @@ private:
     [[nodiscard]] int active_runner_count() const;
     [[nodiscard]] int configured_parallel_job_count() const;
     [[nodiscard]] int find_free_runner_slot_index() const;
+    [[nodiscard]] std::vector<int> selected_queue_job_indices() const;
     [[nodiscard]] QString format_parallel_tooltip() const;
     [[nodiscard]] QString normalized_output_path_key(const QString &path_text) const;
-    [[nodiscard]] QStringList resolve_source_drop_paths(const QMimeData *mime_data) const;
     [[nodiscard]] qint64 selected_job_frame_step_us() const;
     [[nodiscard]] double current_busy_spinner_progress_fraction() const;
 
     void add_source_jobs();
     void add_source_jobs_from_paths(const QStringList &paths);
     void remove_selected_job();
+    void move_selected_jobs(int direction);
+    void sort_queue_by_detected_order();
+    void sort_queue_naturally();
     void duplicate_job(int source_index);
     void show_queue_context_menu(const QPoint &position);
     void show_settings_dialog();
@@ -201,6 +212,13 @@ private:
 
     void handle_queue_selection_changed();
     void handle_queue_item_changed(QTableWidgetItem *item);
+    void handle_queue_rows_moved(
+        const QModelIndex &parent,
+        int start,
+        int end,
+        const QModelIndex &destination,
+        int row
+    );
     void handle_same_as_input_toggled(bool enabled);
     void handle_preview_toggled(bool enabled);
 
@@ -221,6 +239,8 @@ private:
     void ensure_runner_slot_count(int slot_count);
     void ensure_job_inspection(int job_index);
     void reset_job_for_rerun(UiEncodeJob &job);
+    void refresh_queue_order_indices();
+    void recompute_automatic_output_paths_for_queue();
     void apply_same_as_input_folder(UiEncodeJob &job);
     void apply_generated_output_path(int job_index, bool force_auto_mode);
     void reserve_batch_output_paths_for_jobs(const std::vector<int> &job_indices);

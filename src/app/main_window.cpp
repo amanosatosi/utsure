@@ -1,5 +1,6 @@
 #include "main_window.hpp"
 
+#include "batch_import_planner.hpp"
 #include "encode_job_duplicate.hpp"
 #include "encode_job_runner_controller.hpp"
 #include "preview_audio_controller.hpp"
@@ -18,6 +19,7 @@
 
 #include <QAbstractButton>
 #include <QAbstractItemView>
+#include <QAbstractItemModel>
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
@@ -45,6 +47,7 @@
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QInputDialog>
+#include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -54,6 +57,7 @@
 #include <QMetaObject>
 #include <QMimeData>
 #include <QMenu>
+#include <QModelIndex>
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -86,6 +90,7 @@
 #include <cstdint>
 #include <iterator>
 #include <optional>
+#include <set>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -1541,8 +1546,13 @@ QLabel#PreviewTimeBadge {
     queue_table_->setColumnWidth(4, 72);
     queue_table_->setColumnWidth(5, 180);
     queue_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    queue_table_->setSelectionMode(QAbstractItemView::SingleSelection);
+    queue_table_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     queue_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    queue_table_->setDragEnabled(true);
+    queue_table_->setAcceptDrops(true);
+    queue_table_->setDropIndicatorShown(true);
+    queue_table_->setDragDropMode(QAbstractItemView::InternalMove);
+    queue_table_->setDragDropOverwriteMode(false);
     queue_table_->setShowGrid(false);
     queue_table_->setAlternatingRowColors(true);
     queue_table_->setFrameShape(QFrame::NoFrame);
@@ -2112,6 +2122,12 @@ QLabel#PreviewTimeBadge {
     connect(queue_table_, &QTableWidget::itemChanged, this, &MainWindow::handle_queue_item_changed);
     connect(queue_table_, &QTableWidget::itemSelectionChanged, this, &MainWindow::handle_queue_selection_changed);
     connect(queue_table_, &QTableWidget::customContextMenuRequested, this, &MainWindow::show_queue_context_menu);
+    connect(
+        queue_table_->model(),
+        &QAbstractItemModel::rowsMoved,
+        this,
+        &MainWindow::handle_queue_rows_moved
+    );
 
     const auto bind_editor_change = [this]() {
         sync_selected_job_from_editor();
@@ -2122,7 +2138,9 @@ QLabel#PreviewTimeBadge {
             return;
         }
 
-        jobs_[static_cast<std::size_t>(selected_job_index_)].output_path_manual_override = true;
+        auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+        job.output_path_manual_override = true;
+        job.output_path_is_auto = false;
     });
     connect(output_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
     connect(subtitle_enable_check_, &QCheckBox::clicked, this, [this](bool) {
@@ -2280,9 +2298,16 @@ void MainWindow::dropEvent(QDropEvent *event) {
     }
 
     event->acceptProposedAction();
-    const QStringList source_paths = resolve_source_drop_paths(event->mimeData());
-    if (!source_paths.isEmpty()) {
-        add_source_jobs_from_paths(source_paths);
+    QStringList dropped_paths{};
+    const QList<QUrl> urls = event->mimeData()->urls();
+    dropped_paths.reserve(static_cast<qsizetype>(urls.size()));
+    for (const QUrl &url : urls) {
+        if (url.isLocalFile()) {
+            dropped_paths.push_back(QDir::cleanPath(url.toLocalFile().trimmed()));
+        }
+    }
+    if (!dropped_paths.isEmpty()) {
+        add_source_jobs_from_paths(dropped_paths);
     }
 }
 
@@ -2568,6 +2593,31 @@ int MainWindow::find_free_runner_slot_index() const {
     return -1;
 }
 
+std::vector<int> MainWindow::selected_queue_job_indices() const {
+    std::vector<int> rows{};
+    if (queue_table_ == nullptr) {
+        if (is_valid_job_index(selected_job_index_)) {
+            rows.push_back(selected_job_index_);
+        }
+        return rows;
+    }
+
+    const auto ranges = queue_table_->selectedRanges();
+    for (const auto &range : ranges) {
+        for (int row = range.topRow(); row <= range.bottomRow(); ++row) {
+            if (is_valid_job_index(row)) {
+                rows.push_back(row);
+            }
+        }
+    }
+    std::sort(rows.begin(), rows.end());
+    rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
+    if (rows.empty() && is_valid_job_index(selected_job_index_)) {
+        rows.push_back(selected_job_index_);
+    }
+    return rows;
+}
+
 double MainWindow::current_busy_spinner_progress_fraction() const {
     double total_fraction = 0.0;
     int active_count = 0;
@@ -2659,43 +2709,16 @@ bool MainWindow::can_accept_source_drop(const QMimeData *mime_data) const {
             continue;
         }
 
+        QFileInfo info(local_path);
+        if (info.isDir() || BatchImportPlanner::is_supported_video_path(qstring_to_path(local_path))) {
+            return true;
+        }
         if (utsure::core::media::SourceImportPaths::is_supported_drop_candidate(qstring_to_path(local_path))) {
             return true;
         }
     }
 
     return false;
-}
-
-QStringList MainWindow::resolve_source_drop_paths(const QMimeData *mime_data) const {
-    if (!can_accept_source_drop(mime_data)) {
-        return {};
-    }
-
-    std::vector<std::filesystem::path> dropped_paths{};
-    const QList<QUrl> urls = mime_data->urls();
-    dropped_paths.reserve(static_cast<std::size_t>(urls.size()));
-    for (const QUrl &url : urls) {
-        if (!url.isLocalFile()) {
-            continue;
-        }
-
-        const QString local_path = QDir::cleanPath(url.toLocalFile().trimmed());
-        if (local_path.isEmpty()) {
-            continue;
-        }
-
-        dropped_paths.push_back(qstring_to_path(local_path));
-    }
-
-    const auto expansion_result = utsure::core::media::SourceImportPaths::expand_drop_candidates(dropped_paths);
-    QStringList resolved_paths{};
-    resolved_paths.reserve(static_cast<qsizetype>(expansion_result.accepted_source_paths.size()));
-    for (const auto &path : expansion_result.accepted_source_paths) {
-        resolved_paths.push_back(path_to_qstring(path));
-    }
-
-    return resolved_paths;
 }
 
 qint64 MainWindow::selected_job_frame_step_us() const {
@@ -2730,8 +2753,22 @@ void MainWindow::add_source_jobs_from_paths(const QStringList &paths) {
         return;
     }
 
-    const int first_new_index = static_cast<int>(jobs_.size());
+    std::vector<std::filesystem::path> import_paths{};
+    import_paths.reserve(static_cast<std::size_t>(paths.size()));
     for (const QString &path : paths) {
+        if (!path.trimmed().isEmpty()) {
+            import_paths.push_back(qstring_to_path(path.trimmed()));
+        }
+    }
+    const auto import_plan = BatchImportPlanner::plan(import_paths);
+    if (import_plan.jobs.empty()) {
+        append_session_log("[warning] No supported video files were found in the import selection.");
+        return;
+    }
+
+    const int first_new_index = static_cast<int>(jobs_.size());
+    for (const auto &planned_job : import_plan.jobs) {
+        const QString path = path_to_qstring(planned_job.source_path);
         QFileInfo info(path);
         UiEncodeJob job{};
         apply_last_used_settings_to_job(job);
@@ -2739,42 +2776,203 @@ void MainWindow::add_source_jobs_from_paths(const QStringList &paths) {
         job.source_name = info.fileName();
         job.type_label = info.suffix().isEmpty() ? "-" : "." + info.suffix().toLower();
         job.input_size_bytes = info.exists() ? info.size() : -1;
+        job.original_import_index = first_new_index + planned_job.original_import_index;
+        job.detected_season_number = planned_job.order.season_number;
+        job.detected_episode_number = planned_job.order.episode_number;
+        job.detected_version_number = planned_job.order.version_number;
+        job.queue_order_index = static_cast<int>(jobs_.size());
+        if (planned_job.subtitle_path.has_value()) {
+            job.subtitle_enabled = true;
+            job.subtitle_path = path_to_qstring(*planned_job.subtitle_path);
+            job.subtitle_manual_override = false;
+        }
+        if (!planned_job.warning.empty()) {
+            job.last_status_message = QString::fromStdString(planned_job.warning);
+        }
         jobs_.push_back(std::move(job));
         const int job_index = static_cast<int>(jobs_.size()) - 1;
-        apply_generated_output_path(job_index, true);
+        jobs_[static_cast<std::size_t>(job_index)].output_path_manual_override = false;
+        jobs_[static_cast<std::size_t>(job_index)].output_path_is_auto = true;
         QString subtitle_decision_summary{};
-        apply_automatic_subtitle_selection(job_index, true, &subtitle_decision_summary);
+        if (!planned_job.subtitle_path.has_value()) {
+            apply_automatic_subtitle_selection(job_index, true, &subtitle_decision_summary);
+        }
         jobs_.back().last_status_message = job_has_minimum_required_fields(jobs_.back())
-            ? "Ready to queue."
+            ? (jobs_.back().last_status_message.trimmed().isEmpty() ? "Ready to queue." : jobs_.back().last_status_message)
             : "Select an output path to make the job runnable.";
         append_session_log(QString("[info] Added '%1' to the queue.").arg(info.fileName()));
+        if (!planned_job.warning.empty()) {
+            append_session_log(QString("[warning] %1: %2").arg(info.fileName(), QString::fromStdString(planned_job.warning)));
+        }
         if (!subtitle_decision_summary.trimmed().isEmpty()) {
             append_session_log("[info] " + subtitle_decision_summary);
         }
     }
 
+    refresh_queue_order_indices();
+    for (auto &job : jobs_) {
+        job.queue_order_manual = false;
+    }
+    recompute_automatic_output_paths_for_queue();
     select_job(first_new_index);
 }
 
 void MainWindow::remove_selected_job() {
-    if (queue_run_active_ || selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+    if (queue_run_active_ || queue_start_planning_active_) {
         return;
     }
 
-    append_session_log(QString("[info] Removed '%1' from the queue.").arg(selected_job_name()));
-    jobs_.erase(jobs_.begin() + selected_job_index_);
+    auto rows = selected_queue_job_indices();
+    if (rows.empty()) {
+        return;
+    }
+
+    for (auto iterator = rows.rbegin(); iterator != rows.rend(); ++iterator) {
+        if (!is_valid_job_index(*iterator)) {
+            continue;
+        }
+        append_session_log(QString("[info] Removed '%1' from the queue.")
+            .arg(queue_source_display_name(jobs_[static_cast<std::size_t>(*iterator)])));
+        jobs_.erase(jobs_.begin() + *iterator);
+    }
 
     if (jobs_.empty()) {
         selected_job_index_ = -1;
-    } else if (selected_job_index_ >= static_cast<int>(jobs_.size())) {
+    } else if (rows.front() >= static_cast<int>(jobs_.size())) {
         selected_job_index_ = static_cast<int>(jobs_.size()) - 1;
+    } else {
+        selected_job_index_ = rows.front();
     }
 
+    refresh_queue_order_indices();
+    recompute_automatic_output_paths_for_queue();
     if (selected_job_index_ >= 0) {
         select_job(selected_job_index_);
     } else {
         refresh_all_views();
     }
+}
+
+void MainWindow::move_selected_jobs(const int direction) {
+    if (queue_run_active_ || queue_start_planning_active_ || direction == 0) {
+        return;
+    }
+
+    auto rows = selected_queue_job_indices();
+    if (rows.empty()) {
+        return;
+    }
+
+    const bool moving_up = direction < 0;
+    if ((moving_up && rows.front() <= 0) ||
+        (!moving_up && rows.back() >= static_cast<int>(jobs_.size()) - 1)) {
+        return;
+    }
+
+    if (moving_up) {
+        for (const int row : rows) {
+            std::swap(jobs_[static_cast<std::size_t>(row)], jobs_[static_cast<std::size_t>(row - 1)]);
+        }
+        for (int &row : rows) {
+            --row;
+        }
+    } else {
+        for (auto iterator = rows.rbegin(); iterator != rows.rend(); ++iterator) {
+            const int row = *iterator;
+            std::swap(jobs_[static_cast<std::size_t>(row)], jobs_[static_cast<std::size_t>(row + 1)]);
+        }
+        for (int &row : rows) {
+            ++row;
+        }
+    }
+
+    refresh_queue_order_indices();
+    for (auto &job : jobs_) {
+        job.queue_order_manual = true;
+    }
+    recompute_automatic_output_paths_for_queue();
+    selected_job_index_ = rows.front();
+    refresh_all_views();
+    if (queue_table_ != nullptr) {
+        const QSignalBlocker blocker(queue_table_);
+        queue_table_->clearSelection();
+        auto *selection_model = queue_table_->selectionModel();
+        for (const int row : rows) {
+            if (row >= 0 && row < queue_table_->rowCount()) {
+                if (selection_model != nullptr) {
+                    selection_model->select(
+                        queue_table_->model()->index(row, 0),
+                        QItemSelectionModel::Select | QItemSelectionModel::Rows
+                    );
+                }
+            }
+        }
+        queue_table_->setCurrentCell(selected_job_index_, 0);
+    }
+}
+
+void MainWindow::sort_queue_by_detected_order() {
+    if (queue_run_active_ || queue_start_planning_active_) {
+        return;
+    }
+
+    std::stable_sort(jobs_.begin(), jobs_.end(), [](const UiEncodeJob &left, const UiEncodeJob &right) {
+        if (left.detected_season_number != right.detected_season_number) {
+            if (!left.detected_season_number.has_value()) {
+                return false;
+            }
+            if (!right.detected_season_number.has_value()) {
+                return true;
+            }
+            return *left.detected_season_number < *right.detected_season_number;
+        }
+        if (left.detected_episode_number != right.detected_episode_number) {
+            if (!left.detected_episode_number.has_value()) {
+                return false;
+            }
+            if (!right.detected_episode_number.has_value()) {
+                return true;
+            }
+            return *left.detected_episode_number < *right.detected_episode_number;
+        }
+        const int natural = BatchImportPlanner::natural_compare(
+            left.source_name.toStdString(),
+            right.source_name.toStdString()
+        );
+        if (natural != 0) {
+            return natural < 0;
+        }
+        return left.original_import_index < right.original_import_index;
+    });
+    refresh_queue_order_indices();
+    for (auto &job : jobs_) {
+        job.queue_order_manual = false;
+    }
+    recompute_automatic_output_paths_for_queue();
+    select_job(jobs_.empty() ? -1 : 0);
+}
+
+void MainWindow::sort_queue_naturally() {
+    if (queue_run_active_ || queue_start_planning_active_) {
+        return;
+    }
+
+    std::stable_sort(jobs_.begin(), jobs_.end(), [](const UiEncodeJob &left, const UiEncodeJob &right) {
+        const int natural = BatchImportPlanner::natural_compare(
+            left.source_name.toStdString(),
+            right.source_name.toStdString()
+        );
+        if (natural != 0) {
+            return natural < 0;
+        }
+        return left.original_import_index < right.original_import_index;
+    });
+    refresh_queue_order_indices();
+    for (auto &job : jobs_) {
+        job.queue_order_manual = false;
+    }
+    recompute_automatic_output_paths_for_queue();
+    select_job(jobs_.empty() ? -1 : 0);
 }
 
 void MainWindow::show_queue_context_menu(const QPoint &position) {
@@ -2790,15 +2988,35 @@ void MainWindow::show_queue_context_menu(const QPoint &position) {
         return;
     }
 
-    if (row != selected_job_index_) {
+    const auto selected_rows = selected_queue_job_indices();
+    const bool clicked_selected_row = std::find(selected_rows.begin(), selected_rows.end(), row) != selected_rows.end();
+    if (!clicked_selected_row && row != selected_job_index_) {
         select_job(row);
     }
 
     QMenu menu(this);
-    QAction *duplicate_action = menu.addAction("Duplicate");
+    QAction *move_up_action = menu.addAction("Move Selected Up");
+    QAction *move_down_action = menu.addAction("Move Selected Down");
+    menu.addSeparator();
+    QAction *sort_detected_action = menu.addAction("Sort by Detected Episode");
+    QAction *sort_natural_action = menu.addAction("Natural Sort by Filename");
+    menu.addSeparator();
+    QAction *duplicate_action = menu.addAction("Duplicate Row");
+    QAction *remove_action = menu.addAction("Remove Selected");
+    duplicate_action->setEnabled(selected_queue_job_indices().size() <= 1U);
     QAction *selected_action = menu.exec(queue_table_->viewport()->mapToGlobal(position));
-    if (selected_action == duplicate_action) {
+    if (selected_action == move_up_action) {
+        move_selected_jobs(-1);
+    } else if (selected_action == move_down_action) {
+        move_selected_jobs(1);
+    } else if (selected_action == sort_detected_action) {
+        sort_queue_by_detected_order();
+    } else if (selected_action == sort_natural_action) {
+        sort_queue_naturally();
+    } else if (selected_action == duplicate_action) {
         duplicate_job(row);
+    } else if (selected_action == remove_action) {
+        remove_selected_job();
     }
 }
 
@@ -2850,6 +3068,7 @@ void MainWindow::duplicate_job(const int source_index) {
     duplicate_entry.output_name_custom_text = duplicate_state.output_name_custom_text;
     duplicate_entry.output_path = duplicate_state.output_path;
     duplicate_entry.output_path_manual_override = duplicate_state.output_path_manual_override;
+    duplicate_entry.output_path_is_auto = !duplicate_state.output_path_manual_override;
     duplicate_entry.same_as_input = duplicate_state.same_as_input;
     duplicate_entry.subtitle_enabled = duplicate_state.subtitle_enabled;
     duplicate_entry.subtitle_path = duplicate_state.subtitle_path;
@@ -2861,6 +3080,7 @@ void MainWindow::duplicate_job(const int source_index) {
     duplicate_entry.audio_bitrate_kbps = duplicate_state.audio_bitrate_kbps;
     duplicate_entry.selected_audio_stream_index = duplicate_state.selected_audio_stream_index;
     duplicate_entry.audio_track_manual_override = duplicate_state.audio_track_manual_override;
+    duplicate_entry.original_import_index = static_cast<int>(jobs_.size());
 
     if (!duplicate_result.diagnostic.trimmed().isEmpty()) {
         append_session_log(QString("[warning] %1").arg(duplicate_result.diagnostic.trimmed()));
@@ -2891,6 +3111,8 @@ void MainWindow::duplicate_job(const int source_index) {
 
     const int insert_index = source_index + 1;
     jobs_.insert(jobs_.begin() + insert_index, std::move(duplicate_entry));
+    refresh_queue_order_indices();
+    recompute_automatic_output_paths_for_queue();
     append_session_log(
         QString("[info] Duplicated '%1' as '%2'.")
             .arg(queue_source_display_name(original_job))
@@ -3098,8 +3320,8 @@ void MainWindow::show_settings_dialog() {
         persist_app_settings_warning("save settings", save_error);
     }
 
+    recompute_automatic_output_paths_for_queue();
     for (int index = 0; index < static_cast<int>(jobs_.size()); ++index) {
-        apply_generated_output_path(index, false);
         if (app_settings_.toshi_mode_enabled) {
             apply_automatic_subtitle_selection(index, false);
         }
@@ -3544,6 +3766,7 @@ void MainWindow::choose_output_path() {
     );
     if (!selected_path.isEmpty()) {
         job.output_path_manual_override = true;
+        job.output_path_is_auto = false;
         output_path_edit_->setText(QDir::toNativeSeparators(selected_path));
     }
 }
@@ -3758,6 +3981,53 @@ void MainWindow::handle_queue_item_changed(QTableWidgetItem *item) {
     refresh_all_views();
 }
 
+void MainWindow::handle_queue_rows_moved(
+    const QModelIndex &parent,
+    const int start,
+    const int end,
+    const QModelIndex &destination,
+    const int row
+) {
+    (void)parent;
+    (void)start;
+    (void)end;
+    (void)destination;
+    (void)row;
+    if (suppress_queue_table_changes_ || queue_run_active_ || queue_start_planning_active_ || queue_table_ == nullptr) {
+        return;
+    }
+
+    std::vector<UiEncodeJob> reordered_jobs{};
+    reordered_jobs.reserve(jobs_.size());
+    std::set<int> used_indices{};
+    for (int table_row = 0; table_row < queue_table_->rowCount(); ++table_row) {
+        const auto *item = queue_table_->item(table_row, 0);
+        if (item == nullptr) {
+            continue;
+        }
+        bool ok = false;
+        const int source_index = item->data(Qt::UserRole).toInt(&ok);
+        if (!ok || !is_valid_job_index(source_index) || used_indices.contains(source_index)) {
+            continue;
+        }
+        used_indices.insert(source_index);
+        reordered_jobs.push_back(jobs_[static_cast<std::size_t>(source_index)]);
+    }
+    if (reordered_jobs.size() != jobs_.size()) {
+        refresh_queue_table();
+        return;
+    }
+
+    jobs_ = std::move(reordered_jobs);
+    selected_job_index_ = std::clamp(queue_table_->currentRow(), 0, static_cast<int>(jobs_.size()) - 1);
+    refresh_queue_order_indices();
+    for (auto &job : jobs_) {
+        job.queue_order_manual = true;
+    }
+    recompute_automatic_output_paths_for_queue();
+    refresh_all_views();
+}
+
 void MainWindow::handle_same_as_input_toggled(const bool enabled) {
     if (loading_selected_job_ || selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
         return;
@@ -3772,6 +4042,26 @@ void MainWindow::handle_same_as_input_toggled(const bool enabled) {
     } else {
         apply_generated_output_path(selected_job_index_, false);
     }
+
+    const auto selected_rows = selected_queue_job_indices();
+    for (const int row : selected_rows) {
+        if (row == selected_job_index_ || !is_valid_job_index(row)) {
+            continue;
+        }
+        auto &batch_job = jobs_[static_cast<std::size_t>(row)];
+        if (batch_job.state != UiJobState::queued) {
+            continue;
+        }
+        batch_job.same_as_input = enabled;
+        if (batch_job.output_path_manual_override) {
+            if (enabled) {
+                apply_same_as_input_folder(batch_job);
+            }
+        } else {
+            apply_generated_output_path(row, false);
+        }
+    }
+    recompute_automatic_output_paths_for_queue();
 
     load_selected_job_into_editor();
     refresh_all_views();
@@ -4645,6 +4935,46 @@ void MainWindow::sync_selected_job_from_editor() {
         apply_automatic_thumbnail_selection(selected_job_index_, false);
     }
 
+    const auto selected_rows = selected_queue_job_indices();
+    for (const int row : selected_rows) {
+        if (row == selected_job_index_ || !is_valid_job_index(row)) {
+            continue;
+        }
+        auto &batch_job = jobs_[static_cast<std::size_t>(row)];
+        if (batch_job.state != UiJobState::queued) {
+            continue;
+        }
+        batch_job.output_name_custom_text = job.output_name_custom_text;
+        batch_job.same_as_input = job.same_as_input;
+        batch_job.subtitle_enabled = job.subtitle_enabled;
+        batch_job.subtitle_path = job.subtitle_path;
+        batch_job.subtitle_manual_override = job.subtitle_manual_override;
+        batch_job.intro_enabled = job.intro_enabled;
+        batch_job.intro_path = job.intro_path;
+        batch_job.intro_music_enabled = job.intro_music_enabled;
+        batch_job.intro_music_path = job.intro_music_path;
+        batch_job.endcard_enabled = job.endcard_enabled;
+        batch_job.endcard_path = job.endcard_path;
+        batch_job.endcard_music_enabled = job.endcard_music_enabled;
+        batch_job.endcard_music_path = job.endcard_music_path;
+        batch_job.thumbnail_enabled = job.thumbnail_enabled;
+        batch_job.thumbnail_image_path = job.thumbnail_image_path;
+        batch_job.thumbnail_title = job.thumbnail_title;
+        batch_job.video_codec = job.video_codec;
+        batch_job.video_preset = job.video_preset;
+        batch_job.video_crf = job.video_crf;
+        batch_job.resize = job.resize;
+        batch_job.audio_mode = job.audio_mode;
+        batch_job.audio_bitrate_kbps = job.audio_bitrate_kbps;
+        batch_job.audio_track_display = job.audio_track_display;
+        batch_job.selected_audio_stream_index = job.selected_audio_stream_index;
+        batch_job.audio_track_manual_override = job.audio_track_manual_override;
+        if (!batch_job.output_path_manual_override) {
+            apply_generated_output_path(row, false);
+        }
+    }
+    recompute_automatic_output_paths_for_queue();
+
     if (job.state == UiJobState::queued) {
         job.last_status_message = job_has_minimum_required_fields(job)
             ? "Ready to queue."
@@ -4941,6 +5271,60 @@ void MainWindow::reset_job_for_rerun(UiEncodeJob &job) {
     job.task_log.clear();
 }
 
+void MainWindow::refresh_queue_order_indices() {
+    for (int index = 0; index < static_cast<int>(jobs_.size()); ++index) {
+        jobs_[static_cast<std::size_t>(index)].queue_order_index = index;
+    }
+}
+
+void MainWindow::recompute_automatic_output_paths_for_queue() {
+    struct Reservation final {
+        int job_index{-1};
+        utsure::core::job::OutputNamingRequest request{};
+        int stored_sequence_number{0};
+    };
+
+    std::vector<Reservation> reservations{};
+    reservations.reserve(jobs_.size());
+    std::vector<std::filesystem::path> manual_paths{};
+    manual_paths.reserve(jobs_.size());
+    for (int index = 0; index < static_cast<int>(jobs_.size()); ++index) {
+        const auto &job = jobs_[static_cast<std::size_t>(index)];
+        if (job.output_path_manual_override) {
+            if (!job.output_path.trimmed().isEmpty()) {
+                manual_paths.push_back(qstring_to_path(job.output_path));
+            }
+            continue;
+        }
+        const auto request = build_output_naming_request(job);
+        const std::string counter_key =
+            utsure::core::job::OutputNaming::sequence_counter_key(request, app_settings_.output_naming);
+        reservations.push_back(Reservation{
+            .job_index = index,
+            .request = request,
+            .stored_sequence_number = app_settings_.sequence_counter_value(counter_key)
+        });
+    }
+
+    std::vector<utsure::core::job::OutputNamingReservationRequest> requests{};
+    requests.reserve(reservations.size());
+    for (const auto &reservation : reservations) {
+        requests.push_back(utsure::core::job::OutputNamingReservationRequest{
+            .request = reservation.request,
+            .naming_template = app_settings_.output_naming,
+            .stored_sequence_number = reservation.stored_sequence_number,
+            .excluded_output_paths = manual_paths
+        });
+    }
+
+    const auto results = utsure::core::job::OutputNaming::reserve_batch(requests);
+    for (std::size_t index = 0; index < reservations.size() && index < results.size(); ++index) {
+        auto &job = jobs_[static_cast<std::size_t>(reservations[index].job_index)];
+        job.output_path = path_to_qstring(results[index].result.output_path);
+        job.output_path_is_auto = true;
+    }
+}
+
 void MainWindow::apply_same_as_input_folder(UiEncodeJob &job) {
     if (!job.same_as_input || job.source_path.trimmed().isEmpty() || job.output_path.trimmed().isEmpty()) {
         return;
@@ -5020,6 +5404,7 @@ void MainWindow::reserve_batch_output_paths_for_jobs(const std::vector<int> &job
     for (std::size_t index = 0; index < reservations.size() && index < reserved_results.size(); ++index) {
         auto &job = jobs_[static_cast<std::size_t>(reservations[index].job_index)];
         job.output_path = path_to_qstring(reserved_results[index].result.output_path);
+        job.output_path_is_auto = true;
         app_settings_.set_sequence_counter_value(
             reserved_results[index].sequence_counter_key,
             reserved_results[index].persisted_sequence_number
@@ -5060,6 +5445,7 @@ void MainWindow::apply_generated_output_path(const int job_index, const bool for
     auto &job = jobs_[static_cast<std::size_t>(job_index)];
     if (force_auto_mode) {
         job.output_path_manual_override = false;
+        job.output_path_is_auto = true;
     }
     if (job.output_path_manual_override) {
         return;
@@ -5071,6 +5457,7 @@ void MainWindow::apply_generated_output_path(const int job_index, const bool for
     }
 
     job.output_path = generated_output_path;
+    job.output_path_is_auto = true;
     if (job_index == selected_job_index_ && output_path_edit_ != nullptr &&
         output_path_edit_->text().trimmed() != generated_output_path) {
         const QSignalBlocker blocker(output_path_edit_);
@@ -5253,6 +5640,7 @@ void MainWindow::refresh_all_views() {
 }
 
 void MainWindow::refresh_queue_table() {
+    std::vector<int> rows_to_restore = selected_queue_job_indices();
     suppress_queue_table_changes_ = true;
     const QSignalBlocker blocker(queue_table_);
     queue_table_->clearContents();
@@ -5262,6 +5650,7 @@ void MainWindow::refresh_queue_table() {
         const auto &job = jobs_[static_cast<std::size_t>(row)];
 
         auto *file_item = new QTableWidgetItem(queue_source_display_name(job));
+        file_item->setData(Qt::UserRole, row);
         Qt::ItemFlags file_flags = Qt::ItemIsSelectable | Qt::ItemIsEnabled;
         if (!queue_run_active_ && !queue_start_planning_active_) {
             file_flags |= Qt::ItemIsUserCheckable;
@@ -5291,8 +5680,23 @@ void MainWindow::refresh_queue_table() {
 
     suppress_queue_table_changes_ = false;
 
-    if (is_valid_job_index(selected_job_index_)) {
-        queue_table_->selectRow(selected_job_index_);
+    if (rows_to_restore.empty() && is_valid_job_index(selected_job_index_)) {
+        rows_to_restore.push_back(selected_job_index_);
+    }
+    queue_table_->clearSelection();
+    auto *selection_model = queue_table_->selectionModel();
+    for (const int row : rows_to_restore) {
+        if (row >= 0 && row < queue_table_->rowCount()) {
+            if (selection_model != nullptr) {
+                selection_model->select(
+                    queue_table_->model()->index(row, 0),
+                    QItemSelectionModel::Select | QItemSelectionModel::Rows
+                );
+            }
+        }
+    }
+    if (is_valid_job_index(selected_job_index_) && selected_job_index_ < queue_table_->rowCount()) {
+        queue_table_->setCurrentCell(selected_job_index_, 0);
     }
 }
 

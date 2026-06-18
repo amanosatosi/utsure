@@ -1367,6 +1367,27 @@ Validation:
 
 ## Immediate next milestone
 
+### M40 Batch import order and multi-select queue editing
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Add deterministic batch import planning for files/folders, including natural sorting and common episode/version detection.
+  * Match `.ass`/`.ssa` sidecar subtitles by exact stem first, then unambiguous detected episode.
+  * Store queue-order/import metadata on UI jobs and make automatic output naming consume queue order.
+  * Enable multi-select queue behavior plus selected-row move/sort/remove actions.
+  * Add focused tests for import planning, natural sort, episode detection, subtitle matching, and queue-order naming behavior.
+
+Implementation approach:
+  * Add a small app-side `batch_import_planner` helper instead of moving queue logic into `MainWindow`.
+  * Keep the encode pipeline unchanged; only UI job metadata and output-name planning are touched.
+  * Use `QTableWidget` extended row selection and internal move hooks, with explicit queue vector reordering after model row moves.
+  * Keep batch editing conservative by applying user-triggered editor changes to selected queued/editable jobs without sharing settings objects.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included `git diff --check` and targeted searches for stale drop-import helpers, queue selection mode, and new planner wiring.
+
 ### M39 Qt usability fixes
 
 Status: Implemented; awaiting GitHub Actions validation

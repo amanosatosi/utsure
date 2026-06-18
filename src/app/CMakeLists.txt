@@ -9,6 +9,8 @@ set_source_files_properties(
 qt_add_executable(utsure_encoder_app WIN32
     app_settings.cpp
     app_settings.hpp
+    batch_import_planner.cpp
+    batch_import_planner.hpp
     crash_dump_writer.cpp
     crash_dump_writer.hpp
     encode_job_duplicate.cpp

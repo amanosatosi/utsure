@@ -24,6 +24,26 @@ add_test(
     COMMAND utsure_app_settings_tests
 )
 
+add_executable(utsure_app_batch_import_planner_tests
+    batch_import_planner_tests.cpp
+    "${CMAKE_SOURCE_DIR}/src/app/batch_import_planner.cpp"
+    "${CMAKE_SOURCE_DIR}/src/app/batch_import_planner.hpp"
+)
+
+target_include_directories(utsure_app_batch_import_planner_tests
+    PRIVATE
+        "${CMAKE_SOURCE_DIR}/src/app"
+)
+
+target_compile_features(utsure_app_batch_import_planner_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_app_batch_import_planner_tests)
+
+add_test(
+    NAME utsure.app.batch_import_planner
+    COMMAND utsure_app_batch_import_planner_tests
+)
+
 set_source_files_properties(
     "${CMAKE_SOURCE_DIR}/src/app/resources/app_resources.qrc"
     PROPERTIES
@@ -451,6 +471,7 @@ if(UTSURE_APP_FFMPEG_EXECUTABLE)
 endif()
 
 utsure_label_tests_matching("^utsure\\.app\\.settings\\." unit smoke)
+utsure_label_tests_matching("^utsure\\.app\\.batch_import_planner$" unit smoke)
 utsure_label_tests_matching("^utsure\\.app\\.ui_font$" integration smoke)
 utsure_label_tests_matching("^utsure\\.app\\.crash_dump_writer$" unit smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.lifecycle$" integration smoke)
