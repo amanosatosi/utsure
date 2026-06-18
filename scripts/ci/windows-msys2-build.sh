@@ -52,6 +52,7 @@ cmake --build "${build_dir}" --target utsure_encoder_core --parallel
 if [[ "${build_app}" == "ON" ]]; then
   cmake --build "${build_dir}" --target utsure_encoder_app --parallel
   cmake --build "${build_dir}" --target utsure_app_settings_tests --parallel
+  cmake --build "${build_dir}" --target utsure_app_batch_import_planner_tests --parallel
   cmake --build "${build_dir}" --target utsure_app_ui_font_tests --parallel
   cmake --build "${build_dir}" --target utsure_app_crash_dump_writer_tests --parallel
   cmake --build "${build_dir}" --target utsure_app_encode_job_runner_lifecycle_tests --parallel
