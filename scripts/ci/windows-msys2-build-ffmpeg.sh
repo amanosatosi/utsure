@@ -12,9 +12,18 @@ ffmpeg_source_dir="${UTSURE_FFMPEG_SOURCE_DIR:-${ffmpeg_root}/src}"
 ffmpeg_build_dir="${UTSURE_FFMPEG_BUILD_DIR:-${ffmpeg_root}/build}"
 ffmpeg_prefix="${UTSURE_FFMPEG_PREFIX:-${ffmpeg_root}/prefix}"
 ffmpeg_configure_flags_string="${UTSURE_FFMPEG_CONFIGURE_FLAGS:---enable-gpl --enable-libx264 --enable-libx265 --enable-shared --disable-static --disable-debug --disable-doc --disable-ffplay --disable-programs --enable-ffmpeg --enable-ffprobe}"
-ffmpeg_build_id="${UTSURE_FFMPEG_BUILD_ID:-ffmpeg-${ffmpeg_version}}"
-ffmpeg_stamp_file="${ffmpeg_prefix}/.utsure-ffmpeg-build-id"
 msys2_prefix="${UTSURE_MSYS2_PREFIX:-/ucrt64}"
+ffmpeg_build_fingerprint="$(
+  printf '%s\n%s\n%s\n%s\n' \
+    "${ffmpeg_version}" \
+    "${ffmpeg_configure_flags_string}" \
+    "${UTSURE_TOOLCHAIN_ID_PREFIX:-unknown-toolchain}" \
+    "${msys2_prefix}" |
+    sha256sum |
+    awk '{print substr($1, 1, 16)}'
+)"
+ffmpeg_build_id="${UTSURE_FFMPEG_BUILD_ID:-ffmpeg-${ffmpeg_version}-${ffmpeg_build_fingerprint}}"
+ffmpeg_stamp_file="${ffmpeg_prefix}/.utsure-ffmpeg-build-id"
 ffmpeg_cc="${CC:-}"
 ffmpeg_cxx="${CXX:-}"
 ffmpeg_ar="${AR:-}"

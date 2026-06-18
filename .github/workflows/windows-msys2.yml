@@ -74,10 +74,22 @@ jobs:
             libtool
             make
 
-      # TODO(2026-05-01): Re-add the FFmpeg actions/cache restore/save steps around this build
-      # once the temporary cache disablement is no longer needed.
+      - name: Restore FFmpeg cache
+        id: ffmpeg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .deps/ffmpeg
+          key: utsure-${{ runner.os }}-${{ env.UTSURE_TOOLCHAIN_ID_PREFIX }}-ffmpeg-${{ env.UTSURE_FFMPEG_VERSION }}-${{ hashFiles('.github/workflows/windows-msys2.yml', 'scripts/ci/windows-msys2-build-ffmpeg.sh') }}
+
       - name: Build FFmpeg
         run: ./scripts/ci/windows-msys2-build-ffmpeg.sh
+
+      - name: Save FFmpeg cache
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .deps/ffmpeg
+          key: ${{ steps.ffmpeg-cache.outputs.cache-primary-key }}
 
       - name: Build libassmod
         run: ./scripts/ci/windows-msys2-build-libassmod.sh

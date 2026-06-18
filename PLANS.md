@@ -1388,6 +1388,7 @@ Validation:
   * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
   * Static validation included `git diff --check` and targeted searches for stale drop-import helpers, queue selection mode, and new planner wiring.
   * Follow-up fixed Windows CI target wiring by adding `utsure_app_batch_import_planner_tests` to the explicit build list before CTest.
+  * Follow-up restored GitHub Actions FFmpeg cache restore/save around the pinned FFmpeg build and made the FFmpeg build stamp include version, configure flags, toolchain id, and MSYS2 prefix.
 
 ### M39 Qt usability fixes
 
