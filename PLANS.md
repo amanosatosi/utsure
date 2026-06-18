@@ -1367,4 +1367,22 @@ Validation:
 
 ## Immediate next milestone
 
-Re-run GitHub Actions for M27/M28/M29/M30/M31/M32/M33/M34/M35/M36/M37/M38 validation.
+### M39 Qt usability fixes
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Fix encode-time log views so appending output does not steal focus, force tab navigation, or reset user scroll position.
+  * Keep read-only navigation available while an encode is preparing/running, locking only controls that mutate the active job/queue.
+  * Persist last-used intro/outro clip paths and enabled state without clearing missing-file paths.
+  * Fix automatic batch output naming so generated names are per source/job, preserve manual output overrides, and avoid collisions deterministically.
+
+Implementation approach:
+  * Keep GUI changes thin by centralizing encode-control locking in `MainWindow` refresh logic.
+  * Use incremental `QPlainTextEdit` appends with scrollbar-state preservation instead of replacing whole log documents on every log line.
+  * Extend `AppSettings` JSON with backward-compatible optional intro/outro fields.
+  * Tighten `OutputNaming` behavior and tests for source-stem naming, stable sequence allocation, and collision suffixes.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included `git diff --check` and targeted searches for stale folder-based naming expectations, broad encode-time disabling, and log focus/tab forcing.

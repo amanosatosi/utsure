@@ -22,6 +22,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCloseEvent>
 #include <QCursor>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -60,6 +61,7 @@
 #include <QResizeEvent>
 #include <QRunnable>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QSplitter>
@@ -77,6 +79,7 @@
 #include <QVariant>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QTextCursor>
 
 #include <algorithm>
 #include <cmath>
@@ -916,6 +919,58 @@ std::pair<qint64, qint64> preview_trim_bounds_for_job(const MainWindow::UiEncode
 qint64 clamp_preview_time_to_job_duration(const MainWindow::UiEncodeJob &job, const qint64 requested_time_us) {
     const qint64 bounded_duration_us = std::max<qint64>(job.duration_us, 0);
     return std::clamp<qint64>(requested_time_us, 0, bounded_duration_us);
+}
+
+void append_log_line_preserving_user_scroll(QPlainTextEdit *log_view, const QString &line) {
+    if (log_view == nullptr) {
+        return;
+    }
+
+    auto *vertical_scroll = log_view->verticalScrollBar();
+    auto *horizontal_scroll = log_view->horizontalScrollBar();
+    const int previous_vertical = vertical_scroll == nullptr ? 0 : vertical_scroll->value();
+    const int previous_horizontal = horizontal_scroll == nullptr ? 0 : horizontal_scroll->value();
+    const int previous_vertical_maximum = vertical_scroll == nullptr ? 0 : vertical_scroll->maximum();
+    const bool follow_bottom =
+        vertical_scroll == nullptr || previous_vertical >= previous_vertical_maximum - 2;
+
+    QTextCursor cursor(log_view->document());
+    cursor.movePosition(QTextCursor::End);
+    if (!log_view->document()->isEmpty()) {
+        cursor.insertBlock();
+    }
+    cursor.insertText(line);
+
+    if (vertical_scroll != nullptr) {
+        vertical_scroll->setValue(follow_bottom ? vertical_scroll->maximum() : previous_vertical);
+    }
+    if (horizontal_scroll != nullptr) {
+        horizontal_scroll->setValue(previous_horizontal);
+    }
+}
+
+void set_log_text_preserving_user_scroll(QPlainTextEdit *log_view, const QString &text) {
+    if (log_view == nullptr) {
+        return;
+    }
+
+    auto *vertical_scroll = log_view->verticalScrollBar();
+    auto *horizontal_scroll = log_view->horizontalScrollBar();
+    const int previous_vertical = vertical_scroll == nullptr ? 0 : vertical_scroll->value();
+    const int previous_horizontal = horizontal_scroll == nullptr ? 0 : horizontal_scroll->value();
+    const int previous_vertical_maximum = vertical_scroll == nullptr ? 0 : vertical_scroll->maximum();
+    const bool follow_bottom =
+        vertical_scroll == nullptr || previous_vertical >= previous_vertical_maximum - 2;
+
+    const QSignalBlocker blocker(log_view);
+    log_view->setPlainText(text);
+
+    if (vertical_scroll != nullptr) {
+        vertical_scroll->setValue(follow_bottom ? vertical_scroll->maximum() : previous_vertical);
+    }
+    if (horizontal_scroll != nullptr) {
+        horizontal_scroll->setValue(previous_horizontal);
+    }
 }
 
 }  // namespace
@@ -2086,12 +2141,24 @@ QLabel#PreviewTimeBadge {
     });
     connect(subtitle_enable_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
     connect(subtitle_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
-    connect(intro_enable_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
-    connect(intro_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(intro_enable_check_, &QCheckBox::toggled, this, [this, bind_editor_change](bool) {
+        bind_editor_change();
+        persist_intro_outro_settings_from_editor();
+    });
+    connect(intro_path_edit_, &QLineEdit::textChanged, this, [this, bind_editor_change](const QString &) {
+        bind_editor_change();
+        persist_intro_outro_settings_from_editor();
+    });
     connect(intro_music_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
     connect(intro_music_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
-    connect(endcard_enable_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
-    connect(endcard_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(endcard_enable_check_, &QCheckBox::toggled, this, [this, bind_editor_change](bool) {
+        bind_editor_change();
+        persist_intro_outro_settings_from_editor();
+    });
+    connect(endcard_path_edit_, &QLineEdit::textChanged, this, [this, bind_editor_change](const QString &) {
+        bind_editor_change();
+        persist_intro_outro_settings_from_editor();
+    });
     connect(endcard_music_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
     connect(endcard_music_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
     connect(thumbnail_enable_check_, &QCheckBox::clicked, this, [this](bool) {
@@ -2217,6 +2284,11 @@ void MainWindow::dropEvent(QDropEvent *event) {
     if (!source_paths.isEmpty()) {
         add_source_jobs_from_paths(source_paths);
     }
+}
+
+void MainWindow::closeEvent(QCloseEvent *event) {
+    persist_intro_outro_settings_from_editor();
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::resizeEvent(QResizeEvent *event) {
@@ -3534,6 +3606,7 @@ void MainWindow::choose_intro_clip() {
     if (!selected_path.isEmpty()) {
         intro_enable_check_->setChecked(true);
         intro_path_edit_->setText(QDir::toNativeSeparators(selected_path));
+        persist_intro_outro_settings_from_editor();
     }
 }
 
@@ -3561,6 +3634,7 @@ void MainWindow::choose_endcard_clip() {
     if (!selected_path.isEmpty()) {
         endcard_enable_check_->setChecked(true);
         endcard_path_edit_->setText(QDir::toNativeSeparators(selected_path));
+        persist_intro_outro_settings_from_editor();
     }
 }
 
@@ -4559,6 +4633,7 @@ void MainWindow::sync_selected_job_from_editor() {
     const int stream_index = audio_track_combo_->currentData().toInt(&stream_index_ok);
     job.selected_audio_stream_index = stream_index_ok ? std::optional<int>(stream_index) : std::nullopt;
     persist_last_used_encode_choices_from_job(job);
+    persist_intro_outro_settings_from_editor();
 
     if (!job.output_path_manual_override) {
         apply_generated_output_path(selected_job_index_, false);
@@ -4588,12 +4663,12 @@ void MainWindow::load_selected_job_into_editor() {
         same_as_input_check_->setChecked(true);
         subtitle_enable_check_->setChecked(false);
         subtitle_path_edit_->clear();
-        intro_enable_check_->setChecked(false);
-        intro_path_edit_->clear();
+        intro_enable_check_->setChecked(app_settings_.intro_enabled);
+        intro_path_edit_->setText(app_settings_.last_intro_path);
         intro_music_check_->setChecked(false);
         intro_music_path_edit_->clear();
-        endcard_enable_check_->setChecked(false);
-        endcard_path_edit_->clear();
+        endcard_enable_check_->setChecked(app_settings_.outro_enabled);
+        endcard_path_edit_->setText(app_settings_.last_outro_path);
         endcard_music_check_->setChecked(false);
         endcard_music_path_edit_->clear();
         thumbnail_enable_check_->setChecked(false);
@@ -4797,6 +4872,10 @@ void MainWindow::apply_last_used_settings_to_job(UiEncodeJob &job) const {
     job.video_crf = app_settings_.last_used.crf;
     job.audio_mode = app_settings_.last_used.audio_mode;
     job.audio_bitrate_kbps = app_settings_.last_used.audio_bitrate_kbps;
+    job.intro_enabled = app_settings_.intro_enabled;
+    job.intro_path = app_settings_.last_intro_path;
+    job.endcard_enabled = app_settings_.outro_enabled;
+    job.endcard_path = app_settings_.last_outro_path;
 }
 
 void MainWindow::persist_last_used_encode_choices_from_job(const UiEncodeJob &job) {
@@ -4811,6 +4890,34 @@ void MainWindow::persist_last_used_encode_choices_from_job(const UiEncodeJob &jo
     QString save_error;
     if (!app_settings_.save(app_settings_path_, &save_error)) {
         persist_app_settings_warning("save encode choices", save_error);
+    }
+}
+
+void MainWindow::persist_intro_outro_settings_from_editor() {
+    if (loading_selected_job_ || intro_enable_check_ == nullptr || intro_path_edit_ == nullptr ||
+        endcard_enable_check_ == nullptr || endcard_path_edit_ == nullptr) {
+        return;
+    }
+
+    const QString intro_path = intro_path_edit_->text().trimmed();
+    const bool intro_enabled = intro_enable_check_->isChecked();
+    const QString outro_path = endcard_path_edit_->text().trimmed();
+    const bool outro_enabled = endcard_enable_check_->isChecked();
+    if (app_settings_.last_intro_path == intro_path &&
+        app_settings_.intro_enabled == intro_enabled &&
+        app_settings_.last_outro_path == outro_path &&
+        app_settings_.outro_enabled == outro_enabled) {
+        return;
+    }
+
+    app_settings_.last_intro_path = intro_path;
+    app_settings_.intro_enabled = intro_enabled;
+    app_settings_.last_outro_path = outro_path;
+    app_settings_.outro_enabled = outro_enabled;
+
+    QString save_error;
+    if (!app_settings_.save(app_settings_path_, &save_error)) {
+        persist_app_settings_warning("save intro/outro choices", save_error);
     }
 }
 
@@ -4888,11 +4995,24 @@ void MainWindow::reserve_batch_output_paths_for_jobs(const std::vector<int> &job
 
     std::vector<utsure::core::job::OutputNamingReservationRequest> requests{};
     requests.reserve(reservations.size());
+    std::vector<std::filesystem::path> manually_reserved_output_paths{};
+    manually_reserved_output_paths.reserve(job_indices.size());
+    for (const int job_index : job_indices) {
+        if (!is_valid_job_index(job_index)) {
+            continue;
+        }
+
+        const auto &job = jobs_[static_cast<std::size_t>(job_index)];
+        if (job.output_path_manual_override && !job.output_path.trimmed().isEmpty()) {
+            manually_reserved_output_paths.push_back(qstring_to_path(job.output_path));
+        }
+    }
     for (const auto &reservation : reservations) {
         requests.push_back(utsure::core::job::OutputNamingReservationRequest{
             .request = reservation.request,
             .naming_template = app_settings_.output_naming,
-            .stored_sequence_number = reservation.stored_sequence_number
+            .stored_sequence_number = reservation.stored_sequence_number,
+            .excluded_output_paths = manually_reserved_output_paths
         });
     }
 
@@ -5143,7 +5263,7 @@ void MainWindow::refresh_queue_table() {
 
         auto *file_item = new QTableWidgetItem(queue_source_display_name(job));
         Qt::ItemFlags file_flags = Qt::ItemIsSelectable | Qt::ItemIsEnabled;
-        if (!queue_run_active_) {
+        if (!queue_run_active_ && !queue_start_planning_active_) {
             file_flags |= Qt::ItemIsUserCheckable;
         }
         file_item->setFlags(file_flags);
@@ -5176,9 +5296,9 @@ void MainWindow::refresh_queue_table() {
     }
 }
 
-void MainWindow::refresh_editor_state() {
+void MainWindow::set_encode_controls_locked(const bool locked) {
     const bool has_job = selected_job_index_ >= 0 && selected_job_index_ < static_cast<int>(jobs_.size());
-    const bool editable = has_job && !queue_run_active_;
+    const bool editable = has_job && !locked;
     const bool audio_quality_enabled = editable &&
         audio_format_combo_->currentData().toInt() ==
             static_cast<int>(utsure::core::media::AudioOutputMode::encode_aac);
@@ -5189,9 +5309,9 @@ void MainWindow::refresh_editor_state() {
     output_browse_button_->setEnabled(editable);
     same_as_input_check_->setEnabled(editable);
 
-    editor_tabs_->setTabEnabled(0, has_job && !queue_run_active_);
-    editor_tabs_->setTabEnabled(1, has_job && !queue_run_active_);
-    editor_tabs_->setTabEnabled(2, has_job && !queue_run_active_);
+    editor_tabs_->setTabEnabled(0, has_job);
+    editor_tabs_->setTabEnabled(1, has_job);
+    editor_tabs_->setTabEnabled(2, has_job);
     editor_tabs_->setTabEnabled(3, true);
 
     subtitle_enable_check_->setEnabled(editable);
@@ -5224,6 +5344,11 @@ void MainWindow::refresh_editor_state() {
     thumbnail_title_edit_->setEnabled(editable && thumbnail_enable_check_->isChecked());
     thumbnail_auto_button_->setEnabled(editable);
     thumbnail_reset_title_button_->setEnabled(editable && thumbnail_enable_check_->isChecked());
+}
+
+void MainWindow::refresh_editor_state() {
+    const bool has_job = selected_job_index_ >= 0 && selected_job_index_ < static_cast<int>(jobs_.size());
+    set_encode_controls_locked(queue_run_active_ || queue_start_planning_active_);
 
     if (!has_job && preview_enabled_check_->isChecked()) {
         const QSignalBlocker blocker(preview_enabled_check_);
@@ -5343,7 +5468,7 @@ void MainWindow::refresh_trim_controls() {
 void MainWindow::refresh_task_log_view() {
     if (selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
         task_log_summary_label_->setText("Select a job to inspect its task log.");
-        task_log_view_->setPlainText("No selected task.");
+        set_log_text_preserving_user_scroll(task_log_view_, "No selected task.");
         return;
     }
 
@@ -5353,7 +5478,8 @@ void MainWindow::refresh_task_log_view() {
             .arg(format_job_state_display_text(job))
             .arg(queue_output_display_name(job))
     );
-    task_log_view_->setPlainText(
+    set_log_text_preserving_user_scroll(
+        task_log_view_,
         job.task_log.isEmpty()
             ? QString("No task log for '%1' yet.").arg(queue_source_display_name(job))
             : job.task_log.join('\n')
@@ -5361,7 +5487,8 @@ void MainWindow::refresh_task_log_view() {
 }
 
 void MainWindow::refresh_session_log_view() {
-    session_log_view_->setPlainText(
+    set_log_text_preserving_user_scroll(
+        session_log_view_,
         session_log_lines_.isEmpty()
             ? QString("Session log is empty.")
             : session_log_lines_.join('\n')
@@ -5389,7 +5516,7 @@ void MainWindow::refresh_toolbar_state() {
         parallel_button_->setToolTip(format_parallel_tooltip());
     }
     priority_combo_->setEnabled(!queue_busy);
-    start_button_->setEnabled(!jobs_.empty() && !queue_start_planning_active_);
+    start_button_->setEnabled(!jobs_.empty() && !queue_busy);
     stop_button_->setEnabled(queue_run_active_);
     update_start_button_visuals();
 }
@@ -5479,6 +5606,7 @@ void MainWindow::start_encode_queue() {
         return;
     }
 
+    persist_intro_outro_settings_from_editor();
     planned_queue_jobs_.clear();
     queue_cursor_ = 0;
     stop_requested_ = false;
@@ -5794,8 +5922,14 @@ void MainWindow::finish_queue_run() {
 }
 
 void MainWindow::append_session_log(const QString &line) {
-    session_log_lines_.push_back(QString("%1 %2").arg(QTime::currentTime().toString("HH:mm:ss"), line));
-    refresh_session_log_view();
+    const QString log_line = QString("%1 %2").arg(QTime::currentTime().toString("HH:mm:ss"), line);
+    session_log_lines_.push_back(log_line);
+    if (session_log_view_ != nullptr) {
+        if (session_log_lines_.size() == 1 && session_log_view_->toPlainText() == "Session log is empty.") {
+            session_log_view_->clear();
+        }
+        append_log_line_preserving_user_scroll(session_log_view_, log_line);
+    }
 }
 
 void MainWindow::append_job_log(const int job_index, const QString &line, const bool mirror_to_session) {
@@ -5809,7 +5943,22 @@ void MainWindow::append_job_log(const int job_index, const QString &line, const 
     }
 
     if (job_index == selected_job_index_) {
-        refresh_task_log_view();
+        if (task_log_view_ != nullptr) {
+            const QString current_text = task_log_view_->toPlainText();
+            if (jobs_[static_cast<std::size_t>(job_index)].task_log.size() == 1 &&
+                (current_text == "No selected task." || current_text.startsWith("No task log for '"))) {
+                task_log_view_->clear();
+            }
+            append_log_line_preserving_user_scroll(task_log_view_, line);
+        }
+        if (task_log_summary_label_ != nullptr) {
+            const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
+            task_log_summary_label_->setText(
+                QString("Status: %1 | Output: %2")
+                    .arg(format_job_state_display_text(job))
+                    .arg(queue_output_display_name(job))
+            );
+        }
     }
 }
 

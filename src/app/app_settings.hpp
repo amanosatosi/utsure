@@ -54,6 +54,10 @@ public:
     utsure::core::job::OutputNamingTemplate output_naming{};
     UiFontSettings ui_font{};
     bool toshi_mode_enabled{false};
+    QString last_intro_path{};
+    bool intro_enabled{false};
+    QString last_outro_path{};
+    bool outro_enabled{false};
     std::vector<EncodingProfile> encoding_profiles{};
     QString last_used_profile{};
     std::map<std::string, int> sequence_counters{};

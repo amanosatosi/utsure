@@ -111,7 +111,11 @@ int assert_missing_config_loads_defaults(const std::filesystem::path &root) {
         result.settings.output_naming.crc32_suffix_enabled ||
         result.settings.last_used.crf != 22 ||
         !result.settings.last_used_profile.isEmpty() ||
-        result.settings.toshi_mode_enabled) {
+        result.settings.toshi_mode_enabled ||
+        result.settings.intro_enabled ||
+        !result.settings.last_intro_path.isEmpty() ||
+        result.settings.outro_enabled ||
+        !result.settings.last_outro_path.isEmpty()) {
         return fail("Missing settings config did not return default settings without auto-applying a profile.");
     }
 
@@ -189,6 +193,10 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
     };
     settings.last_used_profile = "Default";
     settings.set_sequence_counter_value("bdrip|show", 12);
+    settings.intro_enabled = true;
+    settings.last_intro_path = "C:/media/intro.mp4";
+    settings.outro_enabled = true;
+    settings.last_outro_path = "C:/media/outro.mp4";
 
     QString save_error;
     if (!settings.save(config_path, &save_error)) {
@@ -219,8 +227,12 @@ int assert_encode_choices_round_trip(const std::filesystem::path &root) {
         loaded.settings.encoding_profiles.size() != 2U ||
         loaded.settings.last_used_profile != "Default" ||
         !loaded.settings.toshi_mode_enabled ||
+        !loaded.settings.intro_enabled ||
+        loaded.settings.last_intro_path != "C:/media/intro.mp4" ||
+        !loaded.settings.outro_enabled ||
+        loaded.settings.last_outro_path != "C:/media/outro.mp4" ||
         loaded.settings.sequence_counter_value("bdrip|show") != 12) {
-        return fail("Settings JSON did not round-trip encode choices, naming tokens, UI font, Toshi mode, and counters.");
+        return fail("Settings JSON did not round-trip encode choices, naming tokens, UI font, Toshi mode, intro/outro, and counters.");
     }
 
     const QByteArray json = read_file_bytes(config_path);
@@ -456,7 +468,7 @@ int assert_duplicate_auto_output_uses_exclusion_without_extra_counter_skip(const
     touch_file(source_path);
     std::filesystem::create_directories(output_directory);
 
-    const QString original_output = path_to_qstring(output_directory / "[OP] DuplicateCounter - 05 x265 1920x1080.mp4");
+    const QString original_output = path_to_qstring(output_directory / "[OP] episode01 - 05 x265 1920x1080.mp4");
     const auto result = duplicate_encode_entry(DuplicateEncodeEntryRequest{
         .original = DuplicateEncodeEntryState{
             .source_path = path_to_qstring(source_path),
@@ -474,7 +486,7 @@ int assert_duplicate_auto_output_uses_exclusion_without_extra_counter_skip(const
         result.duplicate.output_path == original_output ||
         !result.sequence_counter_reserved ||
         result.persisted_sequence_number != 6 ||
-        !result.duplicate.output_path.endsWith("[OP] DuplicateCounter - 06 x265 1920x1080.mp4")) {
+        !result.duplicate.output_path.endsWith("[OP] episode01 - 06 x265 1920x1080.mp4")) {
         return fail("Duplicate auto output did not reserve exactly the next safe sequence number.");
     }
 

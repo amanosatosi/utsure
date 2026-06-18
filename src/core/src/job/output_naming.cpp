@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -255,11 +254,6 @@ std::string normalize_path_key(const std::filesystem::path &path) {
 }
 
 std::string resolve_source_folder_name(const std::filesystem::path &source_path) {
-    const auto folder_name = sanitize_filename_fragment(source_path.parent_path().filename().string());
-    if (!folder_name.empty()) {
-        return folder_name;
-    }
-
     const auto source_stem = sanitize_filename_fragment(source_path.stem().string());
     if (!source_stem.empty()) {
         return source_stem;
@@ -268,6 +262,11 @@ std::string resolve_source_folder_name(const std::filesystem::path &source_path)
     const auto source_name = sanitize_filename_fragment(source_path.filename().string());
     if (!source_name.empty()) {
         return source_name;
+    }
+
+    const auto folder_name = sanitize_filename_fragment(source_path.parent_path().filename().string());
+    if (!folder_name.empty()) {
+        return folder_name;
     }
 
     return "Output";
@@ -566,16 +565,8 @@ std::string build_sequence_counter_key(
     const std::string_view custom_text,
     const std::string_view source_folder_name
 ) {
+    (void)source_folder_name;
     const std::string custom_key = normalize_counter_key_fragment(std::string(custom_text));
-    const std::string folder_key = normalize_counter_key_fragment(std::string(source_folder_name));
-
-    if (!custom_key.empty() && !folder_key.empty()) {
-        return custom_key + "|" + folder_key;
-    }
-
-    if (!folder_key.empty()) {
-        return folder_key;
-    }
 
     if (!custom_key.empty()) {
         return custom_key;
@@ -695,11 +686,10 @@ OutputNamingResult make_unique_non_sequence_result(
 
     // No-sequence templates have no persisted no-reuse counter; avoid only
     // the paths visible in the filesystem and the caller-provided exclusions.
-    for (int copy_index = 1; copy_index < 1000; ++copy_index) {
-        const std::string suffix = copy_index == 1
-            ? " Copy"
-            : " Copy " + std::to_string(copy_index);
-        const std::string file_stem = fragments.stem_prefix + suffix;
+    for (int copy_index = 2; copy_index < 1000; ++copy_index) {
+        std::ostringstream suffix;
+        suffix << '_' << std::setw(3) << std::setfill('0') << copy_index;
+        const std::string file_stem = fragments.stem_prefix + suffix.str();
         const std::string file_name = file_stem + fragments.extension;
         const std::filesystem::path output_path = output_directory.empty()
             ? std::filesystem::path(file_name)
@@ -714,12 +704,8 @@ OutputNamingResult make_unique_non_sequence_result(
         return result;
     }
 
-    const auto fallback_seed = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-    for (int attempt = 0; attempt < 1000; ++attempt) {
-        const std::string suffix = attempt == 0
-            ? " Copy " + fallback_seed
-            : " Copy " + fallback_seed + "-" + std::to_string(attempt);
-        const std::string file_stem = fragments.stem_prefix + suffix;
+    for (int copy_index = 1000; copy_index < 10000; ++copy_index) {
+        const std::string file_stem = fragments.stem_prefix + "_" + std::to_string(copy_index);
         const std::string file_name = file_stem + fragments.extension;
         const std::filesystem::path output_path = output_directory.empty()
             ? std::filesystem::path(file_name)
@@ -932,17 +918,25 @@ std::vector<OutputNamingReservationResult> OutputNaming::reserve_batch(
 
     std::map<ReservationGroupKey, ReservationGroupState> reservation_groups{};
     std::map<std::string, CounterReservationState> counter_groups{};
+    std::vector<std::filesystem::path> reserved_output_paths{};
     for (const auto &request : requests) {
         const OutputNamingFragments fragments =
             build_output_naming_fragments(request.request, request.naming_template);
+        std::vector<std::filesystem::path> excluded_output_paths = request.excluded_output_paths;
+        excluded_output_paths.insert(
+            excluded_output_paths.end(),
+            reserved_output_paths.begin(),
+            reserved_output_paths.end()
+        );
 
         if (!fragments.has_sequence_number) {
             results.push_back(build_reservation_result(
                 request.request.output_directory,
                 fragments,
                 0,
-                request.excluded_output_paths
+                excluded_output_paths
             ));
+            reserved_output_paths.push_back(results.back().result.output_path);
             continue;
         }
 
@@ -969,7 +963,7 @@ std::vector<OutputNamingReservationResult> OutputNaming::reserve_batch(
             request.request.output_directory,
             fragments.stem_prefix,
             fragments.full_suffix,
-            request.excluded_output_paths
+            excluded_output_paths
         );
 
         auto [counter_iterator, counter_inserted] =
@@ -993,8 +987,9 @@ std::vector<OutputNamingReservationResult> OutputNaming::reserve_batch(
             request.request.output_directory,
             fragments,
             sequence_number,
-            request.excluded_output_paths
+            excluded_output_paths
         ));
+        reserved_output_paths.push_back(results.back().result.output_path);
     }
 
     return results;

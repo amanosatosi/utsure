@@ -19,6 +19,7 @@
 #include <vector>
 
 class EncodeJobRunnerController;
+class QCloseEvent;
 class QEvent;
 class QDragEnterEvent;
 class QDragLeaveEvent;
@@ -120,6 +121,7 @@ private:
     void dragMoveEvent(QDragMoveEvent *event) override;
     void dragLeaveEvent(QDragLeaveEvent *event) override;
     void dropEvent(QDropEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     struct PlannedBatchJob final {
         int job_index{-1};
@@ -214,6 +216,7 @@ private:
     void select_job(int index);
     void apply_last_used_settings_to_job(UiEncodeJob &job) const;
     void persist_last_used_encode_choices_from_job(const UiEncodeJob &job);
+    void persist_intro_outro_settings_from_editor();
     void persist_app_settings_warning(const QString &context, const QString &detail);
     void ensure_runner_slot_count(int slot_count);
     void ensure_job_inspection(int job_index);
@@ -261,6 +264,7 @@ private:
     void refresh_task_log_view();
     void refresh_session_log_view();
     void refresh_toolbar_state();
+    void set_encode_controls_locked(bool locked);
     void refresh_parallel_batch_summary();
     void refresh_audio_track_combo();
     void refresh_profile_combo();

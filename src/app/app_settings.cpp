@@ -398,6 +398,14 @@ QJsonDocument settings_to_json_document(const AppSettings &settings) {
     root.insert("toshiMode", QJsonObject{
         {"enabled", settings.toshi_mode_enabled}
     });
+    root.insert("intro", QJsonObject{
+        {"enabled", settings.intro_enabled},
+        {"lastPath", settings.last_intro_path}
+    });
+    root.insert("outro", QJsonObject{
+        {"enabled", settings.outro_enabled},
+        {"lastPath", settings.last_outro_path}
+    });
     root.insert("encodingProfiles", encoding_profiles_to_json(settings.encoding_profiles));
     root.insert("lastUsedProfile", settings.last_used_profile);
     root.insert("sequenceCounters", sequence_counters_to_json(settings.sequence_counters));
@@ -482,6 +490,12 @@ AppSettings::LoadResult AppSettings::load(const QString &config_path) {
     result.settings.ui_font = ui_font_from_json(root.value("uiFont").toObject(), fallback.ui_font);
     result.settings.toshi_mode_enabled =
         root.value("toshiMode").toObject().value("enabled").toBool(fallback.toshi_mode_enabled);
+    const QJsonObject intro_object = root.value("intro").toObject();
+    result.settings.intro_enabled = intro_object.value("enabled").toBool(fallback.intro_enabled);
+    result.settings.last_intro_path = intro_object.value("lastPath").toString(fallback.last_intro_path).trimmed();
+    const QJsonObject outro_object = root.value("outro").toObject();
+    result.settings.outro_enabled = outro_object.value("enabled").toBool(fallback.outro_enabled);
+    result.settings.last_outro_path = outro_object.value("lastPath").toString(fallback.last_outro_path).trimmed();
     result.settings.encoding_profiles = root.value("encodingProfiles").isArray()
         ? encoding_profiles_from_json(root.value("encodingProfiles").toArray())
         : fallback.encoding_profiles;
