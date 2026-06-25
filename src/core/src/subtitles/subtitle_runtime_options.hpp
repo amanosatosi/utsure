@@ -53,7 +53,20 @@ inline std::optional<std::string> read_environment_variable(const char *name) {
     return lowercase_ascii(std::string(value));
 }
 
+inline bool environment_flag_enabled(const char *name) noexcept {
+    const auto value = read_environment_variable(name);
+    if (!value.has_value()) {
+        return false;
+    }
+
+    return *value == "1" || *value == "true" || *value == "on" || *value == "yes";
+}
+
 inline SubtitleBitmapTransferMode resolve_bitmap_transfer_mode() noexcept {
+    if (environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE")) {
+        return SubtitleBitmapTransferMode::copied;
+    }
+
     const auto value = read_environment_variable("UTSURE_SUBTITLE_BITMAP_MODE");
     if (!value.has_value()) {
         return SubtitleBitmapTransferMode::direct;
@@ -71,6 +84,10 @@ inline SubtitleBitmapTransferMode resolve_bitmap_transfer_mode() noexcept {
 }
 
 inline SubtitleCompositionMode resolve_composition_mode() noexcept {
+    if (environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE")) {
+        return SubtitleCompositionMode::serialized;
+    }
+
     const auto value = read_environment_variable("UTSURE_SUBTITLE_COMPOSITION_MODE");
     if (!value.has_value()) {
         return SubtitleCompositionMode::serialized;

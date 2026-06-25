@@ -1367,6 +1367,32 @@ Validation:
 
 ## Immediate next milestone
 
+### M41 Subtitle renderer lifetime crash hardening
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Fix intermittent native crashes in libassmod/libass during subtitle burn-in by hardening renderer/session lifetime, image asset ownership, and render/cleanup synchronization.
+  * Add crash-sidecar subtitle render state so future dumps identify renderer, track, thread, active render count, timestamp, event count, and registered image asset state.
+  * Add a debug safety mode and focused repro support without changing normal encode output behavior.
+
+Implementation approach:
+  * Keep GUI and encode-job code thin; concentrate fixes in the core libassmod adapter, runtime subtitle options, crash context parsing, and existing repro/test support.
+  * Preserve worker-local subtitle sessions for normal performance, while `UTSURE_SUBTITLE_SAFE_MODE=1` forces copied bitmap transfer, serialized subtitle workers, and global libassmod call serialization.
+  * Treat libassmod image/tag assets as app-owned session data and keep them alive until the renderer, track, and library have been torn down after all active renders finish.
+
+Implemented:
+  * Replaced the subtitle session's atomic overlap flag with a mutex/condition-variable render guard that records active render count and prevents cleanup while `ass_render_frame_auto` or synchronous composition is in flight.
+  * Serialized libassmod setup, font, image registration, render, RGBA image free, tag-clear, and teardown calls when safe mode is enabled.
+  * Kept decoded image asset RGBA buffers in the session through teardown and added assertions for valid dimensions, stride, and non-empty owned pixel storage.
+  * Added lifecycle diagnostics for session creation, `ass_read_file` success, image asset registration, render start/end, renderer/track/library pointers, thread ids, event counts, and cleanup state.
+  * Extended crash context JSON and runtime-log parsing with subtitle renderer pointers, render thread ids, active render count, start/end PTS, event count, image asset count/name/path, and cleanup-started state.
+  * Added `UTSURE_LIBASSMOD_REPRO_REPEAT` support to the libassmod RGBA reproducer so a single renderer/session can render the suspect timestamp repeatedly.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included `git diff --check` and targeted searches for stale subtitle session guard calls, raw ASS image pointer storage, and crash-context subtitle fields.
+
 ### M40 Batch import order and multi-select queue editing
 
 Status: Implemented; awaiting GitHub Actions validation

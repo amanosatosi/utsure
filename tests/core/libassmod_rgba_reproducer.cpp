@@ -2,6 +2,7 @@ extern "C" {
 #include <ass/ass.h>
 }
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -93,6 +94,15 @@ long long parse_long_long(std::string_view value, std::string_view label) {
     }
 
     return result;
+}
+
+int repeat_count_from_environment() {
+    const char *value = std::getenv("UTSURE_LIBASSMOD_REPRO_REPEAT");
+    if (value == nullptr || value[0] == '\0') {
+        return 1;
+    }
+
+    return std::max(1, parse_int(value, "UTSURE_LIBASSMOD_REPRO_REPEAT"));
 }
 
 std::optional<std::uint64_t> estimate_rgba_bytes(const ASS_ImageRGBA &image) noexcept {
@@ -226,27 +236,37 @@ int run_rgba_reproducer(
         std::cout << "setup.font.directory=none\n";
     }
 
-    int detect_change = 0;
+    const int repeat_count = repeat_count_from_environment();
     const long long timestamp_milliseconds = timestamp_microseconds / 1000LL;
-    ASS_ImageRGBA *images = ass_render_frame_rgba(
-        renderer.get(),
-        track.get(),
-        timestamp_milliseconds,
-        &detect_change
-    );
+    std::size_t last_node_count = 0;
+    int last_detect_change = 0;
+    for (int iteration = 0; iteration < repeat_count; ++iteration) {
+        int detect_change = 0;
+        ASS_ImageRGBA *images = ass_render_frame_rgba(
+            renderer.get(),
+            track.get(),
+            timestamp_milliseconds,
+            &detect_change
+        );
 
-    std::size_t node_count = 0;
-    for (ASS_ImageRGBA *image = images; image != nullptr; image = image->next) {
-        log_rgba_node(*image, node_count);
-        ++node_count;
+        std::size_t node_count = 0;
+        for (ASS_ImageRGBA *image = images; image != nullptr; image = image->next) {
+            if (iteration == 0 || iteration + 1 == repeat_count) {
+                log_rgba_node(*image, node_count);
+            }
+            ++node_count;
+        }
+
+        last_node_count = node_count;
+        last_detect_change = detect_change;
+        ass_free_images_rgba(images);
     }
 
     std::cout << "render.timestamp_us=" << timestamp_microseconds << '\n';
     std::cout << "render.timestamp_ms=" << timestamp_milliseconds << '\n';
-    std::cout << "render.detect_change=" << detect_change << '\n';
-    std::cout << "render.node_count=" << node_count << '\n';
-
-    ass_free_images_rgba(images);
+    std::cout << "render.detect_change=" << last_detect_change << '\n';
+    std::cout << "render.node_count=" << last_node_count << '\n';
+    std::cout << "render.repeat_count=" << repeat_count << '\n';
     std::cout << "free.completed=yes\n";
     return 0;
 }

@@ -221,6 +221,20 @@ int assert_crash_context_snapshot_and_json() {
         "Streaming frame checkpoint: segment=main, frame=43, pts=2002, source_codec=hevc, "
         "video_queue_depth=1, decoder_threads=1, encoder_threads=2, current_rss=345678, peak_rss=456789."
     );
+    utsure::app::crash::update_crash_context_from_runtime_log(
+        "subtitle render start: operation=compose, session_instance_id=5, frame=44, pts_us=1138596000, "
+        "thread_id=1234, renderer=0x1111, track=0x2222, library=0x3333, active_subtitle_render_count=1, "
+        "subtitle_renderer_created_thread_id=99, last_subtitle_event_count=77, registered_image_asset_count=2, "
+        "last_registered_image_asset_name=logo.png, last_registered_image_asset_path=C:/anime/z ui refrence/logo.png, "
+        "subtitle_cleanup_started=0, safe_mode=1"
+    );
+    utsure::app::crash::update_crash_context_from_runtime_log(
+        "subtitle render end: operation=compose, session_instance_id=5, frame=44, pts_us=1138596000, "
+        "thread_id=1234, renderer=0x1111, track=0x2222, library=0x3333, active_subtitle_render_count=1, "
+        "subtitle_renderer_created_thread_id=99, last_subtitle_event_count=77, registered_image_asset_count=2, "
+        "last_registered_image_asset_name=logo.png, last_registered_image_asset_path=C:/anime/z ui refrence/logo.png, "
+        "subtitle_cleanup_started=0, safe_mode=1"
+    );
     utsure::app::crash::clear_current_thread_runner_slot();
 
     const auto snapshot = utsure::app::crash::crash_context_snapshot();
@@ -228,10 +242,21 @@ int assert_crash_context_snapshot_and_json() {
     if (snapshot.runner_slot_index != 2 ||
         snapshot.active_job_count != 3 ||
         snapshot.source_codec != "hevc" ||
-        snapshot.frame_index != 43 ||
-        snapshot.pts != 2002 ||
+        snapshot.frame_index != 44 ||
+        snapshot.pts != 1138596000 ||
         snapshot.current_rss_bytes != 345678 ||
-        snapshot.peak_rss_bytes != 456789) {
+        snapshot.peak_rss_bytes != 456789 ||
+        snapshot.subtitle_renderer_ptr != "0x1111" ||
+        snapshot.subtitle_track_ptr != "0x2222" ||
+        snapshot.subtitle_library_ptr != "0x3333" ||
+        snapshot.subtitle_render_thread_id != "1234" ||
+        snapshot.active_subtitle_render_count != 1 ||
+        snapshot.last_subtitle_render_start_pts != 1138596000 ||
+        snapshot.last_subtitle_render_end_pts != 1138596000 ||
+        snapshot.last_subtitle_event_count != 77 ||
+        snapshot.registered_image_asset_count != 2 ||
+        snapshot.last_registered_image_asset_path != "C:/anime/z ui refrence/logo.png" ||
+        snapshot.subtitle_cleanup_started) {
         std::cerr
             << "snapshot.runner_slot_index=" << snapshot.runner_slot_index
             << " active_job_count=" << snapshot.active_job_count
@@ -248,7 +273,8 @@ int assert_crash_context_snapshot_and_json() {
         collection.active_job_count != 0 ||
         collection.runner_contexts.size() <= 2U ||
         collection.runner_contexts[2].source_codec != "hevc" ||
-        collection.runner_contexts[2].frame_index != 43) {
+        collection.runner_contexts[2].frame_index != 44 ||
+        collection.runner_contexts[2].subtitle_renderer_ptr != "0x1111") {
         return fail("Crash context collection did not preserve per-runner slot fields.");
     }
 
@@ -256,6 +282,9 @@ int assert_crash_context_snapshot_and_json() {
     if (!contains_text(json, "\"source_codec\": \"hevc\"") ||
         !contains_text(json, "\"decoded_frame_format\": \"yuv420p\"") ||
         !contains_text(json, "\"frame_transfer_path\": \"sws_scale\"") ||
+        !contains_text(json, "\"subtitle_renderer_ptr\": \"0x1111\"") ||
+        !contains_text(json, "\"last_subtitle_render_start_pts\": 1138596000") ||
+        !contains_text(json, "\"registered_image_asset_count\": 2") ||
         !contains_text(json, "\"runner_slot_index\": 2") ||
         !contains_text(json, "\"runner_contexts\"") ||
         !contains_text(json, "\"crashing_thread_id\": 99")) {

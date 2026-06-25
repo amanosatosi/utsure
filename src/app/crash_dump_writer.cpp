@@ -277,6 +277,26 @@ std::optional<std::string> extract_value_after(std::string_view message, std::st
     return std::string(message.substr(value_start, value_end - value_start));
 }
 
+std::optional<std::string> extract_comma_delimited_value_after(std::string_view message, std::string_view key) {
+    const auto key_position = message.find(key);
+    if (key_position == std::string_view::npos) {
+        return std::nullopt;
+    }
+
+    const std::size_t value_start = key_position + key.size();
+    std::size_t value_end = message.find(',', value_start);
+    if (value_end == std::string_view::npos) {
+        value_end = message.size();
+    }
+    while (value_end > value_start && message[value_end - 1U] == ' ') {
+        --value_end;
+    }
+    if (value_end <= value_start) {
+        return std::nullopt;
+    }
+    return std::string(message.substr(value_start, value_end - value_start));
+}
+
 std::optional<int> parse_int_value(std::string_view text) {
     int value = 0;
     bool has_digit = false;
@@ -317,6 +337,16 @@ std::optional<std::int64_t> parse_int64_value(std::string_view text) {
         return std::nullopt;
     }
     return negative ? -value : value;
+}
+
+std::optional<bool> parse_bool_value(const std::string_view text) {
+    if (text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "yes") {
+        return true;
+    }
+    if (text == "0" || text == "false" || text == "FALSE" || text == "off" || text == "no") {
+        return false;
+    }
+    return std::nullopt;
 }
 
 std::optional<std::uint64_t> parse_bytes_after(std::string_view message, std::string_view key) {
@@ -409,6 +439,48 @@ void apply_optional(CrashContextSnapshot &snapshot, const CrashContextUpdate &up
     }
     if (update.cancellation_requested.has_value()) {
         snapshot.cancellation_requested = *update.cancellation_requested;
+    }
+    if (update.subtitle_renderer_ptr.has_value()) {
+        snapshot.subtitle_renderer_ptr = *update.subtitle_renderer_ptr;
+    }
+    if (update.subtitle_track_ptr.has_value()) {
+        snapshot.subtitle_track_ptr = *update.subtitle_track_ptr;
+    }
+    if (update.subtitle_library_ptr.has_value()) {
+        snapshot.subtitle_library_ptr = *update.subtitle_library_ptr;
+    }
+    if (update.subtitle_render_thread_id.has_value()) {
+        snapshot.subtitle_render_thread_id = *update.subtitle_render_thread_id;
+    }
+    if (update.subtitle_renderer_created_thread_id.has_value()) {
+        snapshot.subtitle_renderer_created_thread_id = *update.subtitle_renderer_created_thread_id;
+    }
+    if (update.subtitle_renderer_destroyed_thread_id.has_value()) {
+        snapshot.subtitle_renderer_destroyed_thread_id = *update.subtitle_renderer_destroyed_thread_id;
+    }
+    if (update.active_subtitle_render_count.has_value()) {
+        snapshot.active_subtitle_render_count = *update.active_subtitle_render_count;
+    }
+    if (update.last_subtitle_render_start_pts.has_value()) {
+        snapshot.last_subtitle_render_start_pts = *update.last_subtitle_render_start_pts;
+    }
+    if (update.last_subtitle_render_end_pts.has_value()) {
+        snapshot.last_subtitle_render_end_pts = *update.last_subtitle_render_end_pts;
+    }
+    if (update.last_subtitle_event_count.has_value()) {
+        snapshot.last_subtitle_event_count = *update.last_subtitle_event_count;
+    }
+    if (update.registered_image_asset_count.has_value()) {
+        snapshot.registered_image_asset_count = *update.registered_image_asset_count;
+    }
+    if (update.last_registered_image_asset_name.has_value()) {
+        snapshot.last_registered_image_asset_name = *update.last_registered_image_asset_name;
+    }
+    if (update.last_registered_image_asset_path.has_value()) {
+        snapshot.last_registered_image_asset_path = *update.last_registered_image_asset_path;
+    }
+    if (update.subtitle_cleanup_started.has_value()) {
+        snapshot.subtitle_cleanup_started = *update.subtitle_cleanup_started;
     }
     if (update.build_version.has_value()) {
         snapshot.build_version = *update.build_version;
@@ -718,6 +790,20 @@ std::string crash_context_to_json(const CrashContextSnapshot &snapshot) {
     append_json_uint(json, "current_rss_bytes", snapshot.current_rss_bytes, true);
     append_json_uint(json, "peak_rss_bytes", snapshot.peak_rss_bytes, true);
     append_json_bool(json, "cancellation_requested", snapshot.cancellation_requested, true);
+    append_json_string(json, "subtitle_renderer_ptr", snapshot.subtitle_renderer_ptr, true);
+    append_json_string(json, "subtitle_track_ptr", snapshot.subtitle_track_ptr, true);
+    append_json_string(json, "subtitle_library_ptr", snapshot.subtitle_library_ptr, true);
+    append_json_string(json, "subtitle_render_thread_id", snapshot.subtitle_render_thread_id, true);
+    append_json_string(json, "subtitle_renderer_created_thread_id", snapshot.subtitle_renderer_created_thread_id, true);
+    append_json_string(json, "subtitle_renderer_destroyed_thread_id", snapshot.subtitle_renderer_destroyed_thread_id, true);
+    append_json_int(json, "active_subtitle_render_count", snapshot.active_subtitle_render_count, true);
+    append_json_int(json, "last_subtitle_render_start_pts", snapshot.last_subtitle_render_start_pts, true);
+    append_json_int(json, "last_subtitle_render_end_pts", snapshot.last_subtitle_render_end_pts, true);
+    append_json_int(json, "last_subtitle_event_count", snapshot.last_subtitle_event_count, true);
+    append_json_int(json, "registered_image_asset_count", snapshot.registered_image_asset_count, true);
+    append_json_string(json, "last_registered_image_asset_name", snapshot.last_registered_image_asset_name, true);
+    append_json_string(json, "last_registered_image_asset_path", snapshot.last_registered_image_asset_path, true);
+    append_json_bool(json, "subtitle_cleanup_started", snapshot.subtitle_cleanup_started, true);
     append_json_string(json, "last_log_message", snapshot.last_log_message, false);
     json << "}\n";
     return json.str();
@@ -749,6 +835,20 @@ void append_context_json_object(std::ostringstream &json, const CrashContextSnap
     append_json_uint(json, "current_rss_bytes", snapshot.current_rss_bytes, true);
     append_json_uint(json, "peak_rss_bytes", snapshot.peak_rss_bytes, true);
     append_json_bool(json, "cancellation_requested", snapshot.cancellation_requested, true);
+    append_json_string(json, "subtitle_renderer_ptr", snapshot.subtitle_renderer_ptr, true);
+    append_json_string(json, "subtitle_track_ptr", snapshot.subtitle_track_ptr, true);
+    append_json_string(json, "subtitle_library_ptr", snapshot.subtitle_library_ptr, true);
+    append_json_string(json, "subtitle_render_thread_id", snapshot.subtitle_render_thread_id, true);
+    append_json_string(json, "subtitle_renderer_created_thread_id", snapshot.subtitle_renderer_created_thread_id, true);
+    append_json_string(json, "subtitle_renderer_destroyed_thread_id", snapshot.subtitle_renderer_destroyed_thread_id, true);
+    append_json_int(json, "active_subtitle_render_count", snapshot.active_subtitle_render_count, true);
+    append_json_int(json, "last_subtitle_render_start_pts", snapshot.last_subtitle_render_start_pts, true);
+    append_json_int(json, "last_subtitle_render_end_pts", snapshot.last_subtitle_render_end_pts, true);
+    append_json_int(json, "last_subtitle_event_count", snapshot.last_subtitle_event_count, true);
+    append_json_int(json, "registered_image_asset_count", snapshot.registered_image_asset_count, true);
+    append_json_string(json, "last_registered_image_asset_name", snapshot.last_registered_image_asset_name, true);
+    append_json_string(json, "last_registered_image_asset_path", snapshot.last_registered_image_asset_path, true);
+    append_json_bool(json, "subtitle_cleanup_started", snapshot.subtitle_cleanup_started, true);
     append_json_string(json, "last_log_message", snapshot.last_log_message, false);
     json << indent << "}";
 }
@@ -770,6 +870,16 @@ std::string crash_context_collection_to_json(const CrashContextCollectionSnapsho
     append_json_string(json, "decoded_frame_format", snapshot.last_updated_context.decoded_frame_format, true);
     append_json_string(json, "current_stage", snapshot.last_updated_context.current_stage, true);
     append_json_string(json, "frame_transfer_path", snapshot.last_updated_context.frame_transfer_path, true);
+    append_json_string(json, "subtitle_renderer_ptr", snapshot.last_updated_context.subtitle_renderer_ptr, true);
+    append_json_string(json, "subtitle_track_ptr", snapshot.last_updated_context.subtitle_track_ptr, true);
+    append_json_string(json, "subtitle_library_ptr", snapshot.last_updated_context.subtitle_library_ptr, true);
+    append_json_string(json, "subtitle_render_thread_id", snapshot.last_updated_context.subtitle_render_thread_id, true);
+    append_json_int(json, "active_subtitle_render_count", snapshot.last_updated_context.active_subtitle_render_count, true);
+    append_json_int(json, "last_subtitle_render_start_pts", snapshot.last_updated_context.last_subtitle_render_start_pts, true);
+    append_json_int(json, "last_subtitle_render_end_pts", snapshot.last_updated_context.last_subtitle_render_end_pts, true);
+    append_json_int(json, "last_subtitle_event_count", snapshot.last_updated_context.last_subtitle_event_count, true);
+    append_json_int(json, "registered_image_asset_count", snapshot.last_updated_context.registered_image_asset_count, true);
+    append_json_bool(json, "subtitle_cleanup_started", snapshot.last_updated_context.subtitle_cleanup_started, true);
     append_json_string(json, "last_log_message", snapshot.last_updated_context.last_log_message, true);
     json << "  \"runner_contexts\": [\n";
     for (std::size_t index = 0; index < snapshot.runner_contexts.size(); ++index) {
@@ -981,6 +1091,58 @@ void update_crash_context_from_runtime_log(const std::string_view message) {
     }
     if (auto value = extract_value_after(message, "pts=")) {
         update.pts = parse_int64_value(*value);
+    }
+    if (message.find("subtitle render start") != std::string_view::npos) {
+        update.current_stage = "subtitle_rendering";
+        if (auto value = extract_value_after(message, "pts_us=")) {
+            update.last_subtitle_render_start_pts = parse_int64_value(*value);
+            update.pts = parse_int64_value(*value);
+        }
+    }
+    if (message.find("subtitle render end") != std::string_view::npos) {
+        if (auto value = extract_value_after(message, "pts_us=")) {
+            update.last_subtitle_render_end_pts = parse_int64_value(*value);
+            update.pts = parse_int64_value(*value);
+        }
+    }
+    if (auto value = extract_value_after(message, "renderer=")) {
+        update.subtitle_renderer_ptr = *value;
+    }
+    if (auto value = extract_value_after(message, "track=")) {
+        update.subtitle_track_ptr = *value;
+    }
+    if (auto value = extract_value_after(message, "library=")) {
+        update.subtitle_library_ptr = *value;
+    }
+    if (message.find("subtitle render start") != std::string_view::npos ||
+        message.find("subtitle render end") != std::string_view::npos) {
+        if (auto value = extract_value_after(message, "thread_id=")) {
+            update.subtitle_render_thread_id = *value;
+        }
+    }
+    if (auto value = extract_value_after(message, "subtitle_renderer_created_thread_id=")) {
+        update.subtitle_renderer_created_thread_id = *value;
+    }
+    if (auto value = extract_value_after(message, "subtitle_renderer_destroyed_thread_id=")) {
+        update.subtitle_renderer_destroyed_thread_id = *value;
+    }
+    if (auto value = extract_value_after(message, "active_subtitle_render_count=")) {
+        update.active_subtitle_render_count = parse_int_value(*value);
+    }
+    if (auto value = extract_value_after(message, "last_subtitle_event_count=")) {
+        update.last_subtitle_event_count = parse_int_value(*value);
+    }
+    if (auto value = extract_value_after(message, "registered_image_asset_count=")) {
+        update.registered_image_asset_count = parse_int_value(*value);
+    }
+    if (auto value = extract_value_after(message, "last_registered_image_asset_name=")) {
+        update.last_registered_image_asset_name = *value;
+    }
+    if (auto value = extract_comma_delimited_value_after(message, "last_registered_image_asset_path=")) {
+        update.last_registered_image_asset_path = *value;
+    }
+    if (auto value = extract_value_after(message, "subtitle_cleanup_started=")) {
+        update.subtitle_cleanup_started = parse_bool_value(*value);
     }
     if (auto rss = parse_bytes_after(message, "current_rss=")) {
         update.current_rss_bytes = *rss;

@@ -12,6 +12,8 @@ extern "C" {
 
 #include <algorithm>
 #include <atomic>
+#include <cassert>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -37,6 +39,9 @@ extern "C" {
 namespace utsure::core::subtitles {
 
 namespace {
+
+std::mutex &libassmod_global_mutex();
+bool should_serialize_all_libassmod_calls() noexcept;
 
 struct LibraryDeleter final {
     void operator()(ASS_Library *library) const noexcept {
@@ -72,7 +77,12 @@ struct AutoRenderResultDeleter final {
     void operator()(ASS_RenderResult *result) const noexcept {
         if (result != nullptr) {
             if (result->imgs_rgba != nullptr) {
-                ass_free_images_rgba(result->imgs_rgba);
+                if (should_serialize_all_libassmod_calls()) {
+                    const std::lock_guard lock(libassmod_global_mutex());
+                    ass_free_images_rgba(result->imgs_rgba);
+                } else {
+                    ass_free_images_rgba(result->imgs_rgba);
+                }
                 result->imgs_rgba = nullptr;
             }
             delete result;
@@ -300,28 +310,47 @@ std::string format_renderer_setup_diagnostics(
     return message.str();
 }
 
-bool should_serialize_subtitle_setup() noexcept {
-    const char *value = std::getenv("UTSURE_SERIALIZE_SUBTITLE_SETUP");
-    if (value == nullptr || value[0] == '\0') {
-        return false;
-    }
-
-    const std::string normalized = runtime::lowercase_ascii(std::string(value));
-    return normalized == "1" || normalized == "true" || normalized == "on" || normalized == "yes";
-}
-
 std::mutex &subtitle_setup_mutex() {
     static std::mutex mutex;
     return mutex;
 }
 
+std::mutex &libassmod_global_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+bool should_serialize_all_libassmod_calls() noexcept {
+    return runtime::environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE");
+}
+
+template <typename Callback>
+decltype(auto) with_optional_global_libassmod_lock(Callback &&callback) {
+    if (should_serialize_all_libassmod_calls()) {
+        const std::lock_guard lock(libassmod_global_mutex());
+        return callback();
+    }
+
+    return callback();
+}
+
+std::string pointer_to_string(const void *pointer) {
+    std::ostringstream stream;
+    stream << pointer;
+    return stream.str();
+}
+
 LibraryHandle create_library() {
-    LibraryHandle library(ass_library_init());
+    LibraryHandle library(with_optional_global_libassmod_lock([]() {
+        return ass_library_init();
+    }));
     if (!library) {
         throw std::runtime_error("libassmod failed to initialize the subtitle library.");
     }
 
-    ass_set_extract_fonts(library.get(), 1);
+    with_optional_global_libassmod_lock([&library]() {
+        ass_set_extract_fonts(library.get(), 1);
+    });
     return library;
 }
 
@@ -334,24 +363,30 @@ void configure_library_fonts(
     }
 
     const auto font_directory_utf8 = path_to_utf8_string(*request.font_search_directory);
-    ass_set_fonts_dir(&library, font_directory_utf8.c_str());
+    with_optional_global_libassmod_lock([&library, &font_directory_utf8]() {
+        ass_set_fonts_dir(&library, font_directory_utf8.c_str());
+    });
 }
 
 RendererHandle create_renderer(
     ASS_Library &library,
     const SubtitleRenderSessionCreateRequest &request
 ) {
-    RendererHandle renderer(ass_renderer_init(&library));
+    RendererHandle renderer(with_optional_global_libassmod_lock([&library]() {
+        return ass_renderer_init(&library);
+    }));
     if (!renderer) {
         throw std::runtime_error("libassmod failed to initialize the subtitle renderer.");
     }
 
-    ass_set_frame_size(renderer.get(), request.canvas_width, request.canvas_height);
-    ass_set_storage_size(renderer.get(), request.canvas_width, request.canvas_height);
-    ass_set_pixel_aspect(renderer.get(), choose_pixel_aspect_ratio(request.sample_aspect_ratio));
-    ass_set_margins(renderer.get(), 0, 0, 0, 0);
-    ass_set_use_margins(renderer.get(), 0);
-    ass_set_fonts(renderer.get(), nullptr, "Arial", ASS_FONTPROVIDER_AUTODETECT, nullptr, 1);
+    with_optional_global_libassmod_lock([&renderer, &request]() {
+        ass_set_frame_size(renderer.get(), request.canvas_width, request.canvas_height);
+        ass_set_storage_size(renderer.get(), request.canvas_width, request.canvas_height);
+        ass_set_pixel_aspect(renderer.get(), choose_pixel_aspect_ratio(request.sample_aspect_ratio));
+        ass_set_margins(renderer.get(), 0, 0, 0, 0);
+        ass_set_use_margins(renderer.get(), 0);
+        ass_set_fonts(renderer.get(), nullptr, "Arial", ASS_FONTPROVIDER_AUTODETECT, nullptr, 1);
+    });
 
     return renderer;
 }
@@ -361,7 +396,9 @@ TrackHandle load_track(
     const SubtitleRenderSessionCreateRequest &request
 ) {
     const auto subtitle_path_utf8 = path_to_utf8_string(request.subtitle_path);
-    TrackHandle track(ass_read_file(&library, subtitle_path_utf8.c_str(), nullptr));
+    TrackHandle track(with_optional_global_libassmod_lock([&library, &subtitle_path_utf8]() {
+        return ass_read_file(&library, subtitle_path_utf8.c_str(), nullptr);
+    }));
     if (!track) {
         throw std::runtime_error(
             "libassmod failed to parse subtitle script '" + path_to_utf8_string(request.subtitle_path) + "'."
@@ -405,7 +442,9 @@ SubtitleImageAssetRegistrationResult register_subtitle_image_assets(
     for (const auto &asset : assets) {
         if (asset.name.empty() || asset.width <= 0 || asset.height <= 0 ||
             asset.stride < asset.width * 4 || asset.rgba.empty()) {
-            ass_clear_tag_images(&renderer);
+            with_optional_global_libassmod_lock([&renderer]() {
+                ass_clear_tag_images(&renderer);
+            });
             return SubtitleImageAssetRegistrationResult{
                 .diagnostics = std::move(diagnostics),
                 .error = SubtitleImageAssetError{
@@ -415,19 +454,22 @@ SubtitleImageAssetRegistrationResult register_subtitle_image_assets(
             };
         }
 
-        // libassmod's pinned ass_set_tag_image_rgba() copies the supplied RGBA bytes.
-        // The session still keeps decoded asset objects for diagnostics and future API changes.
-        const int result = ass_set_tag_image_rgba(
-            &renderer,
-            asset.name.c_str(),
-            to_ass_tag_image_format(asset.format),
-            asset.width,
-            asset.height,
-            asset.stride,
-            asset.rgba.data()
-        );
+        const auto *buffer = asset.rgba.data();
+        const int result = with_optional_global_libassmod_lock([&renderer, &asset, buffer]() {
+            return ass_set_tag_image_rgba(
+                &renderer,
+                asset.name.c_str(),
+                to_ass_tag_image_format(asset.format),
+                asset.width,
+                asset.height,
+                asset.stride,
+                buffer
+            );
+        });
         if (result != 0) {
-            ass_clear_tag_images(&renderer);
+            with_optional_global_libassmod_lock([&renderer]() {
+                ass_clear_tag_images(&renderer);
+            });
             return SubtitleImageAssetRegistrationResult{
                 .diagnostics = std::move(diagnostics),
                 .error = SubtitleImageAssetError{
@@ -440,7 +482,10 @@ SubtitleImageAssetRegistrationResult register_subtitle_image_assets(
         diagnostics.push_back(
             "Subtitle image asset registered: " + asset.name + " -> " +
             path_to_utf8_string(asset.source_path) + " (" +
-            std::to_string(asset.width) + "x" + std::to_string(asset.height) + ")"
+            std::to_string(asset.width) + "x" + std::to_string(asset.height) +
+            "), stride=" + std::to_string(asset.stride) +
+            ", buffer=" + pointer_to_string(buffer) +
+            ", owned_bytes=" + std::to_string(asset.rgba.size())
         );
     }
 
@@ -742,22 +787,63 @@ public:
           renderer_(std::move(renderer)),
           track_(std::move(track)),
           runtime_options_(runtime::resolve_subtitle_runtime_options()),
-          session_instance_id_(next_session_instance_id()) {
+          session_instance_id_(next_session_instance_id()),
+          created_thread_id_(std::this_thread::get_id()) {
+        assert(library_ != nullptr);
+        assert(renderer_ != nullptr);
+        assert(track_ != nullptr);
+        for (const auto &asset : image_assets_) {
+            assert(!asset.name.empty());
+            assert(asset.width > 0);
+            assert(asset.height > 0);
+            assert(asset.stride >= asset.width * 4);
+            assert(!asset.rgba.empty());
+        }
+        std::ostringstream message;
+        message << "libassmod session created: session_instance_id=" << session_instance_id_
+                << ", renderer=" << pointer_to_string(renderer_.get())
+                << ", track=" << pointer_to_string(track_.get())
+                << ", library=" << pointer_to_string(library_.get())
+                << ", subtitle_renderer_created_thread_id=" << created_thread_id_
+                << ", last_subtitle_event_count=" << track_->n_events
+                << ", registered_image_asset_count=" << image_assets_.size()
+                << ", safe_mode=" << (runtime::environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ? 1 : 0);
+        quirk_messages_.push_back(message.str());
+        quirk_messages_.push_back(
+            "ass_read_file success: path=" + subtitle_path_string_ +
+            ", track=" + pointer_to_string(track_.get()) +
+            ", events=" + std::to_string(track_->n_events)
+        );
     }
 
     ~LibassmodSubtitleRenderSession() override {
-        destroyed_.store(true, std::memory_order_release);
-        if (renderer_) {
-            ass_clear_tag_images(renderer_.get());
+        {
+            std::unique_lock lock(access_mutex_);
+            cleanup_started_.store(true, std::memory_order_release);
+            access_available_.wait(lock, [this]() {
+                return active_render_count_ == 0;
+            });
+            assert(active_render_count_ == 0);
         }
+
+        destroyed_thread_id_ = std::this_thread::get_id();
+        with_optional_global_libassmod_lock([this]() {
+            if (renderer_) {
+                ass_clear_tag_images(renderer_.get());
+            }
+            track_.reset();
+            renderer_.reset();
+            library_.reset();
+        });
+        image_assets_.clear();
     }
 
     [[nodiscard]] SubtitleRenderResult render(const SubtitleRenderRequest &request) noexcept override {
         try {
-            [[maybe_unused]] const auto access_guard = begin_session_access("render");
+            auto access_guard = begin_session_access("render", request);
             maybe_log_renderer_setup_diagnostics(request);
             maybe_log_quirk_diagnostics(request);
-            auto render_result = render_images_auto(request);
+            auto render_result = render_images_auto(request, access_guard);
             maybe_log_auto_render_result(request, *render_result);
             std::vector<SubtitleBitmap> bitmaps{};
             if (should_use_rgba_images(*render_result)) {
@@ -796,6 +882,7 @@ public:
                 }
             }
 
+            access_guard.finish_success(request);
             return SubtitleRenderResult{
                 .rendered_frame = RenderedSubtitleFrame{
                     .timestamp_microseconds = request.timestamp_microseconds,
@@ -826,12 +913,12 @@ public:
         const SubtitleRenderRequest &request
     ) noexcept override {
         try {
-            [[maybe_unused]] const auto access_guard = begin_session_access("compose");
+            auto access_guard = begin_session_access("compose", request);
             detail::validate_rgba_frame_surface(video_frame, "Subtitle composition");
             maybe_log_renderer_setup_diagnostics(request);
             maybe_log_quirk_diagnostics(request);
 
-            auto render_result = render_images_auto(request);
+            auto render_result = render_images_auto(request, access_guard);
             maybe_log_auto_render_result(request, *render_result);
             bool subtitles_applied = false;
             if (should_use_rgba_images(*render_result)) {
@@ -962,6 +1049,7 @@ public:
                 }
             }
 
+            access_guard.finish_success(request);
             return SubtitleFrameComposeResult{
                 .subtitles_applied = subtitles_applied,
                 .error = std::nullopt
@@ -999,7 +1087,13 @@ private:
             return;
         }
 
-        request.debug_context->log_callback(format_renderer_setup_diagnostics(create_request_, image_assets_.size()));
+        std::ostringstream message;
+        message << format_renderer_setup_diagnostics(create_request_, image_assets_.size())
+                << ", renderer=" << pointer_to_string(renderer_.get())
+                << ", track=" << pointer_to_string(track_.get())
+                << ", library=" << pointer_to_string(library_.get())
+                << ", session_instance_id=" << session_instance_id_;
+        request.debug_context->log_callback(message.str());
         renderer_setup_diagnostics_logged_ = true;
     }
 
@@ -1018,17 +1112,55 @@ private:
         quirk_diagnostics_logged_ = true;
     }
 
+    void log_render_lifecycle(
+        const SubtitleRenderRequest &request,
+        const std::string_view event,
+        const std::string_view operation,
+        const int active_count
+    ) const {
+        if (request.debug_context == nullptr || !request.debug_context->log_callback) {
+            return;
+        }
+
+        std::ostringstream message;
+        message << event
+                << ": operation=" << operation
+                << ", session_instance_id=" << session_instance_id_
+                << ", frame=" << request.debug_context->decoded_frame_index
+                << ", pts_us=" << request.timestamp_microseconds
+                << ", thread_id=" << std::this_thread::get_id()
+                << ", renderer=" << pointer_to_string(renderer_.get())
+                << ", track=" << pointer_to_string(track_.get())
+                << ", library=" << pointer_to_string(library_.get())
+                << ", active_subtitle_render_count=" << active_count
+                << ", subtitle_renderer_created_thread_id=" << created_thread_id_
+                << ", last_subtitle_event_count=" << (track_ != nullptr ? track_->n_events : 0)
+                << ", registered_image_asset_count=" << image_assets_.size();
+        if (!image_assets_.empty()) {
+            message << ", last_registered_image_asset_name=" << image_assets_.back().name
+                    << ", last_registered_image_asset_path=" << path_to_utf8_string(image_assets_.back().source_path);
+        }
+        message << ", subtitle_cleanup_started=" << (cleanup_started_.load(std::memory_order_acquire) ? 1 : 0)
+                << ", safe_mode=" << (runtime::environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ? 1 : 0);
+        request.debug_context->log_callback(message.str());
+    }
+
     class SessionAccessGuard final {
     public:
-        explicit SessionAccessGuard(std::atomic<bool> &in_use) noexcept
-            : in_use_(&in_use) {
+        SessionAccessGuard(
+            LibassmodSubtitleRenderSession &session,
+            std::string operation
+        ) noexcept
+            : session_(&session),
+              operation_(std::move(operation)) {
         }
 
         SessionAccessGuard(const SessionAccessGuard &) = delete;
         SessionAccessGuard &operator=(const SessionAccessGuard &) = delete;
 
         SessionAccessGuard(SessionAccessGuard &&other) noexcept
-            : in_use_(std::exchange(other.in_use_, nullptr)) {
+            : session_(std::exchange(other.session_, nullptr)),
+              operation_(std::move(other.operation_)) {
         }
 
         SessionAccessGuard &operator=(SessionAccessGuard &&other) noexcept {
@@ -1037,7 +1169,8 @@ private:
             }
 
             release();
-            in_use_ = std::exchange(other.in_use_, nullptr);
+            session_ = std::exchange(other.session_, nullptr);
+            operation_ = std::move(other.operation_);
             return *this;
         }
 
@@ -1045,15 +1178,53 @@ private:
             release();
         }
 
+        void finish_success(const SubtitleRenderRequest &request) noexcept {
+            if (session_ == nullptr) {
+                return;
+            }
+
+            session_->last_subtitle_render_end_pts_.store(request.timestamp_microseconds, std::memory_order_release);
+            session_->log_render_lifecycle(
+                request,
+                "subtitle render end",
+                operation_,
+                active_count_snapshot()
+            );
+        }
+
+        [[nodiscard]] ASS_Renderer *renderer() const noexcept {
+            return session_ != nullptr ? session_->renderer_.get() : nullptr;
+        }
+
+        [[nodiscard]] ASS_Track *track() const noexcept {
+            return session_ != nullptr ? session_->track_.get() : nullptr;
+        }
+
     private:
+        [[nodiscard]] int active_count_snapshot() const noexcept {
+            return session_ != nullptr ? session_->active_subtitle_render_count_.load(std::memory_order_acquire) : 0;
+        }
+
         void release() noexcept {
-            if (in_use_ != nullptr) {
-                in_use_->store(false, std::memory_order_release);
-                in_use_ = nullptr;
+            if (session_ != nullptr) {
+                {
+                    std::lock_guard lock(session_->access_mutex_);
+                    if (session_->active_render_count_ > 0) {
+                        --session_->active_render_count_;
+                    }
+                    session_->render_in_progress_ = false;
+                    session_->active_subtitle_render_count_.store(
+                        session_->active_render_count_,
+                        std::memory_order_release
+                    );
+                }
+                session_->access_available_.notify_all();
+                session_ = nullptr;
             }
         }
 
-        std::atomic<bool> *in_use_{nullptr};
+        LibassmodSubtitleRenderSession *session_{nullptr};
+        std::string operation_{};
     };
 
     [[nodiscard]] static int next_session_instance_id() noexcept {
@@ -1061,16 +1232,19 @@ private:
         return next_session_id.fetch_add(1, std::memory_order_relaxed);
     }
 
-    [[nodiscard]] SessionAccessGuard begin_session_access(const char *operation) {
-        if (destroyed_.load(std::memory_order_acquire)) {
+    [[nodiscard]] SessionAccessGuard begin_session_access(
+        const char *operation,
+        const SubtitleRenderRequest &request
+    ) {
+        std::unique_lock lock(access_mutex_);
+        if (cleanup_started_.load(std::memory_order_acquire)) {
             throw std::runtime_error(
-                "Attempted to " + std::string(operation) + " with a destroyed libassmod subtitle session " +
+                "Attempted to " + std::string(operation) + " while cleanup had begun for libassmod subtitle session " +
                 std::to_string(session_instance_id_) + '.'
             );
         }
 
-        bool expected = false;
-        if (!in_use_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        if (render_in_progress_) {
             throw std::runtime_error(
                 "Concurrent " + std::string(operation) + " attempted against libassmod subtitle session " +
                 std::to_string(session_instance_id_) + " for '" + subtitle_path_string_ + "'."
@@ -1084,20 +1258,34 @@ private:
                     " is missing active renderer state for '" + subtitle_path_string_ + "'."
                 );
             }
+            assert(library_ != nullptr);
+            assert(renderer_ != nullptr);
+            assert(track_ != nullptr);
         } catch (...) {
-            in_use_.store(false, std::memory_order_release);
             throw;
         }
 
-        return SessionAccessGuard(in_use_);
+        render_in_progress_ = true;
+        ++active_render_count_;
+        active_subtitle_render_count_.store(active_render_count_, std::memory_order_release);
+        last_subtitle_render_start_pts_.store(request.timestamp_microseconds, std::memory_order_release);
+        subtitle_render_thread_id_ = std::this_thread::get_id();
+        const int active_count = active_render_count_;
+        lock.unlock();
+
+        log_render_lifecycle(request, "subtitle render start", operation, active_count);
+        return SessionAccessGuard(*this, operation);
     }
 
-    [[nodiscard]] AutoRenderResultHandle render_images_auto(const SubtitleRenderRequest &request) const {
+    [[nodiscard]] AutoRenderResultHandle render_images_auto(
+        const SubtitleRenderRequest &request,
+        const SessionAccessGuard &access_guard
+    ) const {
         int detect_change = 0;
         const long long timestamp_milliseconds = static_cast<long long>(request.timestamp_microseconds / 1000);
-        return AutoRenderResultHandle(
-            new ASS_RenderResult(ass_render_frame_auto(renderer_.get(), track_.get(), timestamp_milliseconds, &detect_change))
-        );
+        return AutoRenderResultHandle(new ASS_RenderResult(with_optional_global_libassmod_lock([&]() {
+            return ass_render_frame_auto(access_guard.renderer(), access_guard.track(), timestamp_milliseconds, &detect_change);
+        })));
     }
 
     SubtitleRenderSessionCreateRequest create_request_{};
@@ -1109,8 +1297,17 @@ private:
     TrackHandle track_{};
     runtime::SubtitleRuntimeOptions runtime_options_{};
     int session_instance_id_{0};
-    std::atomic<bool> in_use_{false};
-    std::atomic<bool> destroyed_{false};
+    std::thread::id created_thread_id_{};
+    std::thread::id subtitle_render_thread_id_{};
+    std::thread::id destroyed_thread_id_{};
+    mutable std::mutex access_mutex_{};
+    std::condition_variable access_available_{};
+    int active_render_count_{0};
+    bool render_in_progress_{false};
+    std::atomic<int> active_subtitle_render_count_{0};
+    std::atomic<std::int64_t> last_subtitle_render_start_pts_{0};
+    std::atomic<std::int64_t> last_subtitle_render_end_pts_{0};
+    std::atomic<bool> cleanup_started_{false};
     bool renderer_setup_diagnostics_logged_{false};
     bool quirk_diagnostics_logged_{false};
     bool off_frame_bitmap_warning_logged_{false};
@@ -1122,11 +1319,7 @@ public:
     [[nodiscard]] SubtitleRenderSessionResult create_session(
         const SubtitleRenderSessionCreateRequest &request
     ) noexcept override {
-        if (should_serialize_subtitle_setup()) {
-            const std::lock_guard lock(subtitle_setup_mutex());
-            return create_session_impl(request);
-        }
-
+        const std::lock_guard lock(subtitle_setup_mutex());
         return create_session_impl(request);
     }
 
