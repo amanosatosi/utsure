@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -277,18 +278,15 @@ std::optional<std::string> extract_value_after(std::string_view message, std::st
     return std::string(message.substr(value_start, value_end - value_start));
 }
 
-std::optional<std::string> extract_comma_delimited_value_after(std::string_view message, std::string_view key) {
+std::optional<std::string> extract_tail_value_after(std::string_view message, std::string_view key) {
     const auto key_position = message.find(key);
     if (key_position == std::string_view::npos) {
         return std::nullopt;
     }
 
     const std::size_t value_start = key_position + key.size();
-    std::size_t value_end = message.find(',', value_start);
-    if (value_end == std::string_view::npos) {
-        value_end = message.size();
-    }
-    while (value_end > value_start && message[value_end - 1U] == ' ') {
+    std::size_t value_end = message.size();
+    while (value_end > value_start && std::isspace(static_cast<unsigned char>(message[value_end - 1U])) != 0) {
         --value_end;
     }
     if (value_end <= value_start) {
@@ -1138,7 +1136,7 @@ void update_crash_context_from_runtime_log(const std::string_view message) {
     if (auto value = extract_value_after(message, "last_registered_image_asset_name=")) {
         update.last_registered_image_asset_name = *value;
     }
-    if (auto value = extract_comma_delimited_value_after(message, "last_registered_image_asset_path=")) {
+    if (auto value = extract_tail_value_after(message, "last_registered_image_asset_path=")) {
         update.last_registered_image_asset_path = *value;
     }
     if (auto value = extract_value_after(message, "subtitle_cleanup_started=")) {

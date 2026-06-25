@@ -1261,6 +1261,33 @@ add_test(
         1204800000
 )
 
+add_test(
+    NAME utsure.core.subtitles.libassmod.rgba_reproducer.repeat.normal
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_LIBASSMOD_REPRO_REPEAT=200
+        utsure_core_libassmod_rgba_reproducer --rgba
+            "${UTSURE_SUBTITLE_BS4_FORCED_RGBA_SAMPLE_FILE}"
+            320
+            180
+            1
+            1
+            1204800000
+)
+
+add_test(
+    NAME utsure.core.subtitles.libassmod.rgba_reproducer.repeat.safe_mode
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_SAFE_MODE=1
+        UTSURE_LIBASSMOD_REPRO_REPEAT=200
+        utsure_core_libassmod_rgba_reproducer --rgba
+            "${UTSURE_SUBTITLE_BS4_FORCED_RGBA_SAMPLE_FILE}"
+            320
+            180
+            1
+            1
+            1204800000
+)
+
 add_executable(utsure_core_subtitle_bitmap_compositor_tests
     subtitle_bitmap_compositor_tests.cpp
 )

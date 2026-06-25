@@ -1383,11 +1383,13 @@ Implementation approach:
 
 Implemented:
   * Replaced the subtitle session's atomic overlap flag with a mutex/condition-variable render guard that records active render count and prevents cleanup while `ass_render_frame_auto` or synchronous composition is in flight.
+  * Follow-up changed the render guard to hold the per-session mutex from before `ass_render_frame_auto` until after returned image nodes have been copied/composited, making per-session rendering exclusive in normal mode.
   * Serialized libassmod setup, font, image registration, render, RGBA image free, tag-clear, and teardown calls when safe mode is enabled.
-  * Kept decoded image asset RGBA buffers in the session through teardown and added assertions for valid dimensions, stride, and non-empty owned pixel storage.
+  * Kept decoded image asset RGBA buffers in the session through teardown, registered image tags from final session-owned `image_assets_` storage, and added assertions for valid dimensions, stride, and non-empty owned pixel storage.
   * Added lifecycle diagnostics for session creation, `ass_read_file` success, image asset registration, render start/end, renderer/track/library pointers, thread ids, event counts, and cleanup state.
   * Extended crash context JSON and runtime-log parsing with subtitle renderer pointers, render thread ids, active render count, start/end PTS, event count, image asset count/name/path, and cleanup-started state.
-  * Added `UTSURE_LIBASSMOD_REPRO_REPEAT` support to the libassmod RGBA reproducer so a single renderer/session can render the suspect timestamp repeatedly.
+  * Added `UTSURE_LIBASSMOD_REPRO_REPEAT` support to the libassmod RGBA reproducer and wired normal/safe-mode repeat runs into CTest so a single renderer/session is reused repeatedly in CI.
+  * Follow-up made crash parsing read the registered image asset path as the final lifecycle-log field so paths containing spaces or commas are preserved.
 
 Validation:
   * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.

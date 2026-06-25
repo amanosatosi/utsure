@@ -225,15 +225,15 @@ int assert_crash_context_snapshot_and_json() {
         "subtitle render start: operation=compose, session_instance_id=5, frame=44, pts_us=1138596000, "
         "thread_id=1234, renderer=0x1111, track=0x2222, library=0x3333, active_subtitle_render_count=1, "
         "subtitle_renderer_created_thread_id=99, last_subtitle_event_count=77, registered_image_asset_count=2, "
-        "last_registered_image_asset_name=logo.png, last_registered_image_asset_path=C:/anime/z ui refrence/logo.png, "
-        "subtitle_cleanup_started=0, safe_mode=1"
+        "subtitle_cleanup_started=0, safe_mode=1, last_registered_image_asset_name=logo.png, "
+        "last_registered_image_asset_path=C:/anime/z ui refrence/logo, final.png"
     );
     utsure::app::crash::update_crash_context_from_runtime_log(
         "subtitle render end: operation=compose, session_instance_id=5, frame=44, pts_us=1138596000, "
         "thread_id=1234, renderer=0x1111, track=0x2222, library=0x3333, active_subtitle_render_count=1, "
         "subtitle_renderer_created_thread_id=99, last_subtitle_event_count=77, registered_image_asset_count=2, "
-        "last_registered_image_asset_name=logo.png, last_registered_image_asset_path=C:/anime/z ui refrence/logo.png, "
-        "subtitle_cleanup_started=0, safe_mode=1"
+        "subtitle_cleanup_started=0, safe_mode=1, last_registered_image_asset_name=logo.png, "
+        "last_registered_image_asset_path=C:/anime/z ui refrence/logo, final.png"
     );
     utsure::app::crash::clear_current_thread_runner_slot();
 
@@ -255,7 +255,7 @@ int assert_crash_context_snapshot_and_json() {
         snapshot.last_subtitle_render_end_pts != 1138596000 ||
         snapshot.last_subtitle_event_count != 77 ||
         snapshot.registered_image_asset_count != 2 ||
-        snapshot.last_registered_image_asset_path != "C:/anime/z ui refrence/logo.png" ||
+        snapshot.last_registered_image_asset_path != "C:/anime/z ui refrence/logo, final.png" ||
         snapshot.subtitle_cleanup_started) {
         std::cerr
             << "snapshot.runner_slot_index=" << snapshot.runner_slot_index
