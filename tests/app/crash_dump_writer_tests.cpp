@@ -221,6 +221,16 @@ int assert_crash_context_snapshot_and_json() {
         "Streaming frame checkpoint: segment=main, frame=43, pts=2002, source_codec=hevc, "
         "video_queue_depth=1, decoder_threads=1, encoder_threads=2, current_rss=345678, peak_rss=456789."
     );
+    const auto parsed_rss_snapshot = utsure::app::crash::crash_context_snapshot();
+    if (parsed_rss_snapshot.current_rss_bytes != 345678 ||
+        parsed_rss_snapshot.peak_rss_bytes != 456789) {
+        std::cerr
+            << "parsed_rss_snapshot.current_rss_bytes=" << parsed_rss_snapshot.current_rss_bytes
+            << " parsed_rss_snapshot.peak_rss_bytes=" << parsed_rss_snapshot.peak_rss_bytes
+            << '\n';
+        return fail("Crash context runtime-log parser did not preserve explicit RSS fields.");
+    }
+
     utsure::app::crash::update_crash_context_from_runtime_log(
         "subtitle render start: operation=compose, session_instance_id=5, frame=44, pts_us=1138596000, "
         "thread_id=1234, renderer=0x1111, track=0x2222, library=0x3333, active_subtitle_render_count=1, "
@@ -244,8 +254,8 @@ int assert_crash_context_snapshot_and_json() {
         snapshot.source_codec != "hevc" ||
         snapshot.frame_index != 44 ||
         snapshot.pts != 1138596000 ||
-        snapshot.current_rss_bytes != 345678 ||
-        snapshot.peak_rss_bytes != 456789 ||
+        snapshot.current_rss_bytes == 0 ||
+        snapshot.peak_rss_bytes == 0 ||
         snapshot.subtitle_renderer_ptr != "0x1111" ||
         snapshot.subtitle_track_ptr != "0x2222" ||
         snapshot.subtitle_library_ptr != "0x3333" ||
@@ -265,6 +275,17 @@ int assert_crash_context_snapshot_and_json() {
             << " pts=" << snapshot.pts
             << " current_rss_bytes=" << snapshot.current_rss_bytes
             << " peak_rss_bytes=" << snapshot.peak_rss_bytes
+            << " subtitle_renderer_ptr=" << snapshot.subtitle_renderer_ptr
+            << " subtitle_track_ptr=" << snapshot.subtitle_track_ptr
+            << " subtitle_library_ptr=" << snapshot.subtitle_library_ptr
+            << " subtitle_render_thread_id=" << snapshot.subtitle_render_thread_id
+            << " active_subtitle_render_count=" << snapshot.active_subtitle_render_count
+            << " last_subtitle_render_start_pts=" << snapshot.last_subtitle_render_start_pts
+            << " last_subtitle_render_end_pts=" << snapshot.last_subtitle_render_end_pts
+            << " last_subtitle_event_count=" << snapshot.last_subtitle_event_count
+            << " registered_image_asset_count=" << snapshot.registered_image_asset_count
+            << " last_registered_image_asset_path=" << snapshot.last_registered_image_asset_path
+            << " subtitle_cleanup_started=" << snapshot.subtitle_cleanup_started
             << '\n';
         return fail("Crash context snapshot did not preserve expected update fields.");
     }

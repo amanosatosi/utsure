@@ -1390,6 +1390,7 @@ Implemented:
   * Extended crash context JSON and runtime-log parsing with subtitle renderer pointers, render thread ids, active render count, start/end PTS, event count, image asset count/name/path, and cleanup-started state.
   * Added `UTSURE_LIBASSMOD_REPRO_REPEAT` support to the libassmod RGBA reproducer and wired normal/safe-mode repeat runs into CTest so a single renderer/session is reused repeatedly in CI.
   * Follow-up made crash parsing read the registered image asset path as the final lifecycle-log field so paths containing spaces or commas are preserved.
+  * Follow-up split deterministic crash-context RSS parser assertions from final live snapshot assertions, because later sparse crash-context updates may refresh live Windows RSS values.
 
 Validation:
   * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
