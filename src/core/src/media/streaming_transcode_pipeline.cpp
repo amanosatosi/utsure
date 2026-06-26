@@ -4240,6 +4240,7 @@ SegmentProcessResult process_segment(
     const std::function<bool()> &cancellation_requested,
     const std::function<void(const std::string &)> &log_callback,
     const std::function<void(const std::string &)> &warning_callback,
+    const std::function<void(const std::string &)> &crash_context_callback,
     std::int64_t &next_output_frame_index,
     std::int64_t &next_output_video_pts,
     std::int64_t &next_output_audio_pts
@@ -4373,7 +4374,7 @@ SegmentProcessResult process_segment(
                 .log_bitmap_details = runtime_behavior.subtitle_diagnostics_mode == "verbose",
                 .log_callback = log_callback,
                 .warning_callback = warning_callback,
-                .lifecycle_callback = request.crash_context_callback
+                .lifecycle_callback = crash_context_callback
             },
             cancellation_requested
         );
@@ -6002,6 +6003,7 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
                 request.cancellation_requested,
                 request.log_callback,
                 request.warning_callback,
+                request.crash_context_callback,
                 next_output_frame_index,
                 next_output_video_pts,
                 next_output_audio_pts
