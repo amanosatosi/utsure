@@ -174,6 +174,7 @@ struct EncodeJobRunOptions final {
     media::DecodeNormalizationPolicy decode_normalization_policy{};
     EncodeJobObserver *observer{nullptr};
     std::function<bool()> cancellation_requested{};
+    std::function<void(const std::string &message)> crash_context_callback{};
 };
 
 class EncodeJobRunner final {

@@ -1396,6 +1396,21 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.subtitles.libassmod.render.lifecycle_trace_off
+    COMMAND utsure_core_subtitle_burn_in_tests --render-lifecycle-trace-off "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+)
+
+add_test(
+    NAME utsure.core.subtitles.libassmod.render.lifecycle_trace_throttled
+    COMMAND utsure_core_subtitle_burn_in_tests --render-lifecycle-trace-throttled "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+)
+
+add_test(
+    NAME utsure.core.subtitles.libassmod.render.lifecycle_trace_full
+    COMMAND utsure_core_subtitle_burn_in_tests --render-lifecycle-trace-full "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+)
+
+add_test(
     NAME utsure.core.subtitles.burn_in.h264
     COMMAND utsure_core_subtitle_burn_in_tests --h264
         "${UTSURE_SAMPLE_MEDIA_FILE}"

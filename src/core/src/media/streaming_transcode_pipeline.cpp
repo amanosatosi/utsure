@@ -2169,6 +2169,7 @@ public:
         bool log_bitmap_details{false};
         std::function<void(const std::string &)> log_callback{};
         std::function<void(const std::string &)> warning_callback{};
+        std::function<void(const std::string &)> lifecycle_callback{};
     };
 
     struct WorkerSubtitleSession final {
@@ -2398,6 +2399,9 @@ private:
                             : std::function<void(const std::string &)>{},
                         .warning_callback = subtitle_diagnostics_.has_value()
                             ? subtitle_diagnostics_->warning_callback
+                            : std::function<void(const std::string &)>{},
+                        .lifecycle_callback = subtitle_diagnostics_.has_value()
+                            ? subtitle_diagnostics_->lifecycle_callback
                             : std::function<void(const std::string &)>{}
                     };
 
@@ -4368,7 +4372,8 @@ SegmentProcessResult process_segment(
                 .log_frame_details = runtime_behavior.subtitle_diagnostics_mode != "off",
                 .log_bitmap_details = runtime_behavior.subtitle_diagnostics_mode == "verbose",
                 .log_callback = log_callback,
-                .warning_callback = warning_callback
+                .warning_callback = warning_callback,
+                .lifecycle_callback = request.crash_context_callback
             },
             cancellation_requested
         );

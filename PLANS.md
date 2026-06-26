@@ -1391,10 +1391,12 @@ Implemented:
   * Added `UTSURE_LIBASSMOD_REPRO_REPEAT` support to the libassmod RGBA reproducer and wired normal/safe-mode repeat runs into CTest so a single renderer/session is reused repeatedly in CI.
   * Follow-up made crash parsing read the registered image asset path as the final lifecycle-log field so paths containing spaces or commas are preserved.
   * Follow-up split deterministic crash-context RSS parser assertions from final live snapshot assertions, because later sparse crash-context updates may refresh live Windows RSS values.
+  * Follow-up split subtitle render lifecycle state updates from visible encode logging: lifecycle messages now feed crash-context callbacks separately, while normal UI logs stay clean unless `UTSURE_SUBTITLE_RENDER_TRACE=1` is set.
+  * Follow-up throttled explicit subtitle render trace logging to the first five frames and then every 300 frames, with `UTSURE_SUBTITLE_RENDER_TRACE_FULL=1` reserved for deliberate per-frame trace spam.
 
 Validation:
   * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
-  * Static validation included `git diff --check` and targeted searches for stale subtitle session guard calls, raw ASS image pointer storage, and crash-context subtitle fields.
+  * Static validation included `git diff --check` and targeted searches for stale subtitle session guard calls, raw ASS image pointer storage, crash-context subtitle fields, and lifecycle log visibility paths.
 
 ### M40 Batch import order and multi-select queue editing
 

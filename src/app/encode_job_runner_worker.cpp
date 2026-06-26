@@ -155,6 +155,9 @@ void EncodeJobRunnerWorker::run_job(const utsure::core::job::EncodeJob &job, con
             .observer = this,
             .cancellation_requested = [this]() {
                 return cancel_requested();
+            },
+            .crash_context_callback = [](const std::string &message) {
+                update_crash_log_safely(message);
             }
         });
 

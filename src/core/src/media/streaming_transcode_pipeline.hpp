@@ -108,6 +108,7 @@ struct StreamingTranscodeRequest final {
     std::function<void(const StreamingEncodeProgress &progress)> progress_callback{};
     std::function<void(const std::string &message)> log_callback{};
     std::function<void(const std::string &message)> warning_callback{};
+    std::function<void(const std::string &message)> crash_context_callback{};
     std::function<bool()> cancellation_requested{};
 };
 

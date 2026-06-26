@@ -864,6 +864,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                 .warning_callback = [&telemetry](const std::string &message) {
                     notify_log(telemetry, EncodeJobLogLevel::warning, message);
                 },
+                .crash_context_callback = options.crash_context_callback,
                 .cancellation_requested = options.cancellation_requested
             }
         );

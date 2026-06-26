@@ -768,6 +768,23 @@ bool should_use_rgba_images(const ASS_RenderResult &render_result) noexcept {
     return render_result.use_rgba != 0 && render_result.imgs_rgba != nullptr;
 }
 
+bool should_emit_subtitle_render_trace(const SubtitleRenderRequest &request) noexcept {
+    if (request.debug_context == nullptr || !request.debug_context->log_callback) {
+        return false;
+    }
+
+    if (runtime::environment_flag_enabled("UTSURE_SUBTITLE_RENDER_TRACE_FULL")) {
+        return true;
+    }
+
+    if (!runtime::environment_flag_enabled("UTSURE_SUBTITLE_RENDER_TRACE")) {
+        return false;
+    }
+
+    const auto frame_index = request.debug_context->decoded_frame_index;
+    return frame_index < 5 || frame_index % 300 == 0;
+}
+
 class LibassmodSubtitleRenderSession final : public SubtitleRenderSession {
 public:
     LibassmodSubtitleRenderSession(
@@ -1141,7 +1158,7 @@ private:
         const std::string_view operation,
         const int active_count
     ) const {
-        if (request.debug_context == nullptr || !request.debug_context->log_callback) {
+        if (request.debug_context == nullptr) {
             return;
         }
 
@@ -1165,7 +1182,13 @@ private:
             message << ", last_registered_image_asset_name=" << image_assets_.back().name
                     << ", last_registered_image_asset_path=" << path_to_utf8_string(image_assets_.back().source_path);
         }
-        request.debug_context->log_callback(message.str());
+        const auto lifecycle_message = message.str();
+        if (request.debug_context->lifecycle_callback) {
+            request.debug_context->lifecycle_callback(lifecycle_message);
+        }
+        if (should_emit_subtitle_render_trace(request)) {
+            request.debug_context->log_callback(lifecycle_message);
+        }
     }
 
     class SessionAccessGuard final {

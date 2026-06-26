@@ -91,6 +91,22 @@ bool string_messages_contain_text(const std::vector<std::string> &messages, std:
     return false;
 }
 
+void set_test_environment_variable(const char *name, const char *value) {
+#if defined(_WIN32)
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
+
+void unset_test_environment_variable(const char *name) {
+#if defined(_WIN32)
+    _putenv_s(name, "");
+#else
+    unsetenv(name);
+#endif
+}
+
 struct ProcessMemorySnapshot final {
     std::uint64_t rss_bytes{0};
     std::uint64_t peak_rss_bytes{0};
@@ -1060,6 +1076,115 @@ int run_img_asset_render_assertion(const std::filesystem::path &subtitle_path) {
     std::cout << "img_asset.registration_once=yes\n";
     std::cout << "render.succeeded=yes\n";
     std::cout << "render.bitmap_count=" << render_result.rendered_frame->bitmaps.size() << '\n';
+    return 0;
+}
+
+int run_subtitle_render_lifecycle_trace_assertion(
+    const std::filesystem::path &subtitle_path,
+    const std::string_view trace_mode
+) {
+    if (trace_mode == "off") {
+        unset_test_environment_variable("UTSURE_SUBTITLE_RENDER_TRACE");
+        unset_test_environment_variable("UTSURE_SUBTITLE_RENDER_TRACE_FULL");
+    } else if (trace_mode == "throttled") {
+        set_test_environment_variable("UTSURE_SUBTITLE_RENDER_TRACE", "1");
+        unset_test_environment_variable("UTSURE_SUBTITLE_RENDER_TRACE_FULL");
+    } else if (trace_mode == "full") {
+        set_test_environment_variable("UTSURE_SUBTITLE_RENDER_TRACE", "1");
+        set_test_environment_variable("UTSURE_SUBTITLE_RENDER_TRACE_FULL", "1");
+    } else {
+        return fail("Unknown subtitle render lifecycle trace assertion mode.");
+    }
+
+    auto subtitle_renderer = create_default_subtitle_renderer();
+    if (!subtitle_renderer) {
+        return fail("The default subtitle renderer could not be created.");
+    }
+
+    const SubtitleRenderSessionCreateRequest session_request{
+        .subtitle_path = subtitle_path,
+        .format_hint = "ass",
+        .canvas_width = 320,
+        .canvas_height = 180,
+        .sample_aspect_ratio = Rational{1, 1}
+    };
+
+    auto session_result = subtitle_renderer->create_session(session_request);
+    if (!session_result.succeeded()) {
+        return fail(
+            "The libassmod lifecycle trace sample unexpectedly failed session creation: " +
+            session_result.error->message +
+            " Hint: " +
+            session_result.error->actionable_hint
+        );
+    }
+
+    std::vector<std::string> visible_logs{};
+    std::vector<std::string> lifecycle_updates{};
+    for (int frame_index = 0; frame_index < 100; ++frame_index) {
+        const std::int64_t timestamp_us = static_cast<std::int64_t>(frame_index) * 41667;
+        const SubtitleCompositionDebugContext debug_context{
+            .decoded_frame_index = frame_index,
+            .output_pts = frame_index,
+            .subtitle_timestamp_microseconds = timestamp_us,
+            .worker_id = 0,
+            .session_id = 1,
+            .log_frame_details = false,
+            .log_bitmap_details = false,
+            .log_callback = [&visible_logs](const std::string &message) {
+                visible_logs.push_back(message);
+            },
+            .lifecycle_callback = [&lifecycle_updates](const std::string &message) {
+                lifecycle_updates.push_back(message);
+            }
+        };
+
+        const auto render_result = session_result.session->render(SubtitleRenderRequest{
+            .timestamp_microseconds = timestamp_us,
+            .debug_context = &debug_context
+        });
+        if (!render_result.succeeded()) {
+            return fail("The libassmod lifecycle trace sample failed to render.");
+        }
+    }
+
+    const auto visible_start_count = count_string_messages_containing_text(visible_logs, "subtitle render start");
+    const auto visible_end_count = count_string_messages_containing_text(visible_logs, "subtitle render end");
+    const auto lifecycle_start_count = count_string_messages_containing_text(lifecycle_updates, "subtitle render start");
+    const auto lifecycle_end_count = count_string_messages_containing_text(lifecycle_updates, "subtitle render end");
+
+    if (lifecycle_start_count != 100U || lifecycle_end_count != 100U) {
+        return fail("Subtitle render lifecycle crash-context updates did not record every rendered frame.");
+    }
+
+    if (!string_messages_contain_text(lifecycle_updates, "renderer=") ||
+        !string_messages_contain_text(lifecycle_updates, "track=") ||
+        !string_messages_contain_text(lifecycle_updates, "library=") ||
+        !string_messages_contain_text(lifecycle_updates, "thread_id=") ||
+        !string_messages_contain_text(lifecycle_updates, "active_subtitle_render_count=") ||
+        !string_messages_contain_text(lifecycle_updates, "last_subtitle_event_count=") ||
+        !string_messages_contain_text(lifecycle_updates, "registered_image_asset_count=") ||
+        !string_messages_contain_text(lifecycle_updates, "subtitle_cleanup_started=")) {
+        return fail("Subtitle render lifecycle crash-context updates omitted required state fields.");
+    }
+
+    if (trace_mode == "off" && (visible_start_count != 0U || visible_end_count != 0U)) {
+        return fail("Subtitle render lifecycle logs should not be visible when render trace is off.");
+    }
+
+    if (trace_mode == "throttled" && (visible_start_count != 5U || visible_end_count != 5U)) {
+        return fail("Throttled subtitle render trace should only log the first five frames in a 100-frame run.");
+    }
+
+    if (trace_mode == "full" && (visible_start_count != 100U || visible_end_count != 100U)) {
+        return fail("Full subtitle render trace should log every rendered frame only when explicitly enabled.");
+    }
+
+    std::cout << "render_lifecycle.trace_mode=" << trace_mode << '\n';
+    std::cout << "render_lifecycle.visible_start_count=" << visible_start_count << '\n';
+    std::cout << "render_lifecycle.visible_end_count=" << visible_end_count << '\n';
+    std::cout << "render_lifecycle.lifecycle_start_count=" << lifecycle_start_count << '\n';
+    std::cout << "render_lifecycle.lifecycle_end_count=" << lifecycle_end_count << '\n';
     return 0;
 }
 
@@ -2427,7 +2552,8 @@ int main(int argc, char *argv[]) {
             "Usage: utsure_core_subtitle_burn_in_tests "
             "[--render <subtitle>|--render-gradient <subtitle>|--render-empty-effect <subtitle>|"
             "--render-img-asset <subtitle>|--render-bs4 <subtitle>|--render-bs4-gradient <subtitle>|"
-            "--render-bs4-forced-rgba <subtitle>|"
+            "--render-bs4-forced-rgba <subtitle>|--render-lifecycle-trace-off <subtitle>|"
+            "--render-lifecycle-trace-throttled <subtitle>|--render-lifecycle-trace-full <subtitle>|"
             "--h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--empty-bitmap-h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--img-asset-h264 <input> <subtitle> <plain-output> <burned-output>|"
@@ -2482,6 +2608,18 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--render-img-missing" && argc == 3) {
         return run_missing_img_asset_render_assertion(std::filesystem::path(argv[2]));
+    }
+
+    if (mode == "--render-lifecycle-trace-off" && argc == 3) {
+        return run_subtitle_render_lifecycle_trace_assertion(std::filesystem::path(argv[2]), "off");
+    }
+
+    if (mode == "--render-lifecycle-trace-throttled" && argc == 3) {
+        return run_subtitle_render_lifecycle_trace_assertion(std::filesystem::path(argv[2]), "throttled");
+    }
+
+    if (mode == "--render-lifecycle-trace-full" && argc == 3) {
+        return run_subtitle_render_lifecycle_trace_assertion(std::filesystem::path(argv[2]), "full");
     }
 
     if (mode == "--h264" && argc == 6) {
