@@ -116,7 +116,7 @@ int assert_default_name_generation(const std::filesystem::path &root) {
     }
 
     if (result.sequence_number != 1 || result.video_codec_tag != "x265" || result.audio_codec_tag != "AAC" ||
-        result.resolution_tag != "1920x1080" || result.extension != ".mp4" ||
+        result.resolution_tag != "1080p" || result.extension != ".mp4" ||
         result.source_folder_name != "My Show") {
         return fail("The generated default naming metadata did not match the expected values.");
     }
@@ -279,7 +279,7 @@ int assert_codec_tags_follow_selected_settings(const std::filesystem::path &root
         codec_template
     );
 
-    if (copied_audio.file_name != "Concert - 01 x264 640x360.mkv") {
+    if (copied_audio.file_name != "Concert - 01 x264 360p.mkv") {
         return fail("The copy-source audio tag or normalized extension did not match the inspected source codec.");
     }
 
@@ -302,7 +302,7 @@ int assert_codec_tags_follow_selected_settings(const std::filesystem::path &root
         codec_template
     );
 
-    if (silent_source.file_name != "[Silent] Concert - 01 x264 640x360.mp4") {
+    if (silent_source.file_name != "[Silent] Concert - 01 x264 360p.mp4") {
         return fail("The output naming helper did not switch the audio tag to NoAudio for a known silent source.");
     }
 
@@ -504,11 +504,94 @@ int assert_token_order_and_disabled_tokens(const std::filesystem::path &root) {
         custom_template
     );
 
-    if (result.file_name != "x264 Token Series - 001 320x180.mp4") {
+    if (result.file_name != "x264 Token Series - 001 180p.mp4") {
         return fail("Token order or disabled-token output did not match the custom naming template.");
     }
 
     std::cout << "tokens.name=" << result.file_name << '\n';
+    return 0;
+}
+
+int assert_resolution_token_uses_vertical_labels(const std::filesystem::path &root) {
+    const auto output_directory = root / "resolution-labels";
+    const auto source_path = root / "Resolution Series" / "episode-01.mkv";
+    std::filesystem::create_directories(output_directory);
+    std::filesystem::create_directories(source_path.parent_path());
+    touch_file(source_path);
+
+    const OutputNamingTemplate resolution_template{
+        .enabled = true,
+        .separator = " - ",
+        .tokens = {
+            OutputNamingToken{.type = OutputNamingTokenType::source_folder_name, .enabled = true},
+            OutputNamingToken{.type = OutputNamingTokenType::sequence_number, .enabled = true, .sequence_padding = 2},
+            OutputNamingToken{.type = OutputNamingTokenType::resolution, .enabled = true}
+        }
+    };
+
+    struct Case final {
+        int width;
+        int height;
+        std::string label;
+    };
+
+    const std::vector<Case> cases{
+        Case{.width = 3840, .height = 2160, .label = "2160p"},
+        Case{.width = 2560, .height = 1440, .label = "1440p"},
+        Case{.width = 1920, .height = 1080, .label = "1080p"},
+        Case{.width = 1280, .height = 720, .label = "720p"},
+        Case{.width = 960, .height = 540, .label = "540p"},
+        Case{.width = 854, .height = 480, .label = "480p"},
+        Case{.width = 640, .height = 360, .label = "360p"}
+    };
+
+    for (const auto &entry : cases) {
+        const auto result = OutputNaming::suggest(
+            OutputNamingRequest{
+                .source_path = source_path,
+                .output_directory = output_directory,
+                .extension_hint = ".mp4",
+                .video_codec = OutputVideoCodec::h265,
+                .output_width = entry.width,
+                .output_height = entry.height
+            },
+            resolution_template
+        );
+        const std::string expected = "Resolution Series - 01 " + entry.label + ".mp4";
+        if (result.file_name != expected || result.resolution_tag != entry.label) {
+            return fail("Resolution token did not render the expected vertical p-label.");
+        }
+    }
+
+    const auto no_height = OutputNaming::suggest(
+        OutputNamingRequest{
+            .source_path = source_path,
+            .output_directory = output_directory,
+            .extension_hint = ".mp4",
+            .video_codec = OutputVideoCodec::h265,
+            .output_width = 1920
+        },
+        resolution_template
+    );
+    if (no_height.file_name.find("1920x") != std::string::npos ||
+        no_height.file_name != "Resolution Series - 01.mp4" ||
+        !no_height.resolution_tag.empty()) {
+        return fail("Invalid or missing output height did not omit the resolution token cleanly.");
+    }
+
+    const auto default_result = OutputNaming::suggest(OutputNamingRequest{
+        .source_path = source_path,
+        .output_directory = output_directory,
+        .extension_hint = ".mp4",
+        .video_codec = OutputVideoCodec::h265,
+        .output_width = 1920,
+        .output_height = 1080
+    });
+    if (default_result.file_name != "Resolution Series - 01.mp4") {
+        return fail("The default naming template unexpectedly included the optional resolution token.");
+    }
+
+    std::cout << "resolution_label.name=" << default_result.file_name << '\n';
     return 0;
 }
 
@@ -1036,6 +1119,10 @@ int main() {
     }
 
     if (assert_token_order_and_disabled_tokens(root) != 0) {
+        return 1;
+    }
+
+    if (assert_resolution_token_uses_vertical_labels(root) != 0) {
         return 1;
     }
 

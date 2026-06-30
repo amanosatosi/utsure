@@ -325,12 +325,11 @@ std::string resolve_audio_codec_tag(const OutputNamingRequest &request) {
 }
 
 std::string resolve_resolution_tag(const OutputNamingRequest &request) {
-    if (!request.output_width.has_value() || !request.output_height.has_value() ||
-        *request.output_width <= 0 || *request.output_height <= 0) {
+    if (!request.output_height.has_value() || *request.output_height <= 0) {
         return {};
     }
 
-    return std::to_string(*request.output_width) + "x" + std::to_string(*request.output_height);
+    return std::to_string(*request.output_height) + "p";
 }
 
 bool is_positive_integer(const std::string_view text) {
