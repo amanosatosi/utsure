@@ -253,20 +253,39 @@ std::string normalize_path_key(const std::filesystem::path &path) {
     return normalized;
 }
 
+std::string extract_parent_folder_from_text(const std::filesystem::path &source_path) {
+    std::string path_text = filesystem::path_component_to_utf8_string(source_path);
+    std::replace(path_text.begin(), path_text.end(), '\\', '/');
+
+    while (!path_text.empty() && path_text.back() == '/') {
+        path_text.pop_back();
+    }
+
+    const auto file_separator = path_text.find_last_of('/');
+    if (file_separator == std::string::npos || file_separator == 0U) {
+        return {};
+    }
+
+    const auto parent_end = file_separator;
+    const auto parent_separator = path_text.find_last_of('/', parent_end - 1U);
+    const auto parent_start = parent_separator == std::string::npos ? 0U : parent_separator + 1U;
+    if (parent_start >= parent_end) {
+        return {};
+    }
+
+    return path_text.substr(parent_start, parent_end - parent_start);
+}
+
 std::string resolve_source_folder_name(const std::filesystem::path &source_path) {
-    const auto source_stem = sanitize_filename_fragment(source_path.stem().string());
-    if (!source_stem.empty()) {
-        return source_stem;
+    const auto native_folder_name =
+        sanitize_filename_fragment(filesystem::path_component_to_utf8_string(source_path.parent_path().filename()));
+    if (!native_folder_name.empty()) {
+        return native_folder_name;
     }
 
-    const auto source_name = sanitize_filename_fragment(source_path.filename().string());
-    if (!source_name.empty()) {
-        return source_name;
-    }
-
-    const auto folder_name = sanitize_filename_fragment(source_path.parent_path().filename().string());
-    if (!folder_name.empty()) {
-        return folder_name;
+    const auto text_folder_name = sanitize_filename_fragment(extract_parent_folder_from_text(source_path));
+    if (!text_folder_name.empty()) {
+        return text_folder_name;
     }
 
     return "Output";
@@ -527,8 +546,8 @@ std::string render_template_stem(
     const std::string_view rendered_sequence
 ) {
     if (!naming_template.enabled) {
-        const auto source_stem = sanitize_filename_fragment(fragments.source_folder_name);
-        return source_stem.empty() ? "Output" : source_stem;
+        const auto folder_name = sanitize_filename_fragment(fragments.source_folder_name);
+        return folder_name.empty() ? "Output" : folder_name;
     }
 
     const auto tokens = naming_template.tokens.empty()
@@ -565,14 +584,18 @@ std::string build_sequence_counter_key(
     const std::string_view custom_text,
     const std::string_view source_folder_name
 ) {
-    (void)source_folder_name;
     const std::string custom_key = normalize_counter_key_fragment(std::string(custom_text));
+    const std::string folder_key = normalize_counter_key_fragment(std::string(source_folder_name));
 
-    if (!custom_key.empty()) {
-        return custom_key;
+    if (!custom_key.empty() && !folder_key.empty()) {
+        return custom_key + "|" + folder_key;
     }
 
-    return "default";
+    if (!folder_key.empty()) {
+        return folder_key;
+    }
+
+    return custom_key.empty() ? "default" : custom_key;
 }
 
 OutputNamingFragments build_output_naming_fragments(
@@ -749,16 +772,14 @@ int choose_sequence_number(
     const std::set<int> *additional_used_numbers = nullptr,
     const std::vector<std::filesystem::path> &excluded_output_paths = {}
 ) {
+    (void)stored_sequence_number;
     if (!fragments.has_sequence_number) {
         return 0;
     }
 
     std::set<int> used_sequence_numbers =
         collect_used_sequence_numbers(output_directory, fragments.stem_prefix, fragments.full_suffix);
-    const int first_candidate = std::max(
-        stored_sequence_number + 1,
-        max_detected_sequence_number(used_sequence_numbers) + 1
-    );
+    const int first_candidate = max_detected_sequence_number(used_sequence_numbers) + 1;
     add_excluded_sequence_numbers(
         used_sequence_numbers,
         output_directory,
@@ -793,10 +814,6 @@ struct ReservationGroupState final {
     int existing_next_candidate{1};
 };
 
-struct CounterReservationState final {
-    int next_candidate{1};
-};
-
 }  // namespace
 
 OutputNamingTemplate OutputNaming::default_template() {
@@ -806,9 +823,7 @@ OutputNamingTemplate OutputNaming::default_template() {
         .tokens = {
             OutputNamingToken{.type = OutputNamingTokenType::selected_text, .enabled = true},
             OutputNamingToken{.type = OutputNamingTokenType::source_folder_name, .enabled = true},
-            OutputNamingToken{.type = OutputNamingTokenType::sequence_number, .enabled = true, .sequence_padding = 2},
-            OutputNamingToken{.type = OutputNamingTokenType::codec, .enabled = true},
-            OutputNamingToken{.type = OutputNamingTokenType::resolution, .enabled = true}
+            OutputNamingToken{.type = OutputNamingTokenType::sequence_number, .enabled = true, .sequence_padding = 2}
         },
         .crc32_suffix_enabled = false
     };
@@ -917,7 +932,6 @@ std::vector<OutputNamingReservationResult> OutputNaming::reserve_batch(
     results.reserve(requests.size());
 
     std::map<ReservationGroupKey, ReservationGroupState> reservation_groups{};
-    std::map<std::string, CounterReservationState> counter_groups{};
     std::vector<std::filesystem::path> reserved_output_paths{};
     for (const auto &request : requests) {
         const OutputNamingFragments fragments =
@@ -966,23 +980,12 @@ std::vector<OutputNamingReservationResult> OutputNaming::reserve_batch(
             excluded_output_paths
         );
 
-        auto [counter_iterator, counter_inserted] =
-            counter_groups.try_emplace(fragments.sequence_counter_key);
-        if (counter_inserted) {
-            counter_iterator->second.next_candidate = request.stored_sequence_number + 1;
-        } else {
-            counter_iterator->second.next_candidate =
-                std::max(counter_iterator->second.next_candidate, request.stored_sequence_number + 1);
-        }
-
-        const int first_candidate = std::max(
-            counter_iterator->second.next_candidate,
-            iterator->second.existing_next_candidate
-        );
+        (void)request.stored_sequence_number;
+        const int first_candidate = iterator->second.existing_next_candidate;
         const int sequence_number =
             next_sequence_at_or_after(first_candidate, iterator->second.used_sequence_numbers);
         iterator->second.used_sequence_numbers.insert(sequence_number);
-        counter_iterator->second.next_candidate = sequence_number + 1;
+        iterator->second.existing_next_candidate = sequence_number + 1;
         results.push_back(build_reservation_result(
             request.request.output_directory,
             fragments,

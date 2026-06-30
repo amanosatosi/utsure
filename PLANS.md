@@ -39,6 +39,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M32 Urgent subtitle/video sync correctness fix implemented; awaiting GitHub Actions validation.
 - [x] M33 Segment-local subtitle timing diagnostics and recombine investigation implemented; awaiting GitHub Actions validation.
 - [x] M38 Resize subtitle canvas crash/cutoff fix implemented; awaiting GitHub Actions validation.
+- [x] M39 Folder-based automatic output naming implemented; awaiting GitHub Actions validation.
 
 ## Active assumptions
 
@@ -130,6 +131,7 @@ This file is the living execution plan for the repository. Update it when a mile
 - The current M32 slice is limited to main-subtitle timing correctness in the streaming burn-in path: main subtitles render only on main-segment frames, subtitle render timestamps are main-video-relative, thumbnail/intro/outro frames do not receive main subtitles, and the obsolete full-output subtitle timing mode is rejected instead of silently changing user intent.
 - The current M33 slice investigated strict segmented intermediate recombine and intentionally deferred it. Implemented now: segment-local clocks inside the existing streaming pipeline, plus diagnostics for segment name, output timestamp, segment-relative timestamp, and subtitle timestamp. Not implemented now: strict intermediate render/recombine. Future intermediate recombine work must preserve output geometry/cadence/audio shape, silence generation, selected main audio, non-ASCII paths, deterministic temporary cleanup, and CI coverage before replacing the current muxer.
 - The current test-suite cleanup slice introduces CTest labels: `unit`, `integration`, `media`, `slow`, `stress`, `smoke`, and `regression`. Normal Windows CI now runs `ctest -LE slow`, preserving unit/light integration/media smoke coverage while skipping execution of explicitly labeled slow media regressions. This first slice does not reduce CI build time yet because the Windows build script still builds the registered test binaries before CTest filtering.
+- The current M39 slice is limited to automatic output naming: default output names now use `[custom text] source-parent-folder - NN.ext`, sequence discovery scans existing matching outputs numerically, and source file stems are not used for the folder-name token.
 
 ## Architecture direction
 

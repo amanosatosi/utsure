@@ -104,7 +104,7 @@ int assert_default_name_generation(const std::filesystem::path &root) {
         .output_height = 1080
     });
 
-    const auto expected_name = std::string("[BDRip] episode-01 - 01 x265 1920x1080.mp4");
+    const auto expected_name = std::string("[BDRip] My Show - 01.mp4");
     if (result.file_name != expected_name) {
         std::cerr << "Expected name:\n" << expected_name << "\n";
         std::cerr << "Actual name:\n" << result.file_name << "\n";
@@ -117,7 +117,7 @@ int assert_default_name_generation(const std::filesystem::path &root) {
 
     if (result.sequence_number != 1 || result.video_codec_tag != "x265" || result.audio_codec_tag != "AAC" ||
         result.resolution_tag != "1920x1080" || result.extension != ".mp4" ||
-        result.source_folder_name != "episode-01") {
+        result.source_folder_name != "My Show") {
         return fail("The generated default naming metadata did not match the expected values.");
     }
 
@@ -133,10 +133,10 @@ int assert_numbering_skips_only_matching_files(const std::filesystem::path &root
     std::filesystem::create_directories(source_directory);
     std::filesystem::create_directories(output_directory);
     touch_file(source_path);
-    touch_file(output_directory / "[BDRip] episode-02 - 01 x265 1280x720.mkv");
-    touch_file(output_directory / "[BDRip] episode-02 - 03 x265 1280x720.mkv");
-    touch_file(output_directory / "[BDRip] episode-02 - x x265 1280x720.mkv");
-    touch_file(output_directory / "episode-02 - 2 x265 1280x720.mkv");
+    touch_file(output_directory / "[BDRip] Anime - 01.mkv");
+    touch_file(output_directory / "[BDRip] Anime - 03.mkv");
+    touch_file(output_directory / "[BDRip] Anime - x.mkv");
+    touch_file(output_directory / "Anime - 2.mkv");
 
     const OutputNamingResult result = OutputNaming::suggest(OutputNamingRequest{
         .source_path = source_path,
@@ -156,11 +156,85 @@ int assert_numbering_skips_only_matching_files(const std::filesystem::path &root
         .output_height = 720
     });
 
-    if (result.sequence_number != 4 || result.file_name != "[BDRip] episode-02 - 04 x265 1280x720.mkv") {
+    if (result.sequence_number != 4 || result.file_name != "[BDRip] Anime - 04.mkv") {
         return fail("The output naming helper did not choose the next sequence above the existing maximum.");
     }
 
     std::cout << "numbering.name=" << result.file_name << '\n';
+    return 0;
+}
+
+int assert_folder_name_sequence_examples(const std::filesystem::path &root) {
+    const auto output_directory = root / "folder-sequence-output";
+    std::filesystem::create_directories(output_directory);
+
+    const auto source_path = root / "anime" / "jihanki 3" / "[SubsPlease] Jidou Hanbaiki - 12.mkv";
+    std::filesystem::create_directories(source_path.parent_path());
+    touch_file(source_path);
+
+    const auto make_request = [&](std::filesystem::path source, std::string custom_text = "AML") {
+        return OutputNamingRequest{
+            .source_path = std::move(source),
+            .output_directory = output_directory,
+            .custom_text = std::move(custom_text),
+            .extension_hint = ".mp4",
+            .video_codec = OutputVideoCodec::h265
+        };
+    };
+
+    const auto first = OutputNaming::suggest(make_request(source_path));
+    if (first.file_name != "[AML] jihanki 3 - 01.mp4" ||
+        first.source_folder_name != "jihanki 3" ||
+        first.file_name.find("[SubsPlease]") != std::string::npos) {
+        return fail("Folder-name sequence naming did not start at 01 or incorrectly used the source file stem.");
+    }
+
+    touch_file(output_directory / "[AML] jihanki 3 - 01.mp4");
+    touch_file(output_directory / "[AML] jihanki 3 - 02.mp4");
+    touch_file(output_directory / "[AML] jihanki 3 - 03.mp4");
+    touch_file(output_directory / "[AML] jihanki 3 - xx.mp4");
+    touch_file(output_directory / "[Other] jihanki 3 - 99.mp4");
+    touch_file(output_directory / "[AML] jihanki 30 - 99.mp4");
+    if (OutputNaming::suggest(make_request(source_path)).file_name != "[AML] jihanki 3 - 04.mp4") {
+        return fail("Existing 01, 02, and 03 files did not advance the folder-name sequence to 04.");
+    }
+
+    const auto nine_source = root / "anime" / "nine" / "episode.mkv";
+    touch_file(nine_source);
+    touch_file(output_directory / "[AML] nine - 09.mp4");
+    if (OutputNaming::suggest(make_request(nine_source)).file_name != "[AML] nine - 10.mp4") {
+        return fail("Existing 09 did not advance numerically to 10.");
+    }
+
+    const auto ninety_nine_source = root / "anime" / "ninety nine" / "episode.mkv";
+    touch_file(ninety_nine_source);
+    touch_file(output_directory / "[AML] ninety nine - 99.mp4");
+    if (OutputNaming::suggest(make_request(ninety_nine_source)).file_name != "[AML] ninety nine - 100.mp4") {
+        return fail("Existing 99 did not advance numerically to 100.");
+    }
+
+    const auto similar_source = root / "anime" / "jihanki 4" / "episode.mkv";
+    touch_file(similar_source);
+    if (OutputNaming::suggest(make_request(similar_source)).file_name != "[AML] jihanki 4 - 01.mp4") {
+        return fail("A similar folder name incorrectly affected a different folder's sequence.");
+    }
+
+    const auto song_source = root / "anime" / "z songs" / "song.webm";
+    touch_file(song_source);
+    touch_file(output_directory / "[test] z songs - 01.mp4");
+    touch_file(output_directory / "[test] z songs - 02.mp4");
+    if (OutputNaming::suggest(make_request(song_source, "test")).file_name != "[test] z songs - 03.mp4") {
+        return fail("Folder-name sequence naming did not match the z songs example.");
+    }
+
+    const auto windows_style = path_from_utf8_string("C:\\anime\\jihanki 3\\episode 12.mkv");
+    const auto windows_result = OutputNaming::suggest(make_request(windows_style));
+    if (windows_result.source_folder_name != "jihanki 3" ||
+        windows_result.file_name != "[AML] jihanki 3 - 04.mp4") {
+        return fail("Windows-style source paths did not resolve the parent folder name.");
+    }
+
+    std::cout << "folder_sequence.name=" << first.file_name << '\n';
     return 0;
 }
 
@@ -172,45 +246,63 @@ int assert_codec_tags_follow_selected_settings(const std::filesystem::path &root
     std::filesystem::create_directories(source_path.parent_path());
     touch_file(source_path);
 
-    const OutputNamingResult copied_audio = OutputNaming::suggest(OutputNamingRequest{
-        .source_path = source_path,
-        .output_directory = output_directory,
-        .custom_text = {},
-        .extension_hint = "MKV",
-        .video_codec = OutputVideoCodec::h264,
-        .audio_settings = AudioEncodeSettings{
-            .mode = AudioOutputMode::copy_source,
-            .codec = OutputAudioCodec::aac
-        },
-        .source_audio_known = true,
-        .source_audio_stream = AudioStreamInfo{
-            .codec_name = "opus"
-        },
-        .output_width = 640,
-        .output_height = 360
-    });
+    const OutputNamingTemplate codec_template{
+        .enabled = true,
+        .separator = " - ",
+        .tokens = {
+            OutputNamingToken{.type = OutputNamingTokenType::selected_text, .enabled = true},
+            OutputNamingToken{.type = OutputNamingTokenType::source_folder_name, .enabled = true},
+            OutputNamingToken{.type = OutputNamingTokenType::sequence_number, .enabled = true, .sequence_padding = 2},
+            OutputNamingToken{.type = OutputNamingTokenType::codec, .enabled = true},
+            OutputNamingToken{.type = OutputNamingTokenType::resolution, .enabled = true}
+        }
+    };
 
-    if (copied_audio.file_name != "track-01 - 01 x264 640x360.mkv") {
+    const OutputNamingResult copied_audio = OutputNaming::suggest(
+        OutputNamingRequest{
+            .source_path = source_path,
+            .output_directory = output_directory,
+            .custom_text = {},
+            .extension_hint = "MKV",
+            .video_codec = OutputVideoCodec::h264,
+            .audio_settings = AudioEncodeSettings{
+                .mode = AudioOutputMode::copy_source,
+                .codec = OutputAudioCodec::aac
+            },
+            .source_audio_known = true,
+            .source_audio_stream = AudioStreamInfo{
+                .codec_name = "opus"
+            },
+            .output_width = 640,
+            .output_height = 360
+        },
+        codec_template
+    );
+
+    if (copied_audio.file_name != "Concert - 01 x264 640x360.mkv") {
         return fail("The copy-source audio tag or normalized extension did not match the inspected source codec.");
     }
 
-    const OutputNamingResult silent_source = OutputNaming::suggest(OutputNamingRequest{
-        .source_path = source_path,
-        .output_directory = output_directory,
-        .custom_text = "Silent",
-        .extension_hint = ".mp4",
-        .video_codec = OutputVideoCodec::h264,
-        .audio_settings = AudioEncodeSettings{
-            .mode = AudioOutputMode::encode_aac,
-            .codec = OutputAudioCodec::aac
+    const OutputNamingResult silent_source = OutputNaming::suggest(
+        OutputNamingRequest{
+            .source_path = source_path,
+            .output_directory = output_directory,
+            .custom_text = "Silent",
+            .extension_hint = ".mp4",
+            .video_codec = OutputVideoCodec::h264,
+            .audio_settings = AudioEncodeSettings{
+                .mode = AudioOutputMode::encode_aac,
+                .codec = OutputAudioCodec::aac
+            },
+            .source_audio_known = true,
+            .source_audio_stream = std::nullopt,
+            .output_width = 640,
+            .output_height = 360
         },
-        .source_audio_known = true,
-        .source_audio_stream = std::nullopt,
-        .output_width = 640,
-        .output_height = 360
-    });
+        codec_template
+    );
 
-    if (silent_source.file_name != "[Silent] track-01 - 01 x264 640x360.mp4") {
+    if (silent_source.file_name != "[Silent] Concert - 01 x264 640x360.mp4") {
         return fail("The output naming helper did not switch the audio tag to NoAudio for a known silent source.");
     }
 
@@ -228,9 +320,8 @@ int assert_batch_reservation_avoids_parallel_collisions(const std::filesystem::p
     touch_file(source_directory / "episode-01.mkv");
     touch_file(source_directory / "episode-02.mkv");
     touch_file(source_directory / "episode-03.mkv");
-    touch_file(output_directory / "[BDRip] episode-01 - 01 x265 1920x1080.mkv");
-    touch_file(output_directory / "[BDRip] episode-01 - 03 x265 1920x1080.mkv");
-    touch_file(output_directory / "[BDRip] episode-02 - 03 x265 1920x1080.mkv");
+    touch_file(output_directory / "[BDRip] Series - 01.mkv");
+    touch_file(output_directory / "[BDRip] Series - 03.mkv");
 
     const std::vector<OutputNamingRequest> requests{
         OutputNamingRequest{
@@ -291,9 +382,9 @@ int assert_batch_reservation_avoids_parallel_collisions(const std::filesystem::p
         return fail("The batch reservation helper did not return one result per request.");
     }
 
-    if (results[0].file_name != "[BDRip] episode-01 - 04 x265 1920x1080.mkv" ||
-        results[1].file_name != "[BDRip] episode-02 - 05 x265 1920x1080.mkv" ||
-        results[2].file_name != "[BDRip] episode-03 - 06 x265 1920x1080.mkv") {
+    if (results[0].file_name != "[BDRip] Series - 04.mkv" ||
+        results[1].file_name != "[BDRip] Series - 05.mkv" ||
+        results[2].file_name != "[BDRip] Series - 06.mkv") {
         return fail("The batch reservation helper did not reserve unique sequence numbers across the batch.");
     }
 
@@ -332,9 +423,9 @@ int assert_three_sources_generate_distinct_batch_paths(const std::filesystem::pa
 
     const auto results = OutputNaming::reserve_batch(requests);
     if (results.size() != 3U ||
-        results[0].file_name != "alpha - 01 x265.mp4" ||
-        results[1].file_name != "bravo - 02 x265.mp4" ||
-        results[2].file_name != "charlie - 03 x265.mp4" ||
+        results[0].file_name != "DistinctSources - 01.mp4" ||
+        results[1].file_name != "DistinctSources - 02.mp4" ||
+        results[2].file_name != "DistinctSources - 03.mp4" ||
         results[0].output_path == results[1].output_path ||
         results[1].output_path == results[2].output_path ||
         results[0].output_path == results[2].output_path) {
@@ -365,10 +456,14 @@ int assert_reordering_changes_sequence_output_names(const std::filesystem::path 
     const auto original = OutputNaming::reserve_batch(std::vector<OutputNamingRequest>{first, second});
     const auto reversed = OutputNaming::reserve_batch(std::vector<OutputNamingRequest>{second, first});
     if (original.size() != 2U || reversed.size() != 2U ||
-        original[0].file_name != "episode-01 - 01 x265.mp4" ||
-        original[1].file_name != "episode-02 - 02 x265.mp4" ||
-        reversed[0].file_name != "episode-02 - 01 x265.mp4" ||
-        reversed[1].file_name != "episode-01 - 02 x265.mp4") {
+        original[0].file_name != "Reorder - 01.mp4" ||
+        original[1].file_name != "Reorder - 02.mp4" ||
+        reversed[0].file_name != "Reorder - 01.mp4" ||
+        reversed[1].file_name != "Reorder - 02.mp4" ||
+        original[0].sequence_number != 1 ||
+        original[1].sequence_number != 2 ||
+        reversed[0].sequence_number != 1 ||
+        reversed[1].sequence_number != 2) {
         return fail("Queue order did not control sequence-number output names.");
     }
 
@@ -409,7 +504,7 @@ int assert_token_order_and_disabled_tokens(const std::filesystem::path &root) {
         custom_template
     );
 
-    if (result.file_name != "x264 episode-01 - 001 320x180.mp4") {
+    if (result.file_name != "x264 Token Series - 001 320x180.mp4") {
         return fail("Token order or disabled-token output did not match the custom naming template.");
     }
 
@@ -433,9 +528,9 @@ int assert_selected_text_token_rendering(const std::filesystem::path &root) {
         .output_width = 1920,
         .output_height = 1080
     });
-    if (bracketed.file_name != "[OP] episode-01 - 01 x265 1920x1080.mp4" ||
+    if (bracketed.file_name != "[OP] Selected Folder - 01.mp4" ||
         bracketed.custom_text != "OP" ||
-        bracketed.sequence_counter_key != "op") {
+        bracketed.sequence_counter_key != "op|selected-folder") {
         return fail("SelectedText did not render bracketed while preserving the raw sanitized value.");
     }
 
@@ -449,7 +544,7 @@ int assert_selected_text_token_rendering(const std::filesystem::path &root) {
         .output_height = 1080
     });
     if (empty.file_name.find("[]") != std::string::npos ||
-        empty.file_name != "episode-01 - 01 x265 1920x1080.mp4") {
+        empty.file_name != "Selected Folder - 01.mp4") {
         return fail("Empty selectedText did not omit the token cleanly.");
     }
 
@@ -462,7 +557,7 @@ int assert_selected_text_token_rendering(const std::filesystem::path &root) {
         .output_width = 1920,
         .output_height = 1080
     });
-    if (sanitized.file_name != "[OP 01] episode-01 - 01 x265 1920x1080.mp4" ||
+    if (sanitized.file_name != "[OP 01] Selected Folder - 01.mp4" ||
         sanitized.custom_text != "OP 01") {
         return fail("SelectedText sanitization was not applied inside brackets.");
     }
@@ -486,7 +581,7 @@ int assert_selected_text_token_rendering(const std::filesystem::path &root) {
         },
         reordered_template
     );
-    if (reordered.file_name != "episode-01 [OP] - 01.mp4") {
+    if (reordered.file_name != "Selected Folder [OP] - 01.mp4") {
         return fail("Moved selectedText token did not stay bracketed in the custom order.");
     }
 
@@ -521,7 +616,7 @@ int assert_filename_sanitization(const std::filesystem::path &root) {
         return fail("The generated output filename still contains a Windows-invalid character.");
     }
 
-    if (result.file_name != "[BD Rip Name] episode-01 - 01 x265 640x360.mp4") {
+    if (result.file_name != "[BD Rip Name] Bad Folder Name - 01.mp4") {
         return fail("Filename sanitization did not produce the expected readable filename.");
     }
 
@@ -529,7 +624,7 @@ int assert_filename_sanitization(const std::filesystem::path &root) {
     return 0;
 }
 
-int assert_stored_counter_is_authoritative_when_files_are_deleted(const std::filesystem::path &root) {
+int assert_stored_counter_is_ignored_when_no_matching_files(const std::filesystem::path &root) {
     const auto output_directory = root / "stored-counter";
     const auto source_path = root / "Stored" / "episode-01.mkv";
     std::filesystem::create_directories(output_directory);
@@ -547,23 +642,23 @@ int assert_stored_counter_is_authoritative_when_files_are_deleted(const std::fil
     };
 
     const auto result = OutputNaming::reserve_next(request, OutputNaming::default_template(), 12);
-    if (result.assigned_sequence_number != 13 ||
-        result.persisted_sequence_number != 13 ||
-        result.result.file_name != "[BDRip] episode-01 - 13 x265 1920x1080.mp4") {
-        return fail("The stored sequence counter was not used when no old output files were present.");
+    if (result.assigned_sequence_number != 1 ||
+        result.persisted_sequence_number != 1 ||
+        result.result.file_name != "[BDRip] Stored - 01.mp4") {
+        return fail("A stored sequence counter was allowed to override an empty output folder.");
     }
 
     std::cout << "stored_counter.name=" << result.result.file_name << '\n';
     return 0;
 }
 
-int assert_sequence_uses_max_of_existing_and_stored_counter(const std::filesystem::path &root) {
+int assert_sequence_uses_existing_files_instead_of_stored_counter(const std::filesystem::path &root) {
     const auto output_directory = root / "max-counter";
     const auto source_path = root / "Max" / "episode-01.mkv";
     std::filesystem::create_directories(output_directory);
     std::filesystem::create_directories(source_path.parent_path());
     touch_file(source_path);
-    touch_file(output_directory / "[BDRip] episode-01 - 08 x265 1920x1080.mp4");
+    touch_file(output_directory / "[BDRip] Max - 08.mp4");
 
     const auto request = OutputNamingRequest{
         .source_path = source_path,
@@ -575,18 +670,18 @@ int assert_sequence_uses_max_of_existing_and_stored_counter(const std::filesyste
         .output_height = 1080
     };
 
-    const auto stored_wins = OutputNaming::reserve_next(request, OutputNaming::default_template(), 12);
-    if (stored_wins.assigned_sequence_number != 13) {
-        return fail("The stored sequence counter did not win over lower existing files.");
+    const auto stored_ignored = OutputNaming::reserve_next(request, OutputNaming::default_template(), 12);
+    if (stored_ignored.assigned_sequence_number != 9) {
+        return fail("The stored sequence counter overrode the next number from existing output files.");
     }
 
-    touch_file(output_directory / "[BDRip] episode-01 - 20 x265 1920x1080.mp4");
+    touch_file(output_directory / "[BDRip] Max - 20.mp4");
     const auto existing_wins = OutputNaming::reserve_next(request, OutputNaming::default_template(), 12);
     if (existing_wins.assigned_sequence_number != 21) {
         return fail("Existing output files did not win over a lower stored sequence counter.");
     }
 
-    std::cout << "max_counter.stored_wins=" << stored_wins.result.file_name << '\n';
+    std::cout << "max_counter.stored_ignored=" << stored_ignored.result.file_name << '\n';
     std::cout << "max_counter.existing_wins=" << existing_wins.result.file_name << '\n';
     return 0;
 }
@@ -625,9 +720,9 @@ int assert_batch_reservation_advances_persisted_counters(const std::filesystem::
     });
 
     if (reservations.size() != 2U ||
-        reservations[0].assigned_sequence_number != 5 ||
-        reservations[1].assigned_sequence_number != 6 ||
-        reservations[1].persisted_sequence_number != 6 ||
+        reservations[0].assigned_sequence_number != 1 ||
+        reservations[1].assigned_sequence_number != 2 ||
+        reservations[1].persisted_sequence_number != 2 ||
         reservations[0].sequence_counter_key != reservations[1].sequence_counter_key) {
         return fail("Persisted batch reservation counters did not advance deterministically.");
     }
@@ -673,12 +768,12 @@ int assert_batch_counter_key_prevents_reuse_across_filename_patterns(const std::
     });
 
     if (reservations.size() != 2U ||
-        reservations[0].assigned_sequence_number != 5 ||
-        reservations[1].assigned_sequence_number != 6 ||
-        reservations[1].persisted_sequence_number != 6 ||
+        reservations[0].assigned_sequence_number != 1 ||
+        reservations[1].assigned_sequence_number != 2 ||
+        reservations[1].persisted_sequence_number != 2 ||
         reservations[0].sequence_counter_key != reservations[1].sequence_counter_key ||
-        reservations[0].result.file_name != "[BDRip] episode-01 - 05 x265 1920x1080.mp4" ||
-        reservations[1].result.file_name != "[BDRip] episode-02 - 06 x265 1280x720.mp4") {
+        reservations[0].result.file_name != "[BDRip] Mixed - 01.mp4" ||
+        reservations[1].result.file_name != "[BDRip] Mixed - 02.mp4") {
         return fail("A single persisted counter key reused a number across different filename patterns.");
     }
 
@@ -710,15 +805,15 @@ int assert_duplicate_exclusion_does_not_drive_counter_high_water_mark(const std:
             .naming_template = OutputNaming::default_template(),
             .stored_sequence_number = 4,
             .excluded_output_paths = {
-                output_directory / "[BDRip] episode-01 - 99 x265 1920x1080.mp4"
+                output_directory / "[BDRip] Excluded - 99.mp4"
             }
         }
     });
 
     if (reservations.size() != 1U ||
-        reservations[0].assigned_sequence_number != 5 ||
-        reservations[0].persisted_sequence_number != 5 ||
-        reservations[0].result.file_name != "[BDRip] episode-01 - 05 x265 1920x1080.mp4") {
+        reservations[0].assigned_sequence_number != 1 ||
+        reservations[0].persisted_sequence_number != 1 ||
+        reservations[0].result.file_name != "[BDRip] Excluded - 01.mp4") {
         return fail("A duplicate exclusion incorrectly drove the stored counter high-water mark.");
     }
 
@@ -749,15 +844,15 @@ int assert_duplicate_exclusion_blocks_current_candidate(const std::filesystem::p
             .naming_template = OutputNaming::default_template(),
             .stored_sequence_number = 4,
             .excluded_output_paths = {
-                output_directory / "[BDRip] episode-01 - 05 x265 1920x1080.mp4"
+                output_directory / "[BDRip] Current - 01.mp4"
             }
         }
     });
 
     if (reservations.size() != 1U ||
-        reservations[0].assigned_sequence_number != 6 ||
-        reservations[0].persisted_sequence_number != 6 ||
-        reservations[0].result.file_name != "[BDRip] episode-01 - 06 x265 1920x1080.mp4") {
+        reservations[0].assigned_sequence_number != 2 ||
+        reservations[0].persisted_sequence_number != 2 ||
+        reservations[0].result.file_name != "[BDRip] Current - 02.mp4") {
         return fail("A duplicate exclusion did not block reuse of the original output path.");
     }
 
@@ -787,7 +882,7 @@ int assert_non_sequence_template_uses_copy_suffix_for_excluded_path(const std::f
         .extension_hint = ".mp4",
         .video_codec = OutputVideoCodec::h265
     };
-    touch_file(output_directory / "[BDRip] episode-01_002.mp4");
+    touch_file(output_directory / "[BDRip] NoSequence_002.mp4");
 
     const auto reservations = OutputNaming::reserve_batch(std::vector<OutputNamingReservationRequest>{
         OutputNamingReservationRequest{
@@ -795,7 +890,7 @@ int assert_non_sequence_template_uses_copy_suffix_for_excluded_path(const std::f
             .naming_template = no_sequence_template,
             .stored_sequence_number = 12,
             .excluded_output_paths = {
-                output_directory / "[BDRip] episode-01.mp4"
+                output_directory / "[BDRip] NoSequence.mp4"
             }
         }
     });
@@ -803,7 +898,7 @@ int assert_non_sequence_template_uses_copy_suffix_for_excluded_path(const std::f
     if (reservations.size() != 1U ||
         reservations[0].assigned_sequence_number != 0 ||
         reservations[0].persisted_sequence_number != 0 ||
-        reservations[0].result.file_name != "[BDRip] episode-01_003.mp4") {
+        reservations[0].result.file_name != "[BDRip] NoSequence_003.mp4") {
         return fail("A no-sequence duplicate did not use a numeric suffix to avoid path reuse and existing files.");
     }
 
@@ -826,7 +921,7 @@ int assert_manual_output_exclusion_is_not_overwritten(const std::filesystem::pat
             OutputNamingToken{.type = OutputNamingTokenType::source_folder_name, .enabled = true}
         }
     };
-    const auto manual_output_path = output_directory / "[BDRip] episode-01.mp4";
+    const auto manual_output_path = output_directory / "[BDRip] ManualExclusion.mp4";
     const auto reservations = OutputNaming::reserve_batch(std::vector<OutputNamingReservationRequest>{
         OutputNamingReservationRequest{
             .request = OutputNamingRequest{
@@ -846,7 +941,7 @@ int assert_manual_output_exclusion_is_not_overwritten(const std::filesystem::pat
 
     if (reservations.size() != 1U ||
         reservations[0].result.output_path == manual_output_path ||
-        reservations[0].result.file_name != "[BDRip] episode-01_002.mp4") {
+        reservations[0].result.file_name != "[BDRip] ManualExclusion_002.mp4") {
         return fail("Automatic output naming overwrote or reused a manually excluded output path.");
     }
 
@@ -920,6 +1015,10 @@ int main() {
         return 1;
     }
 
+    if (assert_folder_name_sequence_examples(root) != 0) {
+        return 1;
+    }
+
     if (assert_codec_tags_follow_selected_settings(root) != 0) {
         return 1;
     }
@@ -948,11 +1047,11 @@ int main() {
         return 1;
     }
 
-    if (assert_stored_counter_is_authoritative_when_files_are_deleted(root) != 0) {
+    if (assert_stored_counter_is_ignored_when_no_matching_files(root) != 0) {
         return 1;
     }
 
-    if (assert_sequence_uses_max_of_existing_and_stored_counter(root) != 0) {
+    if (assert_sequence_uses_existing_files_instead_of_stored_counter(root) != 0) {
         return 1;
     }
 
