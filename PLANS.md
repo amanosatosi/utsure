@@ -93,6 +93,7 @@ Implemented:
   * Added a vectored exception handler backup and a one-shot exception dump guard so the vectored handler and top-level filter do not produce duplicate dumps for the same exception.
   * Added `--write-diagnostic-dump` for manual dump-path verification without waiting for a crash.
   * Updated crash dump docs with partial-artifact interpretation and optional Windows Error Reporting LocalDumps fallback guidance.
+  * CI follow-up: renamed the sidecar metadata member away from Windows' `exception_code` macro while preserving the JSON/marker key, and guarded the streaming pipeline `NOMINMAX` define.
 
 Validation:
   * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.

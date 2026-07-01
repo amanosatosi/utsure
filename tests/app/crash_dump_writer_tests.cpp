@@ -422,7 +422,7 @@ int assert_marker_and_failure_sidecar_write() {
         .dump_write_error_code = 5,
         .dump_write_error_message = "access denied",
         .dump_path_attempted = paths.dump_path.string(),
-        .exception_code = 3221225477UL,
+        .seh_exception_code = 3221225477UL,
         .exception_address = "0x1234"
     };
 

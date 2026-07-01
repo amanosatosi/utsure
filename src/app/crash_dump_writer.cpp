@@ -1063,7 +1063,7 @@ std::string crash_context_collection_to_json(
     append_json_uint(json, "dump_write_error_code", metadata.dump_write_error_code, true);
     append_json_string(json, "dump_write_error_message", metadata.dump_write_error_message, true);
     append_json_string(json, "dump_path_attempted", metadata.dump_path_attempted, true);
-    append_json_uint(json, "exception_code", metadata.exception_code, true);
+    append_json_uint(json, "exception_code", metadata.seh_exception_code, true);
     append_json_string(json, "exception_address", metadata.exception_address, true);
     append_json_uint(json, "crashing_thread_id", snapshot.crashing_thread_id, true);
     append_json_int(json, "last_updated_runner_slot", snapshot.last_updated_runner_slot, true);
@@ -1438,7 +1438,7 @@ std::string crash_marker_text(
          << "dump_write_error_code=" << metadata.dump_write_error_code << '\n'
          << "dump_write_error_message=" << metadata.dump_write_error_message << '\n'
          << "dump_path_attempted=" << metadata.dump_path_attempted << '\n'
-         << "exception_code=" << metadata.exception_code << '\n'
+         << "exception_code=" << metadata.seh_exception_code << '\n'
          << "exception_address=" << metadata.exception_address << '\n'
          << "current_stage=" << snapshot.last_updated_context.current_stage << '\n'
          << "last_log_message=" << snapshot.last_updated_context.last_log_message << '\n';
@@ -1580,7 +1580,7 @@ CrashDumpWriteResult write_crash_dump_for_current_process(void *exception_pointe
             .dump_path_attempted = utf8_path_string(paths.dump_path)
         };
 #if defined(_WIN32)
-        metadata.exception_code = exception_code_from_pointers(exception_pointers);
+        metadata.seh_exception_code = exception_code_from_pointers(exception_pointers);
         metadata.exception_address = exception_address_from_pointers(exception_pointers);
 #endif
         std::string marker_error{};
