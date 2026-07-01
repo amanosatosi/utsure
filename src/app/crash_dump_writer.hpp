@@ -111,13 +111,29 @@ struct CrashArtifactPaths final {
     std::filesystem::path dump_path{};
     std::filesystem::path sidecar_path{};
     std::filesystem::path log_path{};
+    std::filesystem::path handler_entered_path{};
+    std::filesystem::path dump_failed_path{};
+};
+
+struct CrashDumpSidecarMetadata final {
+    bool handler_entered{false};
+    bool dump_write_success{false};
+    unsigned long dump_write_error_code{0};
+    std::string dump_write_error_message{};
+    std::string dump_path_attempted{};
+    unsigned long exception_code{0};
+    std::string exception_address{};
 };
 
 struct CrashDumpWriteResult final {
+    bool handler_entered{false};
+    bool handler_marker_written{false};
     bool dump_written{false};
     bool sidecar_written{false};
+    bool failure_marker_written{false};
     CrashArtifactPaths paths{};
     std::string dump_type{};
+    unsigned long dump_error_code{0};
     std::string error_message{};
 };
 
@@ -128,6 +144,21 @@ struct CrashDumpDirectoryResolutionOptions final {
     bool simulate_portable_directory_failure{false};
 };
 
+struct CrashDumpSetupStatus final {
+    bool enabled{false};
+    std::filesystem::path resolved_directory{};
+    bool directory_exists{false};
+    bool directory_writable{false};
+    bool unhandled_exception_filter_installed{false};
+    bool vectored_exception_handler_installed{false};
+    bool terminate_handler_installed{false};
+    bool signal_handlers_installed{false};
+    unsigned long process_id{0};
+    std::string build_version{};
+    std::string git_commit{};
+    std::string previous_unhandled_exception_filter{};
+};
+
 [[nodiscard]] std::filesystem::path default_crash_dump_directory();
 [[nodiscard]] std::filesystem::path crash_dump_directory_for_crash_path();
 void hold_crash_dump_directory_lock_for_test(bool hold);
@@ -135,13 +166,36 @@ void hold_crash_dump_directory_lock_for_test(bool hold);
     const CrashDumpDirectoryResolutionOptions &options
 );
 [[nodiscard]] std::string make_crash_file_stem(std::int64_t unix_seconds, unsigned long process_id);
+[[nodiscard]] std::string make_crash_file_stem(
+    std::int64_t unix_milliseconds,
+    unsigned long process_id,
+    unsigned long thread_id,
+    unsigned int sequence_number
+);
 [[nodiscard]] CrashArtifactPaths make_crash_artifact_paths(
     const std::filesystem::path &directory,
     std::int64_t unix_seconds,
     unsigned long process_id
 );
+[[nodiscard]] CrashArtifactPaths make_crash_artifact_paths(
+    const std::filesystem::path &directory,
+    std::int64_t unix_milliseconds,
+    unsigned long process_id,
+    unsigned long thread_id,
+    unsigned int sequence_number
+);
+[[nodiscard]] CrashArtifactPaths choose_available_crash_artifact_paths(
+    const std::filesystem::path &directory,
+    std::int64_t unix_milliseconds,
+    unsigned long process_id,
+    unsigned long thread_id
+);
 [[nodiscard]] std::string crash_context_to_json(const CrashContextSnapshot &snapshot);
 [[nodiscard]] std::string crash_context_collection_to_json(const CrashContextCollectionSnapshot &snapshot);
+[[nodiscard]] std::string crash_context_collection_to_json(
+    const CrashContextCollectionSnapshot &snapshot,
+    const CrashDumpSidecarMetadata &metadata
+);
 [[nodiscard]] std::vector<CrashArtifactPaths> find_recent_crash_artifacts(
     const std::filesystem::path &directory,
     std::size_t max_count = 5
@@ -165,10 +219,31 @@ void mark_crash_context_cancellation_requested(bool requested);
     const CrashContextCollectionSnapshot &snapshot,
     std::string *error_message = nullptr
 );
+[[nodiscard]] bool write_crash_sidecar_for_test(
+    const CrashArtifactPaths &paths,
+    const CrashContextCollectionSnapshot &snapshot,
+    const CrashDumpSidecarMetadata &metadata,
+    std::string *error_message = nullptr
+);
+[[nodiscard]] bool write_handler_entered_marker_for_test(
+    const CrashArtifactPaths &paths,
+    const CrashContextCollectionSnapshot &snapshot,
+    const CrashDumpSidecarMetadata &metadata,
+    std::string *error_message = nullptr
+);
+[[nodiscard]] bool write_dump_failed_marker_for_test(
+    const CrashArtifactPaths &paths,
+    const CrashContextCollectionSnapshot &snapshot,
+    const CrashDumpSidecarMetadata &metadata,
+    std::string *error_message = nullptr
+);
 
 void configure_crash_log_flushing() noexcept;
 void install_crash_handlers() noexcept;
 void initialize_crash_dump_directory() noexcept;
+[[nodiscard]] CrashDumpSetupStatus crash_dump_setup_status() noexcept;
+[[nodiscard]] std::string format_crash_dump_setup_log(const CrashDumpSetupStatus &status);
 [[nodiscard]] CrashDumpWriteResult write_crash_dump_for_current_process(void *exception_pointers = nullptr) noexcept;
+[[nodiscard]] CrashDumpWriteResult write_diagnostic_dump_now() noexcept;
 
 }  // namespace utsure::app::crash

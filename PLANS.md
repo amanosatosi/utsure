@@ -41,6 +41,29 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M38 Resize subtitle canvas crash/cutoff fix implemented; awaiting GitHub Actions validation.
 - [x] M39 Folder-based automatic output naming implemented; awaiting GitHub Actions validation.
 - [x] M40 Vertical-resolution output naming token implemented; awaiting GitHub Actions validation.
+- [x] M41 Crash dump writer reliability follow-up implemented; awaiting GitHub Actions validation.
+
+### M41 Crash dump writer reliability follow-up
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Make app-side crash dump artifact creation diagnosable when no fresh `.dmp` appears after a crash.
+  * Keep the fix in the existing app crash writer and startup path; do not change encode behavior.
+  * Add a manual diagnostic dump command and focused crash-writer regression coverage.
+
+Implemented:
+  * Startup now logs crash dump writer enablement, resolved directory, existence/writability, installed handler state, pid, build version, git commit, and previous unhandled-exception filter pointer.
+  * Crash stems now include millisecond precision, process id, thread id, and a sequence number; path selection avoids silently overwriting any existing dump, sidecar, log, handler marker, or failure marker.
+  * Crash handling writes `<stem>.handler-entered.txt` before attempting `MiniDumpWriteDump`.
+  * Minidumps are opened with no-overwrite creation, and failures produce `<stem>.dump-failed.txt` plus JSON sidecar metadata including dump success, error code, attempted path, exception code, and exception address when available.
+  * Added a vectored exception handler backup and a one-shot exception dump guard so the vectored handler and top-level filter do not produce duplicate dumps for the same exception.
+  * Added `--write-diagnostic-dump` for manual dump-path verification without waiting for a crash.
+  * Updated crash dump docs with partial-artifact interpretation and optional Windows Error Reporting LocalDumps fallback guidance.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included `git diff --check` and targeted searches for stale crash filename patterns and crash writer helper call sites.
 
 ## Active assumptions
 

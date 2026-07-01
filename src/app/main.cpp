@@ -92,6 +92,9 @@ int main(int argc, char *argv[]) {
     if (!settings_load_result.warning.trimmed().isEmpty()) {
         qWarning().noquote() << settings_load_result.warning;
     }
+    qInfo().noquote() << QString::fromStdString(
+        utsure::app::crash::format_crash_dump_setup_log(utsure::app::crash::crash_dump_setup_status())
+    );
     const auto recent_crash_artifacts = utsure::app::crash::find_recent_crash_artifacts(
         utsure::app::crash::default_crash_dump_directory(),
         3
@@ -117,9 +120,36 @@ int main(int argc, char *argv[]) {
         "dump-window-structure",
         "Print the main window structure to stdout and exit."
     );
+    const QCommandLineOption writeDiagnosticDumpOption(
+        "write-diagnostic-dump",
+        "Write a diagnostic crash dump and sidecar, then exit."
+    );
     parser.addOption(smokeTestOption);
     parser.addOption(dumpWindowStructureOption);
+    parser.addOption(writeDiagnosticDumpOption);
     parser.process(app);
+
+    if (parser.isSet(writeDiagnosticDumpOption)) {
+        const auto dump_result = utsure::app::crash::write_diagnostic_dump_now();
+        if (dump_result.dump_written && dump_result.sidecar_written) {
+            qInfo().noquote()
+                << "Diagnostic dump written:"
+                << QString::fromStdWString(dump_result.paths.dump_path.wstring())
+                << "sidecar:"
+                << QString::fromStdWString(dump_result.paths.sidecar_path.wstring());
+            return 0;
+        }
+        qCritical().noquote()
+            << "Diagnostic dump failed:"
+            << QString::fromStdString(dump_result.error_message)
+            << "handler marker:"
+            << QString::fromStdWString(dump_result.paths.handler_entered_path.wstring())
+            << "failure marker:"
+            << QString::fromStdWString(dump_result.paths.dump_failed_path.wstring())
+            << "sidecar:"
+            << QString::fromStdWString(dump_result.paths.sidecar_path.wstring());
+        return 2;
+    }
 
     MainWindow mainWindow;
     if (!application_icon.isNull()) {

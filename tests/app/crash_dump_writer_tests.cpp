@@ -52,8 +52,15 @@ void unset_env_var(const char *name) {
 
 int assert_crash_path_helpers() {
     const auto stem = utsure::app::crash::make_crash_file_stem(1700000000, 1234UL);
-    if (!contains_text(stem, "utsure-crash-") || !contains_text(stem, "-pid-1234")) {
+    if (!contains_text(stem, "utsure-crash-") ||
+        !contains_text(stem, "-pid-1234") ||
+        !contains_text(stem, "-tid-") ||
+        !contains_text(stem, "-seq-0000")) {
         return fail("Crash file stem did not include the expected prefix and pid.");
+    }
+    const auto unique_stem = utsure::app::crash::make_crash_file_stem(1700000000123, 1234UL, 5678UL, 42U);
+    if (!contains_text(unique_stem, "-123-pid-1234-tid-5678-seq-0042")) {
+        return fail("Crash file stem did not include millisecond, thread, and sequence fields.");
     }
 
     const auto paths = utsure::app::crash::make_crash_artifact_paths(
@@ -63,11 +70,37 @@ int assert_crash_path_helpers() {
     );
     if (paths.dump_path.extension() != ".dmp" ||
         paths.sidecar_path.extension() != ".json" ||
-        paths.log_path.extension() != ".txt") {
+        paths.log_path.extension() != ".txt" ||
+        paths.handler_entered_path.extension() != ".txt" ||
+        paths.dump_failed_path.extension() != ".txt" ||
+        !contains_text(paths.handler_entered_path.filename().string(), ".handler-entered") ||
+        !contains_text(paths.dump_failed_path.filename().string(), ".dump-failed")) {
         return fail("Crash artifact paths did not use expected extensions.");
     }
 
     std::cout << "crash_dump_writer.path_helpers=ok\n";
+    return 0;
+}
+
+int assert_crash_path_collision_retry() {
+    const auto root = std::filesystem::temp_directory_path() / "utsure-crash-collision-tests";
+    std::error_code error{};
+    std::filesystem::remove_all(root, error);
+    std::filesystem::create_directories(root, error);
+
+    const auto first = utsure::app::crash::choose_available_crash_artifact_paths(root, 1700000000123, 100UL, 200UL);
+    {
+        std::ofstream existing(first.dump_path, std::ios::binary);
+        existing << "old";
+    }
+    const auto second = utsure::app::crash::choose_available_crash_artifact_paths(root, 1700000000123, 100UL, 200UL);
+    if (first.dump_path == second.dump_path ||
+        !contains_text(second.dump_path.filename().string(), "-seq-")) {
+        return fail("Crash artifact collision retry reused an existing path.");
+    }
+
+    std::filesystem::remove_all(root, error);
+    std::cout << "crash_dump_writer.collision_retry=ok\n";
     return 0;
 }
 
@@ -370,6 +403,92 @@ int assert_sidecar_write() {
     return 0;
 }
 
+int assert_marker_and_failure_sidecar_write() {
+    const auto sidecar_dir = std::filesystem::temp_directory_path() / "utsure-crash-marker-tests";
+    std::error_code error{};
+    std::filesystem::remove_all(sidecar_dir, error);
+    const auto paths = utsure::app::crash::make_crash_artifact_paths(sidecar_dir, 1700000000123, 777UL, 888UL, 9U);
+
+    utsure::app::crash::CrashContextCollectionSnapshot snapshot{};
+    snapshot.crashing_thread_id = 888UL;
+    snapshot.last_updated_context.current_stage = "encode_stage";
+    snapshot.last_updated_context.last_log_message = "last useful line";
+    snapshot.last_updated_context.build_version = "utsure test";
+    snapshot.last_updated_context.git_commit = "abc123";
+
+    const utsure::app::crash::CrashDumpSidecarMetadata metadata{
+        .handler_entered = true,
+        .dump_write_success = false,
+        .dump_write_error_code = 5,
+        .dump_write_error_message = "access denied",
+        .dump_path_attempted = paths.dump_path.string(),
+        .exception_code = 3221225477UL,
+        .exception_address = "0x1234"
+    };
+
+    std::string error_message{};
+    if (!utsure::app::crash::write_handler_entered_marker_for_test(paths, snapshot, metadata, &error_message) ||
+        !utsure::app::crash::write_dump_failed_marker_for_test(paths, snapshot, metadata, &error_message) ||
+        !utsure::app::crash::write_crash_sidecar_for_test(paths, snapshot, metadata, &error_message)) {
+        std::cerr << "marker_error=" << error_message << '\n';
+        return fail("Crash marker or sidecar write failed.");
+    }
+
+    const auto handler_text = read_text_file(paths.handler_entered_path);
+    const auto failure_text = read_text_file(paths.dump_failed_path);
+    const auto sidecar_text = read_text_file(paths.sidecar_path);
+    if (!contains_text(handler_text, "marker=handler_entered") ||
+        !contains_text(handler_text, "current_stage=encode_stage") ||
+        !contains_text(failure_text, "marker=dump_failed") ||
+        !contains_text(failure_text, "dump_write_error_code=5") ||
+        !contains_text(handler_text, "exception_code=3221225477") ||
+        !contains_text(handler_text, "exception_address=0x1234") ||
+        !contains_text(sidecar_text, "\"handler_entered\": true") ||
+        !contains_text(sidecar_text, "\"dump_write_success\": false") ||
+        !contains_text(sidecar_text, "\"dump_write_error_code\": 5") ||
+        !contains_text(sidecar_text, "\"exception_code\": 3221225477") ||
+        !contains_text(sidecar_text, "\"dump_path_attempted\"")) {
+        return fail("Crash marker or sidecar metadata did not include expected dump failure fields.");
+    }
+
+    if (utsure::app::crash::write_crash_sidecar_for_test(paths, snapshot, metadata, &error_message)) {
+        return fail("Crash sidecar writer overwrote an existing sidecar.");
+    }
+
+    std::filesystem::remove_all(sidecar_dir, error);
+    std::cout << "crash_dump_writer.markers=ok\n";
+    return 0;
+}
+
+int assert_crash_dump_setup_log() {
+    const utsure::app::crash::CrashDumpSetupStatus status{
+        .enabled = true,
+        .resolved_directory = std::filesystem::path{"C:/temp/utsure-crash-dumps"},
+        .directory_exists = true,
+        .directory_writable = true,
+        .unhandled_exception_filter_installed = true,
+        .vectored_exception_handler_installed = true,
+        .terminate_handler_installed = true,
+        .signal_handlers_installed = true,
+        .process_id = 123UL,
+        .build_version = "utsure 1.0",
+        .git_commit = "abc123",
+        .previous_unhandled_exception_filter = "0x0"
+    };
+    const auto log = utsure::app::crash::format_crash_dump_setup_log(status);
+    if (!contains_text(log, "enabled=1") ||
+        !contains_text(log, "writable=1") ||
+        !contains_text(log, "seh_filter_installed=1") ||
+        !contains_text(log, "vectored_handler_installed=1") ||
+        !contains_text(log, "pid=123") ||
+        !contains_text(log, "git_commit=abc123")) {
+        return fail("Crash dump setup log did not include required startup diagnostics.");
+    }
+
+    std::cout << "crash_dump_writer.setup_log=ok\n";
+    return 0;
+}
+
 #if defined(_WIN32)
 [[noreturn]] void crash_child_process() {
     utsure::app::crash::reset_crash_context_for_tests();
@@ -407,6 +526,7 @@ int assert_controlled_child_dump(const char *executable_path) {
 
     bool found_dump = false;
     bool found_sidecar = false;
+    bool found_handler_marker = false;
     std::string sidecar_text{};
     for (const auto &entry : std::filesystem::directory_iterator(dump_dir, error)) {
         if (entry.path().extension() == ".dmp") {
@@ -414,15 +534,22 @@ int assert_controlled_child_dump(const char *executable_path) {
         } else if (entry.path().extension() == ".json") {
             found_sidecar = true;
             sidecar_text = read_text_file(entry.path());
+        } else if (contains_text(entry.path().filename().string(), ".handler-entered")) {
+            found_handler_marker = true;
         }
     }
     if (!found_dump) {
         return fail("Controlled crash child did not write a .dmp file.");
     }
+    if (!found_handler_marker) {
+        return fail("Controlled crash child did not write a handler-entered marker.");
+    }
     if (!found_sidecar ||
         !contains_text(sidecar_text, "\"build_version\": \"utsure child smoke\"") ||
         !contains_text(sidecar_text, "\"source_codec\": \"hevc\"") ||
         !contains_text(sidecar_text, "\"runner_slot_index\": 3") ||
+        !contains_text(sidecar_text, "\"handler_entered\": true") ||
+        !contains_text(sidecar_text, "\"dump_write_success\": true") ||
         !contains_text(sidecar_text, "\"runner_contexts\"")) {
         return fail("Controlled crash child did not write the expected sidecar context.");
     }
@@ -442,13 +569,16 @@ int main(int argc, char *argv[]) {
     }
 #endif
     if (assert_crash_path_helpers() != 0 ||
+        assert_crash_path_collision_retry() != 0 ||
         assert_crash_dump_directory_override() != 0 ||
         assert_crash_dump_directory_resolution_priority() != 0 ||
         assert_cached_crash_dump_directory_is_used() != 0 ||
         assert_crash_path_directory_access_does_not_block_on_cache_lock() != 0 ||
         assert_crash_context_snapshot_and_json() != 0 ||
         assert_active_count_lifetime_helpers() != 0 ||
-        assert_sidecar_write() != 0) {
+        assert_sidecar_write() != 0 ||
+        assert_marker_and_failure_sidecar_write() != 0 ||
+        assert_crash_dump_setup_log() != 0) {
         return 1;
     }
 #if defined(_WIN32)

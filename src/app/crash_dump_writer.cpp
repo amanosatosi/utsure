@@ -15,6 +15,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -75,6 +76,41 @@ thread_local int current_thread_runner_slot = -1;
 std::atomic_bool &dump_write_in_progress() {
     static auto *flag = new std::atomic_bool{false};
     return *flag;
+}
+
+std::atomic_bool &exception_dump_already_started() {
+    static auto *flag = new std::atomic_bool{false};
+    return *flag;
+}
+
+std::atomic_uint &crash_artifact_sequence_storage() {
+    static auto *sequence = new std::atomic_uint{0};
+    return *sequence;
+}
+
+std::atomic_bool &unhandled_exception_filter_installed_storage() {
+    static auto *installed = new std::atomic_bool{false};
+    return *installed;
+}
+
+std::atomic_bool &vectored_exception_handler_installed_storage() {
+    static auto *installed = new std::atomic_bool{false};
+    return *installed;
+}
+
+std::atomic_bool &terminate_handler_installed_storage() {
+    static auto *installed = new std::atomic_bool{false};
+    return *installed;
+}
+
+std::atomic_bool &signal_handlers_installed_storage() {
+    static auto *installed = new std::atomic_bool{false};
+    return *installed;
+}
+
+std::string &previous_unhandled_exception_filter_text() {
+    static auto *text = new std::string("unknown");
+    return *text;
 }
 
 std::string utf8_path_string(const std::filesystem::path &path) {
@@ -145,8 +181,8 @@ CrashContextSnapshot &runner_context_for_slot(const int runner_slot_index) {
     return contexts[static_cast<std::size_t>(runner_slot_index)];
 }
 
-std::int64_t current_unix_seconds() noexcept {
-    return std::chrono::duration_cast<std::chrono::seconds>(
+std::int64_t current_unix_milliseconds() noexcept {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()
     ).count();
 }
@@ -174,6 +210,68 @@ std::string two_digit(const int value) {
     }
     stream << value;
     return stream.str();
+}
+
+std::string three_digit(const int value) {
+    std::ostringstream stream;
+    stream << std::setw(3) << std::setfill('0') << std::clamp(value, 0, 999);
+    return stream.str();
+}
+
+std::string four_digit(const unsigned int value) {
+    std::ostringstream stream;
+    stream << std::setw(4) << std::setfill('0') << value;
+    return stream.str();
+}
+
+bool path_exists(const std::filesystem::path &path) {
+    std::error_code error{};
+    return std::filesystem::exists(path, error);
+}
+
+bool any_crash_artifact_path_exists(const CrashArtifactPaths &paths) {
+    return path_exists(paths.dump_path) ||
+        path_exists(paths.sidecar_path) ||
+        path_exists(paths.log_path) ||
+        path_exists(paths.handler_entered_path) ||
+        path_exists(paths.dump_failed_path);
+}
+
+bool write_text_file_no_overwrite(
+    const std::filesystem::path &path,
+    const std::string &text,
+    std::string *error_message
+) {
+    std::error_code error{};
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error) {
+        if (error_message != nullptr) {
+            *error_message = error.message();
+        }
+        return false;
+    }
+    if (std::filesystem::exists(path, error)) {
+        if (error_message != nullptr) {
+            *error_message = "Crash artifact already exists: " + utf8_path_string(path);
+        }
+        return false;
+    }
+
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) {
+        if (error_message != nullptr) {
+            *error_message = "Failed to open crash artifact for writing: " + utf8_path_string(path);
+        }
+        return false;
+    }
+    output << text;
+    if (!output) {
+        if (error_message != nullptr) {
+            *error_message = "Failed to finish writing crash artifact: " + utf8_path_string(path);
+        }
+        return false;
+    }
+    return true;
 }
 
 std::string sanitize_message_value(std::string value) {
@@ -568,19 +666,52 @@ std::string selected_dump_type_name() {
     return "normal";
 }
 
-BOOL write_minidump(const std::filesystem::path &dump_path, void *exception_pointers) noexcept {
+unsigned long exception_code_from_pointers(void *exception_pointers) noexcept {
+    if (exception_pointers == nullptr) {
+        return 0UL;
+    }
+    const auto *pointers = static_cast<EXCEPTION_POINTERS *>(exception_pointers);
+    if (pointers->ExceptionRecord == nullptr) {
+        return 0UL;
+    }
+    return static_cast<unsigned long>(pointers->ExceptionRecord->ExceptionCode);
+}
+
+std::string exception_address_from_pointers(void *exception_pointers) {
+    if (exception_pointers == nullptr) {
+        return {};
+    }
+    const auto *pointers = static_cast<EXCEPTION_POINTERS *>(exception_pointers);
+    if (pointers->ExceptionRecord == nullptr) {
+        return {};
+    }
+    std::ostringstream text;
+    text << "0x" << std::hex << reinterpret_cast<std::uintptr_t>(pointers->ExceptionRecord->ExceptionAddress);
+    return text.str();
+}
+
+struct MiniDumpAttemptResult final {
+    bool file_handle_created{false};
+    bool dump_written{false};
+    unsigned long error_code{0};
+};
+
+MiniDumpAttemptResult write_minidump(const std::filesystem::path &dump_path, void *exception_pointers) noexcept {
+    MiniDumpAttemptResult attempt{};
     HANDLE file = CreateFileW(
         dump_path.wstring().c_str(),
         GENERIC_WRITE,
         0,
         nullptr,
-        CREATE_ALWAYS,
+        CREATE_NEW,
         FILE_ATTRIBUTE_NORMAL,
         nullptr
     );
     if (file == INVALID_HANDLE_VALUE) {
-        return FALSE;
+        attempt.error_code = static_cast<unsigned long>(GetLastError());
+        return attempt;
     }
+    attempt.file_handle_created = true;
 
     MINIDUMP_EXCEPTION_INFORMATION exception_info{};
     MINIDUMP_EXCEPTION_INFORMATION *exception_info_ptr = nullptr;
@@ -591,7 +722,7 @@ BOOL write_minidump(const std::filesystem::path &dump_path, void *exception_poin
         exception_info_ptr = &exception_info;
     }
 
-    const BOOL result = MiniDumpWriteDump(
+    const BOOL write_result = MiniDumpWriteDump(
         GetCurrentProcess(),
         GetCurrentProcessId(),
         file,
@@ -600,13 +731,22 @@ BOOL write_minidump(const std::filesystem::path &dump_path, void *exception_poin
         nullptr,
         nullptr
     );
+    if (write_result == FALSE) {
+        attempt.error_code = static_cast<unsigned long>(GetLastError());
+    }
     CloseHandle(file);
-    return result;
+    attempt.dump_written = write_result != FALSE;
+    return attempt;
 }
 
 LONG WINAPI unhandled_exception_filter(EXCEPTION_POINTERS *exception_pointers) {
     (void)write_crash_dump_for_current_process(exception_pointers);
     return EXCEPTION_EXECUTE_HANDLER;
+}
+
+LONG CALLBACK vectored_exception_handler(EXCEPTION_POINTERS *exception_pointers) {
+    (void)write_crash_dump_for_current_process(exception_pointers);
+    return EXCEPTION_CONTINUE_SEARCH;
 }
 
 void terminate_handler() {
@@ -725,6 +865,17 @@ std::filesystem::path raw_default_crash_dump_directory() {
 }
 
 std::string make_crash_file_stem(const std::int64_t unix_seconds, const unsigned long process_id) {
+    return make_crash_file_stem(unix_seconds * 1000, process_id, current_thread_id(), 0U);
+}
+
+std::string make_crash_file_stem(
+    const std::int64_t unix_milliseconds,
+    const unsigned long process_id,
+    const unsigned long thread_id,
+    const unsigned int sequence_number
+) {
+    const std::int64_t unix_seconds = unix_milliseconds / 1000;
+    const int millisecond = static_cast<int>(unix_milliseconds % 1000);
     std::time_t raw_time = static_cast<std::time_t>(unix_seconds);
     std::tm time_parts{};
 #if defined(_WIN32)
@@ -741,7 +892,10 @@ std::string make_crash_file_stem(const std::int64_t unix_seconds, const unsigned
          << two_digit(time_parts.tm_hour)
          << two_digit(time_parts.tm_min)
          << two_digit(time_parts.tm_sec)
-         << "-pid-" << process_id;
+         << '-' << three_digit(millisecond)
+         << "-pid-" << process_id
+         << "-tid-" << thread_id
+         << "-seq-" << four_digit(sequence_number);
     return stem.str();
 }
 
@@ -750,12 +904,52 @@ CrashArtifactPaths make_crash_artifact_paths(
     const std::int64_t unix_seconds,
     const unsigned long process_id
 ) {
-    const auto stem = make_crash_file_stem(unix_seconds, process_id);
+    return make_crash_artifact_paths(directory, unix_seconds * 1000, process_id, current_thread_id(), 0U);
+}
+
+CrashArtifactPaths make_crash_artifact_paths(
+    const std::filesystem::path &directory,
+    const std::int64_t unix_milliseconds,
+    const unsigned long process_id,
+    const unsigned long thread_id,
+    const unsigned int sequence_number
+) {
+    const auto stem = make_crash_file_stem(unix_milliseconds, process_id, thread_id, sequence_number);
     return CrashArtifactPaths{
         .dump_path = directory / (stem + ".dmp"),
         .sidecar_path = directory / (stem + ".json"),
-        .log_path = directory / (stem + ".log.txt")
+        .log_path = directory / (stem + ".log.txt"),
+        .handler_entered_path = directory / (stem + ".handler-entered.txt"),
+        .dump_failed_path = directory / (stem + ".dump-failed.txt")
     };
+}
+
+CrashArtifactPaths choose_available_crash_artifact_paths(
+    const std::filesystem::path &directory,
+    const std::int64_t unix_milliseconds,
+    const unsigned long process_id,
+    const unsigned long thread_id
+) {
+    const unsigned int base_sequence = crash_artifact_sequence_storage().fetch_add(1U);
+    for (unsigned int attempt = 0; attempt < 1000U; ++attempt) {
+        const auto paths = make_crash_artifact_paths(
+            directory,
+            unix_milliseconds,
+            process_id,
+            thread_id,
+            base_sequence + attempt
+        );
+        if (!any_crash_artifact_path_exists(paths)) {
+            return paths;
+        }
+    }
+    return make_crash_artifact_paths(
+        directory,
+        unix_milliseconds,
+        process_id,
+        thread_id,
+        base_sequence + 1000U
+    );
 }
 
 std::string crash_context_to_json(const CrashContextSnapshot &snapshot) {
@@ -852,11 +1046,25 @@ void append_context_json_object(std::ostringstream &json, const CrashContextSnap
 }
 
 std::string crash_context_collection_to_json(const CrashContextCollectionSnapshot &snapshot) {
+    return crash_context_collection_to_json(snapshot, CrashDumpSidecarMetadata{});
+}
+
+std::string crash_context_collection_to_json(
+    const CrashContextCollectionSnapshot &snapshot,
+    const CrashDumpSidecarMetadata &metadata
+) {
     std::ostringstream json;
     json << "{\n";
     append_json_string(json, "schema", "utsure.crash_context.collection.v1", true);
     append_json_string(json, "build_version", snapshot.last_updated_context.build_version, true);
     append_json_string(json, "git_commit", snapshot.last_updated_context.git_commit, true);
+    append_json_bool(json, "handler_entered", metadata.handler_entered, true);
+    append_json_bool(json, "dump_write_success", metadata.dump_write_success, true);
+    append_json_uint(json, "dump_write_error_code", metadata.dump_write_error_code, true);
+    append_json_string(json, "dump_write_error_message", metadata.dump_write_error_message, true);
+    append_json_string(json, "dump_path_attempted", metadata.dump_path_attempted, true);
+    append_json_uint(json, "exception_code", metadata.exception_code, true);
+    append_json_string(json, "exception_address", metadata.exception_address, true);
     append_json_uint(json, "crashing_thread_id", snapshot.crashing_thread_id, true);
     append_json_int(json, "last_updated_runner_slot", snapshot.last_updated_runner_slot, true);
     append_json_int(json, "active_job_count", snapshot.active_job_count, true);
@@ -940,6 +1148,7 @@ void reset_crash_context_for_tests() {
     mutable_runner_contexts().clear();
     last_updated_runner_slot() = -1;
     active_encode_job_count_storage().store(0);
+    exception_dump_already_started().store(false);
     current_thread_runner_slot = -1;
     populate_default_build_fields(mutable_context());
     {
@@ -1198,24 +1407,68 @@ bool write_crash_sidecar_for_test(
     const CrashContextCollectionSnapshot &snapshot,
     std::string *error_message
 ) {
-    std::error_code error{};
-    std::filesystem::create_directories(paths.sidecar_path.parent_path(), error);
-    if (error) {
-        if (error_message != nullptr) {
-            *error_message = error.message();
-        }
-        return false;
-    }
+    return write_crash_sidecar_for_test(paths, snapshot, CrashDumpSidecarMetadata{}, error_message);
+}
 
-    std::ofstream sidecar(paths.sidecar_path, std::ios::binary | std::ios::trunc);
-    if (!sidecar) {
-        if (error_message != nullptr) {
-            *error_message = "Failed to open crash sidecar for writing.";
-        }
-        return false;
-    }
-    sidecar << crash_context_collection_to_json(snapshot);
-    return static_cast<bool>(sidecar);
+bool write_crash_sidecar_for_test(
+    const CrashArtifactPaths &paths,
+    const CrashContextCollectionSnapshot &snapshot,
+    const CrashDumpSidecarMetadata &metadata,
+    std::string *error_message
+) {
+    return write_text_file_no_overwrite(
+        paths.sidecar_path,
+        crash_context_collection_to_json(snapshot, metadata),
+        error_message
+    );
+}
+
+std::string crash_marker_text(
+    const char *marker_name,
+    const CrashContextCollectionSnapshot &snapshot,
+    const CrashDumpSidecarMetadata &metadata
+) {
+    std::ostringstream text;
+    text << "marker=" << marker_name << '\n'
+         << "timestamp_unix_ms=" << current_unix_milliseconds() << '\n'
+         << "pid=" << current_process_id() << '\n'
+         << "tid=" << snapshot.crashing_thread_id << '\n'
+         << "handler_entered=" << (metadata.handler_entered ? 1 : 0) << '\n'
+         << "dump_write_success=" << (metadata.dump_write_success ? 1 : 0) << '\n'
+         << "dump_write_error_code=" << metadata.dump_write_error_code << '\n'
+         << "dump_write_error_message=" << metadata.dump_write_error_message << '\n'
+         << "dump_path_attempted=" << metadata.dump_path_attempted << '\n'
+         << "exception_code=" << metadata.exception_code << '\n'
+         << "exception_address=" << metadata.exception_address << '\n'
+         << "current_stage=" << snapshot.last_updated_context.current_stage << '\n'
+         << "last_log_message=" << snapshot.last_updated_context.last_log_message << '\n';
+    return text.str();
+}
+
+bool write_handler_entered_marker_for_test(
+    const CrashArtifactPaths &paths,
+    const CrashContextCollectionSnapshot &snapshot,
+    const CrashDumpSidecarMetadata &metadata,
+    std::string *error_message
+) {
+    return write_text_file_no_overwrite(
+        paths.handler_entered_path,
+        crash_marker_text("handler_entered", snapshot, metadata),
+        error_message
+    );
+}
+
+bool write_dump_failed_marker_for_test(
+    const CrashArtifactPaths &paths,
+    const CrashContextCollectionSnapshot &snapshot,
+    const CrashDumpSidecarMetadata &metadata,
+    std::string *error_message
+) {
+    return write_text_file_no_overwrite(
+        paths.dump_failed_path,
+        crash_marker_text("dump_failed", snapshot, metadata),
+        error_message
+    );
 }
 
 void configure_crash_log_flushing() noexcept {
@@ -1234,16 +1487,75 @@ void install_crash_handlers() noexcept {
     }
 #if defined(_WIN32)
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
-    SetUnhandledExceptionFilter(unhandled_exception_filter);
+    const auto previous_filter = SetUnhandledExceptionFilter(unhandled_exception_filter);
+    {
+        std::ostringstream text;
+        text << "0x" << std::hex << reinterpret_cast<std::uintptr_t>(previous_filter);
+        previous_unhandled_exception_filter_text() = text.str();
+    }
+    unhandled_exception_filter_installed_storage().store(true);
+    if (AddVectoredExceptionHandler(1, vectored_exception_handler) != nullptr) {
+        vectored_exception_handler_installed_storage().store(true);
+    }
     std::set_terminate(terminate_handler);
+    terminate_handler_installed_storage().store(true);
     std::signal(SIGABRT, signal_handler);
     std::signal(SIGILL, signal_handler);
     std::signal(SIGFPE, signal_handler);
+    signal_handlers_installed_storage().store(true);
 #endif
+}
+
+CrashDumpSetupStatus crash_dump_setup_status() noexcept {
+    CrashDumpSetupStatus status{};
+    status.build_version = current_build_version();
+    status.git_commit = git_commit_from_environment();
+    status.process_id = current_process_id();
+    status.resolved_directory = default_crash_dump_directory();
+    std::error_code error{};
+    status.directory_exists = std::filesystem::exists(status.resolved_directory, error);
+    status.directory_writable = ensure_directory_writable(status.resolved_directory);
+#if defined(_WIN32)
+    status.enabled = true;
+    status.unhandled_exception_filter_installed = unhandled_exception_filter_installed_storage().load();
+    status.vectored_exception_handler_installed = vectored_exception_handler_installed_storage().load();
+    status.terminate_handler_installed = terminate_handler_installed_storage().load();
+    status.signal_handlers_installed = signal_handlers_installed_storage().load();
+    status.previous_unhandled_exception_filter = previous_unhandled_exception_filter_text();
+#else
+    status.enabled = false;
+    status.previous_unhandled_exception_filter = "unsupported";
+#endif
+    return status;
+}
+
+std::string format_crash_dump_setup_log(const CrashDumpSetupStatus &status) {
+    std::ostringstream text;
+    text << "Crash dump writer: enabled=" << (status.enabled ? 1 : 0)
+         << " directory=" << utf8_path_string(status.resolved_directory)
+         << " exists=" << (status.directory_exists ? 1 : 0)
+         << " writable=" << (status.directory_writable ? 1 : 0)
+         << " seh_filter_installed=" << (status.unhandled_exception_filter_installed ? 1 : 0)
+         << " vectored_handler_installed=" << (status.vectored_exception_handler_installed ? 1 : 0)
+         << " terminate_handler_installed=" << (status.terminate_handler_installed ? 1 : 0)
+         << " signal_handlers_installed=" << (status.signal_handlers_installed ? 1 : 0)
+         << " pid=" << status.process_id
+         << " build_version=\"" << status.build_version << '"'
+         << " git_commit=" << status.git_commit
+         << " previous_filter=" << status.previous_unhandled_exception_filter;
+    return text.str();
 }
 
 CrashDumpWriteResult write_crash_dump_for_current_process(void *exception_pointers) noexcept {
     CrashDumpWriteResult result{};
+    result.handler_entered = true;
+    if (exception_pointers != nullptr) {
+        bool already_started = false;
+        if (!exception_dump_already_started().compare_exchange_strong(already_started, true)) {
+            result.error_message = "Crash dump for this exception is already in progress or already written.";
+            return result;
+        }
+    }
     bool expected = false;
     if (!dump_write_in_progress().compare_exchange_strong(expected, true)) {
         result.error_message = "Crash dump write already in progress.";
@@ -1252,46 +1564,96 @@ CrashDumpWriteResult write_crash_dump_for_current_process(void *exception_pointe
     try {
         const unsigned long crashing_thread = current_thread_id();
         const auto dump_directory = crash_dump_directory_for_crash_path();
-        const auto paths = make_crash_artifact_paths(
+        const auto paths = choose_available_crash_artifact_paths(
             dump_directory,
-            current_unix_seconds(),
-            current_process_id()
+            current_unix_milliseconds(),
+            current_process_id(),
+            crashing_thread
         );
         result.paths = paths;
+        auto snapshot = crash_context_collection_snapshot(crashing_thread);
+        CrashDumpSidecarMetadata metadata{
+            .handler_entered = true,
+            .dump_write_success = false,
+            .dump_write_error_code = 0,
+            .dump_write_error_message = {},
+            .dump_path_attempted = utf8_path_string(paths.dump_path)
+        };
+#if defined(_WIN32)
+        metadata.exception_code = exception_code_from_pointers(exception_pointers);
+        metadata.exception_address = exception_address_from_pointers(exception_pointers);
+#endif
+        std::string marker_error{};
+        result.handler_marker_written = write_handler_entered_marker_for_test(
+            paths,
+            snapshot,
+            metadata,
+            &marker_error
+        );
 
 #if defined(_WIN32)
-        result.dump_written = write_minidump(paths.dump_path, exception_pointers) != FALSE;
+        const auto dump_attempt = write_minidump(paths.dump_path, exception_pointers);
+        result.dump_written = dump_attempt.dump_written;
+        result.dump_error_code = dump_attempt.error_code;
         result.dump_type = selected_dump_type_name();
         if (!result.dump_written && result.error_message.empty()) {
-            result.error_message = "MiniDumpWriteDump failed.";
+            result.error_message = dump_attempt.file_handle_created
+                ? "MiniDumpWriteDump failed."
+                : "Failed to create crash dump file.";
         }
 #else
         result.dump_written = false;
         result.dump_type = "unsupported";
+        result.dump_error_code = 0;
         if (result.error_message.empty()) {
             result.error_message = "Crash dumps are only supported on Windows.";
         }
 #endif
-        const auto snapshot = crash_context_collection_snapshot(crashing_thread);
+        metadata.dump_write_success = result.dump_written;
+        metadata.dump_write_error_code = result.dump_error_code;
+        metadata.dump_write_error_message = result.error_message;
+        if (!result.dump_written) {
+            std::string failure_marker_error{};
+            result.failure_marker_written = write_dump_failed_marker_for_test(
+                paths,
+                snapshot,
+                metadata,
+                &failure_marker_error
+            );
+            if (!result.failure_marker_written && result.error_message.empty()) {
+                result.error_message = failure_marker_error;
+            }
+        }
         std::string sidecar_error{};
-        result.sidecar_written = write_crash_sidecar_for_test(paths, snapshot, &sidecar_error);
+        result.sidecar_written = write_crash_sidecar_for_test(paths, snapshot, metadata, &sidecar_error);
         if (!result.sidecar_written && result.error_message.empty()) {
             result.error_message = sidecar_error;
         }
         std::fprintf(
             stderr,
-            "utsure crash dump: dump=%s sidecar=%s type=%s written=%d sidecar_written=%d\n",
+            "utsure crash dump: dump=%s sidecar=%s type=%s handler_marker=%d written=%d sidecar_written=%d failure_marker=%d error=%lu\n",
             utf8_path_string(paths.dump_path).c_str(),
             utf8_path_string(paths.sidecar_path).c_str(),
             result.dump_type.c_str(),
+            result.handler_marker_written ? 1 : 0,
             result.dump_written ? 1 : 0,
-            result.sidecar_written ? 1 : 0
+            result.sidecar_written ? 1 : 0,
+            result.failure_marker_written ? 1 : 0,
+            result.dump_error_code
         );
     } catch (...) {
         result.error_message = "Crash dump writer raised an unexpected exception.";
     }
     dump_write_in_progress().store(false);
     return result;
+}
+
+CrashDumpWriteResult write_diagnostic_dump_now() noexcept {
+    try {
+        update_crash_context(CrashContextUpdate{.current_stage = "manual_diagnostic_dump"});
+    } catch (...) {
+    }
+    return write_crash_dump_for_current_process(nullptr);
 }
 
 }  // namespace utsure::app::crash
