@@ -592,6 +592,19 @@ QBrush foreground_for_state(const MainWindow::UiJobState state) {
     return QBrush(status_color_for_state(state));
 }
 
+QIcon fixed_color_icon_from_pixmap(const QPixmap &pixmap) {
+    QIcon icon;
+    icon.addPixmap(pixmap, QIcon::Normal, QIcon::Off);
+    icon.addPixmap(pixmap, QIcon::Normal, QIcon::On);
+    icon.addPixmap(pixmap, QIcon::Disabled, QIcon::Off);
+    icon.addPixmap(pixmap, QIcon::Disabled, QIcon::On);
+    icon.addPixmap(pixmap, QIcon::Active, QIcon::Off);
+    icon.addPixmap(pixmap, QIcon::Active, QIcon::On);
+    icon.addPixmap(pixmap, QIcon::Selected, QIcon::Off);
+    icon.addPixmap(pixmap, QIcon::Selected, QIcon::On);
+    return icon;
+}
+
 QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size, QString *failure_reason = nullptr) {
     if (resource_path.isEmpty()) {
         if (failure_reason != nullptr) {
@@ -612,7 +625,7 @@ QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size, Q
     const QIcon direct_icon(resource_path);
     const QPixmap direct_pixmap = direct_icon.pixmap(icon_size);
     if (!direct_pixmap.isNull()) {
-        return direct_icon;
+        return fixed_color_icon_from_pixmap(direct_pixmap);
     }
 
     QSvgRenderer renderer(svg_bytes);
@@ -636,7 +649,7 @@ QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size, Q
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
     renderer.render(&painter, QRectF(QPointF(0.0, 0.0), QSizeF(icon_size)));
 
-    return QIcon(pixmap);
+    return fixed_color_icon_from_pixmap(pixmap);
 }
 
 class SourceDropOverlayWidget final : public QWidget {
@@ -1145,9 +1158,13 @@ QPushButton#TimelineButton {
     background: #1e1e26;
     border: 1px solid #2a2a35;
     border-radius: 4px;
-    color: #e2e2e4;
+    color: #ffce2e;
     min-height: 24px;
     padding: 0 7px;
+}
+QPushButton#TimelineButton:disabled {
+    color: #ffce2e;
+    border-color: #2a2a35;
 }
 QLineEdit,
 QComboBox,

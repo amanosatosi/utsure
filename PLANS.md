@@ -43,6 +43,19 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M40 Vertical-resolution output naming token implemented; awaiting GitHub Actions validation.
 - [x] M41 Crash dump writer reliability follow-up implemented; awaiting GitHub Actions validation.
 - [x] M42 First-job subtitle burn-in crash hardening implemented; awaiting GitHub Actions validation.
+- [x] M43 Preview transport yellow icon consistency implemented; awaiting GitHub Actions validation.
+
+### M43 Preview transport yellow icon consistency
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Restore the toolbar and preview transport controls to one yellow icon treatment so add, remove, settings, info, play, stop, frame-step, trim, and jump controls do not mix yellow and white/gray states.
+  * Keep the change limited to existing Qt icon rendering and preview button styling.
+
+Implementation approach:
+  * Preserve loaded SVG pixmaps across normal, active, selected, and disabled `QIcon` modes so Qt does not auto-desaturate the transport icons.
+  * Recolor the remaining frame-step preview SVGs and timeline fallback text to the same gold accent.
 
 ### M42 First-job subtitle burn-in crash hardening
 
