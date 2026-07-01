@@ -42,6 +42,39 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M39 Folder-based automatic output naming implemented; awaiting GitHub Actions validation.
 - [x] M40 Vertical-resolution output naming token implemented; awaiting GitHub Actions validation.
 - [x] M41 Crash dump writer reliability follow-up implemented; awaiting GitHub Actions validation.
+- [x] M42 First-job subtitle burn-in crash hardening implemented; awaiting GitHub Actions validation.
+
+### M42 First-job subtitle burn-in crash hardening
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Treat the reported crash as an intra-job race/lifetime problem rather than stale state from a previous job.
+  * Audit direct libassmod bitmap use, streaming frame ownership, and subtitle worker ordering around subtitle burn-in.
+  * Prefer safe copied subtitle bitmap ownership by default unless a direct mode is explicitly requested.
+  * Add narrow env/debug isolation switches for worker count, synchronous subtitle behavior, copied bitmap mode, direct-bitmap disablement, and global libassmod serialization.
+  * Keep encode behavior, GUI workflow, and unrelated performance work unchanged.
+
+Implementation approach:
+  * First, make app-owned copied subtitle bitmaps the default so no `ASS_ImageRGBA` pointer needs to survive beyond the current render/composite loop.
+  * Second, wire isolation env flags into the existing runtime option and worker-count resolver instead of introducing new scheduling infrastructure.
+  * Third, add low-rate lifecycle/handoff logs through the existing runtime/crash-context callback path.
+  * Fourth, update focused tests/docs and rely on GitHub Actions for compile/CTest validation per repository rules.
+
+Implemented:
+  * Changed subtitle bitmap transfer to app-owned copied mode by default; direct bitmap use remains available only through explicit `UTSURE_SUBTITLE_BITMAP_MODE=direct` unless a force-copy/disable flag is set.
+  * Added isolation flags: `UTSURE_VIDEO_WORKERS=<1-4>`, `UTSURE_SUBTITLE_SYNC=1`, `UTSURE_SUBTITLE_BITMAP_COPY=1`, `UTSURE_DISABLE_DIRECT_SUBTITLE_BITMAPS=1`, and `UTSURE_LIBASS_GLOBAL_LOCK=1`.
+  * Routed `UTSURE_SUBTITLE_SYNC=1` through copied bitmap transfer, serialized subtitle composition, and global libassmod serialization.
+  * Extended libassmod lifecycle diagnostics with bitmap/composition modes and global-lock state.
+  * Added low-rate streaming handoff logs for subtitle composite start/end and encoder submission, including frame id, RGBA buffer pointer/size/stride, native frame pointer, worker/thread id, subtitle modes, and transfer path.
+  * Removed a moved-from frame log read in the encoder submission path by capturing the source codec name before `push_frame(std::move(...))`.
+  * Added runtime resolver assertions for copied default, direct opt-in, force-copy flags, sync mode, and video worker override.
+  * Extended stress/reproducer CTest registration with the reported timestamp repeat and explicit `UTSURE_VIDEO_WORKERS=2` copied/direct serialized stress runs.
+  * Updated architecture docs to describe copied ownership as the normal subtitle tile path and list crash-isolation env flags.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included `git diff --check` and targeted searches for stale direct-mode expectations, ASS image pointer handling, new env flags, and handoff diagnostics.
 
 ### M41 Crash dump writer reliability follow-up
 

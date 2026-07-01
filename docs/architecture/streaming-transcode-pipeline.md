@@ -104,9 +104,17 @@ For stream-copy audio:
 Subtitle tiles are owned only for one frame render/composite pass:
 
 1. `ass_render_frame_rgba(...)` returns libassmod-owned RGBA images.
-2. The adapter normally trusts those libassmod images and blends them directly into the current frame.
-3. `ass_free_images_rgba(...)` releases the libassmod allocation after the frame composite pass.
-4. A copied-bitmap isolation mode remains available through `UTSURE_SUBTITLE_BITMAP_MODE=copied`.
+2. The adapter normally deep-copies drawable libassmod images into app-owned bitmap buffers before blending them into the current frame.
+3. `ass_free_images_rgba(...)` releases the libassmod allocation after the frame render/composite pass; no libassmod image pointer is stored in a queue or returned to downstream workers.
+4. A direct-bitmap performance path remains available only through `UTSURE_SUBTITLE_BITMAP_MODE=direct`.
+
+Subtitle crash isolation flags:
+
+- `UTSURE_VIDEO_WORKERS=<1-4>` overrides host-side video worker planning; use `1` for single-worker isolation.
+- `UTSURE_SUBTITLE_SYNC=1` forces serialized subtitle composition, copied subtitle bitmaps, and global libassmod call serialization.
+- `UTSURE_SUBTITLE_BITMAP_COPY=1` forces app-owned copied subtitle bitmaps.
+- `UTSURE_DISABLE_DIRECT_SUBTITLE_BITMAPS=1` ignores direct-bitmap requests and keeps copied mode.
+- `UTSURE_LIBASS_GLOBAL_LOCK=1` serializes libassmod setup, render, image-free, image-tag, and teardown calls across sessions.
 
 ## Audio Rules
 

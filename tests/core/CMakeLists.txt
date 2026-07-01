@@ -662,6 +662,11 @@ target_link_libraries(utsure_core_encode_job_tests
         utsure::encoder_core
 )
 
+target_include_directories(utsure_core_encode_job_tests
+    PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/core/src"
+)
+
 target_compile_features(utsure_core_encode_job_tests PRIVATE cxx_std_20)
 
 utsure_enable_warnings(utsure_core_encode_job_tests)
@@ -1288,6 +1293,19 @@ add_test(
             1204800000
 )
 
+add_test(
+    NAME utsure.core.subtitles.libassmod.rgba_reproducer.repeat.reported_timestamp
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_LIBASSMOD_REPRO_REPEAT=200
+        utsure_core_libassmod_rgba_reproducer --rgba
+            "${UTSURE_SUBTITLE_BS4_FORCED_RGBA_SAMPLE_FILE}"
+            320
+            180
+            1
+            1
+            1138596000
+)
+
 add_executable(utsure_core_subtitle_bitmap_compositor_tests
     subtitle_bitmap_compositor_tests.cpp
 )
@@ -1573,6 +1591,7 @@ utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.timeline
 add_test(
     NAME utsure.core.subtitles.burn_in.stress.copied_serialized.h264
     COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_VIDEO_WORKERS=2
         UTSURE_SUBTITLE_BITMAP_MODE=copied
         UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
         utsure_core_subtitle_burn_in_tests --stress-h264
@@ -1586,6 +1605,7 @@ utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.stress.c
 add_test(
     NAME utsure.core.subtitles.burn_in.stress.direct_serialized.h264
     COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_VIDEO_WORKERS=2
         UTSURE_SUBTITLE_BITMAP_MODE=direct
         UTSURE_SUBTITLE_COMPOSITION_MODE=serialized
         utsure_core_subtitle_burn_in_tests --stress-h264

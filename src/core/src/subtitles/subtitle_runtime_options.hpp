@@ -27,7 +27,7 @@ enum class SubtitleDiagnosticsMode : std::uint8_t {
 };
 
 struct SubtitleRuntimeOptions final {
-    SubtitleBitmapTransferMode bitmap_transfer_mode{SubtitleBitmapTransferMode::direct};
+    SubtitleBitmapTransferMode bitmap_transfer_mode{SubtitleBitmapTransferMode::copied};
     SubtitleCompositionMode composition_mode{SubtitleCompositionMode::serialized};
     SubtitleDiagnosticsMode diagnostics_mode{SubtitleDiagnosticsMode::off};
 };
@@ -62,14 +62,27 @@ inline bool environment_flag_enabled(const char *name) noexcept {
     return *value == "1" || *value == "true" || *value == "on" || *value == "yes";
 }
 
+inline bool copied_bitmap_mode_forced() noexcept {
+    return environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ||
+        environment_flag_enabled("UTSURE_SUBTITLE_SYNC") ||
+        environment_flag_enabled("UTSURE_SUBTITLE_BITMAP_COPY") ||
+        environment_flag_enabled("UTSURE_DISABLE_DIRECT_SUBTITLE_BITMAPS");
+}
+
+inline bool global_libass_lock_enabled() noexcept {
+    return environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ||
+        environment_flag_enabled("UTSURE_SUBTITLE_SYNC") ||
+        environment_flag_enabled("UTSURE_LIBASS_GLOBAL_LOCK");
+}
+
 inline SubtitleBitmapTransferMode resolve_bitmap_transfer_mode() noexcept {
-    if (environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE")) {
+    if (copied_bitmap_mode_forced()) {
         return SubtitleBitmapTransferMode::copied;
     }
 
     const auto value = read_environment_variable("UTSURE_SUBTITLE_BITMAP_MODE");
     if (!value.has_value()) {
-        return SubtitleBitmapTransferMode::direct;
+        return SubtitleBitmapTransferMode::copied;
     }
 
     if (*value == "direct" || *value == "raw") {
@@ -80,11 +93,12 @@ inline SubtitleBitmapTransferMode resolve_bitmap_transfer_mode() noexcept {
         return SubtitleBitmapTransferMode::copied;
     }
 
-    return SubtitleBitmapTransferMode::direct;
+    return SubtitleBitmapTransferMode::copied;
 }
 
 inline SubtitleCompositionMode resolve_composition_mode() noexcept {
-    if (environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE")) {
+    if (environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ||
+        environment_flag_enabled("UTSURE_SUBTITLE_SYNC")) {
         return SubtitleCompositionMode::serialized;
     }
 

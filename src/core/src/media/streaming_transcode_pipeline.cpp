@@ -931,7 +931,24 @@ StreamingRuntimeBehavior resolve_streaming_runtime_behavior(
     const int requested_encoder_thread_count = detail::sanitize_thread_override(threading.encoder_thread_count_override) > 0
         ? detail::sanitize_thread_override(threading.encoder_thread_count_override)
         : default_thread_count;
-    const auto video_worker_count = detail::choose_video_processing_worker_count(threading, effective_core_count);
+    const auto parse_worker_override = [](const char *name) -> std::optional<std::size_t> {
+        const char *value = std::getenv(name);
+        if (value == nullptr || value[0] == '\0') {
+            return std::nullopt;
+        }
+
+        char *end = nullptr;
+        const long parsed_value = std::strtol(value, &end, 10);
+        if (end == value || parsed_value <= 0L) {
+            return std::nullopt;
+        }
+
+        return static_cast<std::size_t>(std::clamp<long>(parsed_value, 1L, 4L));
+    };
+    const auto requested_video_worker_count = parse_worker_override("UTSURE_VIDEO_WORKERS");
+    const auto video_worker_count = requested_video_worker_count.value_or(
+        detail::choose_video_processing_worker_count(threading, effective_core_count)
+    );
     const auto subtitle_worker_count =
         subtitle_runtime_options.composition_mode == subtitles::runtime::SubtitleCompositionMode::worker_local
             ? video_worker_count
@@ -2157,6 +2174,29 @@ struct VideoProcessTask final {
     Rational normalized_sample_aspect_ratio{1, 1};
 };
 
+bool should_log_frame_handoff_diagnostics(const std::int64_t frame_index) noexcept {
+    return frame_index >= 0 && (frame_index < 5 || (frame_index % 300) == 0);
+}
+
+std::string pointer_to_string(const void *pointer) {
+    std::ostringstream stream;
+    stream << pointer;
+    return stream.str();
+}
+
+std::string streaming_frame_buffer_identity(const StreamingVideoFrame &frame) {
+    std::ostringstream stream;
+    stream << "frame_buffer_id=" << frame.metadata.frame_index
+           << ", rgba_buffer="
+           << (frame.metadata.planes.empty()
+                   ? std::string("null")
+                   : pointer_to_string(frame.metadata.planes.front().bytes.data()))
+           << ", rgba_bytes=" << (frame.metadata.planes.empty() ? 0U : frame.metadata.planes.front().bytes.size())
+           << ", rgba_stride=" << (frame.metadata.planes.empty() ? 0 : frame.metadata.planes.front().line_stride_bytes)
+           << ", native_frame=" << pointer_to_string(frame.native_frame.get());
+    return stream.str();
+}
+
 class ParallelVideoFrameProcessor final {
 public:
     struct SubtitleWorkerSessionTemplate final {
@@ -2170,6 +2210,8 @@ public:
         std::function<void(const std::string &)> log_callback{};
         std::function<void(const std::string &)> warning_callback{};
         std::function<void(const std::string &)> lifecycle_callback{};
+        std::string bitmap_mode{};
+        std::string composition_mode{};
     };
 
     struct WorkerSubtitleSession final {
@@ -2406,6 +2448,23 @@ private:
                     };
 
                     const auto subtitle_start = std::chrono::steady_clock::now();
+                    const bool log_handoff =
+                        should_log_frame_handoff_diagnostics(task.output.frame.metadata.frame_index) &&
+                        subtitle_diagnostics_.has_value() &&
+                        static_cast<bool>(subtitle_diagnostics_->log_callback);
+                    if (log_handoff) {
+                        std::ostringstream message;
+                        message << "Subtitle composite start: frame="
+                                << task.output.frame.metadata.frame_index
+                                << ", pts_us=" << *task.subtitle_timestamp_microseconds
+                                << ", worker_id=" << worker_id
+                                << ", thread_id=" << std::this_thread::get_id()
+                                << ", " << streaming_frame_buffer_identity(task.output.frame)
+                                << ", frame_transfer_path=sws_scale"
+                                << ", bitmap_mode=" << subtitle_diagnostics_->bitmap_mode
+                                << ", composition_mode=" << subtitle_diagnostics_->composition_mode << '.';
+                        subtitle_diagnostics_->log_callback(message.str());
+                    }
                     const auto compose_result = subtitle_session.session->compose_into_frame(
                         task.output.frame.metadata,
                         subtitles::SubtitleRenderRequest{
@@ -2424,6 +2483,20 @@ private:
                     subtitle_duration = std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::steady_clock::now() - subtitle_start
                     ).count();
+                    if (log_handoff) {
+                        std::ostringstream message;
+                        message << "Subtitle composite end: frame="
+                                << task.output.frame.metadata.frame_index
+                                << ", pts_us=" << *task.subtitle_timestamp_microseconds
+                                << ", worker_id=" << worker_id
+                                << ", thread_id=" << std::this_thread::get_id()
+                                << ", subtitles_applied=" << (task.output.subtitles_applied ? 1 : 0)
+                                << ", duration_us=" << std::max<long long>(subtitle_duration, 0)
+                                << ", " << streaming_frame_buffer_identity(task.output.frame)
+                                << ", bitmap_mode=" << subtitle_diagnostics_->bitmap_mode
+                                << ", composition_mode=" << subtitle_diagnostics_->composition_mode << '.';
+                        subtitle_diagnostics_->log_callback(message.str());
+                    }
                 }
 
                 {
@@ -4374,7 +4447,9 @@ SegmentProcessResult process_segment(
                 .log_bitmap_details = runtime_behavior.subtitle_diagnostics_mode == "verbose",
                 .log_callback = log_callback,
                 .warning_callback = warning_callback,
-                .lifecycle_callback = crash_context_callback
+                .lifecycle_callback = crash_context_callback,
+                .bitmap_mode = runtime_behavior.subtitle_bitmap_mode,
+                .composition_mode = runtime_behavior.subtitle_composition_mode
             },
             cancellation_requested
         );
@@ -4770,7 +4845,28 @@ SegmentProcessResult process_segment(
         failure_context.pts = timing.output_pts;
         failure_context.pts_us = rescale_to_microseconds(timing.output_pts, timeline_plan.output_video_time_base);
 
+        const auto source_codec_name_for_log = video_frame.source_codec_name;
         const auto encode_start = std::chrono::steady_clock::now();
+        if (should_log_frame_handoff_diagnostics(next_output_frame_index)) {
+            emit_runtime_log(
+                log_callback,
+                "Encoder submission: frame=" + std::to_string(next_output_frame_index) +
+                    ", pts=" + std::to_string(timing.output_pts) +
+                    ", pts_us=" + std::to_string(*failure_context.pts_us) +
+                    ", source_codec=" + source_codec_name_for_log +
+                    ", subtitles_applied=" + std::to_string(queued_video_frame.subtitles_applied ? 1 : 0) +
+                    ", thread_id=" + [&]() {
+                        std::ostringstream stream;
+                        stream << std::this_thread::get_id();
+                        return stream.str();
+                    }() +
+                    ", " + streaming_frame_buffer_identity(video_frame) +
+                    ", frame_transfer_path=" +
+                    (queued_video_frame.subtitles_applied || segment_uses_subtitle_path ? "sws_scale" : "native_or_sws_scale") +
+                    ", bitmap_mode=" + runtime_behavior.subtitle_bitmap_mode +
+                    ", composition_mode=" + runtime_behavior.subtitle_composition_mode + "."
+            );
+        }
         output_session.push_frame(std::move(video_frame));
         failure_context.stage = "mux_stage";
         add_stage_timing(performance_metrics.video_encode, std::chrono::steady_clock::now() - encode_start);
@@ -4790,7 +4886,7 @@ SegmentProcessResult process_segment(
                     ", frame=" + std::to_string(next_output_frame_index) +
                     ", pts=" + std::to_string(timing.output_pts) +
                     ", pts_us=" + std::to_string(*failure_context.pts_us) +
-                    ", source_codec=" + video_frame.source_codec_name +
+                    ", source_codec=" + source_codec_name_for_log +
                     ", video_queue_depth=" + std::to_string(video_frame_processor ? video_frame_processor->outstanding_count() : 0U) +
                     ", audio_queue_depth=" + std::to_string(decoded_audio_queue.size()) +
                     ", decoder_threads=" + std::to_string(resources.video_decoder_thread_count) +

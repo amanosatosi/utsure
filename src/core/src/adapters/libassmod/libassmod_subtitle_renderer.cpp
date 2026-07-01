@@ -321,7 +321,7 @@ std::mutex &libassmod_global_mutex() {
 }
 
 bool should_serialize_all_libassmod_calls() noexcept {
-    return runtime::environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE");
+    return runtime::global_libass_lock_enabled();
 }
 
 template <typename Callback>
@@ -824,7 +824,10 @@ public:
                 << ", subtitle_renderer_created_thread_id=" << created_thread_id_
                 << ", last_subtitle_event_count=" << track_->n_events
                 << ", registered_image_asset_count=" << image_assets_.size()
-                << ", safe_mode=" << (runtime::environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ? 1 : 0);
+                << ", safe_mode=" << (runtime::environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ? 1 : 0)
+                << ", global_libass_lock=" << (runtime::global_libass_lock_enabled() ? 1 : 0)
+                << ", bitmap_transfer_mode=" << runtime::to_string(runtime_options_.bitmap_transfer_mode)
+                << ", composition_mode=" << runtime::to_string(runtime_options_.composition_mode);
         quirk_messages_.push_back(message.str());
         quirk_messages_.push_back(
             "ass_read_file success: path=" + subtitle_path_string_ +
@@ -1177,7 +1180,10 @@ private:
                 << ", last_subtitle_event_count=" << (track_ != nullptr ? track_->n_events : 0)
                 << ", registered_image_asset_count=" << image_assets_.size();
         message << ", subtitle_cleanup_started=" << (cleanup_started_.load(std::memory_order_acquire) ? 1 : 0)
-                << ", safe_mode=" << (runtime::environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ? 1 : 0);
+                << ", safe_mode=" << (runtime::environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ? 1 : 0)
+                << ", global_libass_lock=" << (runtime::global_libass_lock_enabled() ? 1 : 0)
+                << ", bitmap_transfer_mode=" << runtime::to_string(runtime_options_.bitmap_transfer_mode)
+                << ", composition_mode=" << runtime::to_string(runtime_options_.composition_mode);
         if (!image_assets_.empty()) {
             message << ", last_registered_image_asset_name=" << image_assets_.back().name
                     << ", last_registered_image_asset_path=" << path_to_utf8_string(image_assets_.back().source_path);

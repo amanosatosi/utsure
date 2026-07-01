@@ -439,18 +439,48 @@ std::string lowercase_ascii(std::string value) {
 }
 
 std::string current_subtitle_bitmap_mode() {
+    const auto forced_flag_enabled = [](const char *name) {
+        const char *raw = std::getenv(name);
+        if (raw == nullptr || raw[0] == '\0') {
+            return false;
+        }
+
+        const auto normalized = lowercase_ascii(std::string(raw));
+        return normalized == "1" || normalized == "true" || normalized == "on" || normalized == "yes";
+    };
+    if (forced_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ||
+        forced_flag_enabled("UTSURE_SUBTITLE_SYNC") ||
+        forced_flag_enabled("UTSURE_SUBTITLE_BITMAP_COPY") ||
+        forced_flag_enabled("UTSURE_DISABLE_DIRECT_SUBTITLE_BITMAPS")) {
+        return "copied";
+    }
+
     const char *value = std::getenv("UTSURE_SUBTITLE_BITMAP_MODE");
     if (value == nullptr || value[0] == '\0') {
-        return "direct";
+        return "copied";
     }
 
     const auto normalized = lowercase_ascii(std::string(value));
-    return (normalized == "copied" || normalized == "copy" || normalized == "isolated")
-        ? "copied"
-        : "direct";
+    return (normalized == "direct" || normalized == "raw")
+        ? "direct"
+        : "copied";
 }
 
 std::string current_subtitle_composition_mode() {
+    const auto forced_flag_enabled = [](const char *name) {
+        const char *raw = std::getenv(name);
+        if (raw == nullptr || raw[0] == '\0') {
+            return false;
+        }
+
+        const auto normalized = lowercase_ascii(std::string(raw));
+        return normalized == "1" || normalized == "true" || normalized == "on" || normalized == "yes";
+    };
+    if (forced_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ||
+        forced_flag_enabled("UTSURE_SUBTITLE_SYNC")) {
+        return "serialized";
+    }
+
     const char *value = std::getenv("UTSURE_SUBTITLE_COMPOSITION_MODE");
     if (value == nullptr || value[0] == '\0') {
         return "serialized";

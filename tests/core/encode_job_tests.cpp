@@ -4,6 +4,7 @@
 #include "utsure/core/job/encode_job_report.hpp"
 #include "utsure/core/media/media_decoder.hpp"
 #include "utsure/core/media/media_inspector.hpp"
+#include "media/streaming_transcode_pipeline.hpp"
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -60,6 +61,35 @@ int fail(std::string_view message) {
 bool contains_text(const std::string &text, std::string_view needle) {
     return text.find(needle) != std::string::npos;
 }
+
+void set_env_var(const char *name, const std::string &value) {
+#if defined(_WIN32)
+    _putenv_s(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
+}
+
+void unset_env_var(const char *name) {
+#if defined(_WIN32)
+    _putenv_s(name, "");
+#else
+    unsetenv(name);
+#endif
+}
+
+struct ScopedEnvVar final {
+    ScopedEnvVar(const char *name_value, std::string value)
+        : name(name_value) {
+        set_env_var(name, value);
+    }
+
+    ~ScopedEnvVar() {
+        unset_env_var(name);
+    }
+
+    const char *name{};
+};
 
 struct CollectingObserver final : EncodeJobObserver {
     std::vector<EncodeJobProgress> progress_updates{};
@@ -672,7 +702,7 @@ int assert_runtime_visibility(
         !contains_text(report, "streaming.subtitle_workers=1") ||
         !contains_text(report, "streaming.video_queue_frames=70") ||
         !contains_text(report, "streaming.audio_queue_blocks=8") ||
-        !contains_text(report, "streaming.subtitle.bitmap_mode=direct") ||
+        !contains_text(report, "streaming.subtitle.bitmap_mode=copied") ||
         !contains_text(report, "streaming.subtitle.composition_mode=serialized") ||
         !contains_text(report, "streaming.subtitle.diagnostics_mode=off") ||
         !contains_text(report, "streaming.performance.total_elapsed_ms=") ||
@@ -686,7 +716,7 @@ int assert_runtime_visibility(
         observer_logs_contain_text(observer, "encoder threads FFmpeg auto threads") ||
         !observer_logs_contain_text(observer, "subtitle workers 1") ||
         !observer_logs_contain_text(observer, "video queue 70 frames") ||
-        !observer_logs_contain_text(observer, "subtitle bitmap mode direct") ||
+        !observer_logs_contain_text(observer, "subtitle bitmap mode copied") ||
         !observer_logs_contain_text(observer, "subtitle composition mode serialized") ||
         !observer_logs_contain_text(observer, "subtitle diagnostics off") ||
         !observer_logs_contain_text(observer, "priority Below Normal") ||
@@ -746,6 +776,18 @@ int assert_final_average_progress_metrics(
 }
 
 int run_threading_mode_selection_assertion() {
+    const auto clear_runtime_env = []() {
+        unset_env_var("UTSURE_VIDEO_WORKERS");
+        unset_env_var("UTSURE_SUBTITLE_SAFE_MODE");
+        unset_env_var("UTSURE_SUBTITLE_SYNC");
+        unset_env_var("UTSURE_SUBTITLE_BITMAP_COPY");
+        unset_env_var("UTSURE_DISABLE_DIRECT_SUBTITLE_BITMAPS");
+        unset_env_var("UTSURE_LIBASS_GLOBAL_LOCK");
+        unset_env_var("UTSURE_SUBTITLE_BITMAP_MODE");
+        unset_env_var("UTSURE_SUBTITLE_COMPOSITION_MODE");
+    };
+    clear_runtime_env();
+
     const auto conservative_count = utsure::core::media::resolve_requested_ffmpeg_thread_count(
         utsure::core::media::TranscodeThreadingSettings{
             .cpu_usage_mode = CpuUsageMode::conservative
@@ -780,6 +822,93 @@ int run_threading_mode_selection_assertion() {
     if (auto_count != 4) {
         return fail("Auto CPU mode should use the safer capped FFmpeg thread count by default.");
     }
+
+    const auto default_runtime = utsure::core::media::streaming::resolve_streaming_runtime_behavior(
+        utsure::core::media::TranscodeThreadingSettings{
+            .cpu_usage_mode = CpuUsageMode::auto_select,
+            .logical_core_count_override = 8U
+        }
+    );
+    if (default_runtime.video_processing_worker_count != 2U ||
+        default_runtime.subtitle_processing_worker_count != 1U ||
+        default_runtime.subtitle_bitmap_mode != "copied" ||
+        default_runtime.subtitle_composition_mode != "serialized") {
+        return fail("Default streaming runtime did not use copied serialized subtitle isolation.");
+    }
+
+    {
+        ScopedEnvVar direct_mode("UTSURE_SUBTITLE_BITMAP_MODE", "direct");
+        const auto direct_runtime = utsure::core::media::streaming::resolve_streaming_runtime_behavior(
+            utsure::core::media::TranscodeThreadingSettings{
+                .cpu_usage_mode = CpuUsageMode::auto_select,
+                .logical_core_count_override = 8U
+            }
+        );
+        if (direct_runtime.subtitle_bitmap_mode != "direct") {
+            return fail("Direct subtitle bitmap mode was not available through the explicit env opt-in.");
+        }
+    }
+
+    {
+        ScopedEnvVar direct_mode("UTSURE_SUBTITLE_BITMAP_MODE", "direct");
+        ScopedEnvVar force_copy("UTSURE_SUBTITLE_BITMAP_COPY", "1");
+        const auto copied_runtime = utsure::core::media::streaming::resolve_streaming_runtime_behavior(
+            utsure::core::media::TranscodeThreadingSettings{
+                .cpu_usage_mode = CpuUsageMode::auto_select,
+                .logical_core_count_override = 8U
+            }
+        );
+        if (copied_runtime.subtitle_bitmap_mode != "copied") {
+            return fail("Subtitle bitmap copy flag did not force copied mode.");
+        }
+    }
+
+    {
+        ScopedEnvVar direct_mode("UTSURE_SUBTITLE_BITMAP_MODE", "direct");
+        ScopedEnvVar disable_direct("UTSURE_DISABLE_DIRECT_SUBTITLE_BITMAPS", "1");
+        const auto copied_runtime = utsure::core::media::streaming::resolve_streaming_runtime_behavior(
+            utsure::core::media::TranscodeThreadingSettings{
+                .cpu_usage_mode = CpuUsageMode::auto_select,
+                .logical_core_count_override = 8U
+            }
+        );
+        if (copied_runtime.subtitle_bitmap_mode != "copied") {
+            return fail("Direct subtitle bitmap disable flag did not force copied mode.");
+        }
+    }
+
+    {
+        ScopedEnvVar worker_override("UTSURE_VIDEO_WORKERS", "1");
+        ScopedEnvVar worker_local("UTSURE_SUBTITLE_COMPOSITION_MODE", "worker_local");
+        const auto single_worker_runtime = utsure::core::media::streaming::resolve_streaming_runtime_behavior(
+            utsure::core::media::TranscodeThreadingSettings{
+                .cpu_usage_mode = CpuUsageMode::auto_select,
+                .logical_core_count_override = 8U
+            }
+        );
+        if (single_worker_runtime.video_processing_worker_count != 1U ||
+            single_worker_runtime.subtitle_processing_worker_count != 1U ||
+            single_worker_runtime.subtitle_composition_mode != "worker_local") {
+            return fail("Video worker override did not clamp worker-local runtime planning.");
+        }
+    }
+
+    {
+        ScopedEnvVar worker_local("UTSURE_SUBTITLE_COMPOSITION_MODE", "worker_local");
+        ScopedEnvVar sync_mode("UTSURE_SUBTITLE_SYNC", "1");
+        const auto sync_runtime = utsure::core::media::streaming::resolve_streaming_runtime_behavior(
+            utsure::core::media::TranscodeThreadingSettings{
+                .cpu_usage_mode = CpuUsageMode::auto_select,
+                .logical_core_count_override = 8U
+            }
+        );
+        if (sync_runtime.subtitle_bitmap_mode != "copied" ||
+            sync_runtime.subtitle_composition_mode != "serialized" ||
+            sync_runtime.subtitle_processing_worker_count != 1U) {
+            return fail("Subtitle sync mode did not force copied serialized subtitle runtime planning.");
+        }
+    }
+    clear_runtime_env();
 
     const auto final_metrics = calculate_final_encode_metrics(
         240,
