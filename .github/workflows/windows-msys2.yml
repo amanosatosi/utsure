@@ -24,7 +24,7 @@ jobs:
         --disable-debug --disable-doc --disable-ffplay --disable-programs --enable-ffmpeg --enable-ffprobe
       UTSURE_FONTCOLLECTOR_VERSION: "4.0.2"
       UTSURE_PYINSTALLER_VERSION: "6.19.0"
-      UTSURE_LIBASSMOD_REF: "88a338192faf50505eb4cedfe7d1320265f1081f"
+      UTSURE_LIBASSMOD_REF: "mangetsu"
       UTSURE_PORTABLE_BUNDLE_NAME: encoder-windows-x64-portable
       UTSURE_CTEST_ARGS: "-LE slow"
 

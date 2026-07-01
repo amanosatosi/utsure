@@ -38,7 +38,7 @@ cmake -S . -B "${build_dir}" -G Ninja \
   -DCMAKE_BUILD_TYPE="${cmake_build_type}" \
   -DCMAKE_PREFIX_PATH="${msys2_prefix}" \
   -DUTSURE_BUILD_APP="${build_app}" \
-  -DUTSURE_LIBASSMOD_REF="${UTSURE_LIBASSMOD_REF:-88a338192faf50505eb4cedfe7d1320265f1081f}" \
+  -DUTSURE_LIBASSMOD_REF="${UTSURE_LIBASSMOD_REF:-mangetsu}" \
   -DUTSURE_ENABLE_DEPENDENCY_AUDIT=ON \
   -DUTSURE_REQUIRE_FFMPEG=ON \
   -DUTSURE_FFMPEG_ROOT="${ffmpeg_prefix}" \

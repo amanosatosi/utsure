@@ -44,6 +44,20 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M41 Crash dump writer reliability follow-up implemented; awaiting GitHub Actions validation.
 - [x] M42 First-job subtitle burn-in crash hardening implemented; awaiting GitHub Actions validation.
 - [x] M43 Preview transport yellow icon consistency implemented; awaiting GitHub Actions validation.
+- [x] M44 libassmod mangetsu branch switch implemented; awaiting GitHub Actions validation.
+
+### M44 libassmod mangetsu branch switch
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Change the CI/default libassmod source ref from the previous mainline commit pin to the `mangetsu` branch.
+  * Keep the change limited to dependency acquisition, diagnostic ref propagation, and setup/dependency documentation.
+
+Implementation approach:
+  * Set the workflow and local CI script defaults to `UTSURE_LIBASSMOD_REF=mangetsu`.
+  * Resolve branch refs through `origin/<branch>` after fetch so reused dependency checkouts do not silently build a stale local branch.
+  * Update Windows setup and dependency docs to describe the `mangetsu` branch source.
 
 ### M43 Preview transport yellow icon consistency
 
@@ -121,7 +135,7 @@ Validation:
 - Output frame rate always follows the main source video.
 - Correctness comes before performance work.
 - Windows build validation is currently anchored in GitHub Actions because the local machine does not expose a Qt-capable compiler toolchain.
-- `libassmod` is currently treated as a pinned source dependency built into an isolated prefix, currently pointed at the Aegisub-tested upstream commit `88a338192faf50505eb4cedfe7d1320265f1081f`, because it installs as a `libass`-compatible package name rather than a uniquely named `libassmod` package.
+- `libassmod` is currently treated as a source dependency built into an isolated prefix, currently pointed at the upstream `mangetsu` branch, because it installs as a `libass`-compatible package name rather than a uniquely named `libassmod` package.
 - Media inspection was intentionally pulled ahead of broader project/timeline contracts because those contracts need real stream metadata and explicit cadence fields instead of placeholder assumptions.
 - The decode and normalized processing milestone is also being pulled ahead of the broader project/timeline contracts by explicit user request, but it remains limited to the main source path only.
 - The software encoding backend milestone is also being pulled ahead of the broader project/timeline and session-orchestration milestones by explicit user request, and it remains limited to the main-source decoded video path with minimal codec configuration.

@@ -6,7 +6,7 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 third_party_root="${UTSURE_THIRD_PARTY_ROOT:-${project_root}/.deps}"
 libassmod_root="${third_party_root}/libassmod"
 libassmod_repo_url="${UTSURE_LIBASSMOD_SOURCE_URL:-https://github.com/amanosatosi/libassmod.git}"
-libassmod_ref="${UTSURE_LIBASSMOD_REF:-88a338192faf50505eb4cedfe7d1320265f1081f}"
+libassmod_ref="${UTSURE_LIBASSMOD_REF:-mangetsu}"
 libassmod_source_dir="${UTSURE_LIBASSMOD_SOURCE_DIR:-${libassmod_root}/src}"
 libassmod_build_dir="${UTSURE_LIBASSMOD_BUILD_DIR:-${libassmod_root}/build}"
 libassmod_prefix="${UTSURE_LIBASSMOD_PREFIX:-${libassmod_root}/prefix}"
@@ -26,7 +26,12 @@ else
   git -C "${libassmod_source_dir}" clean -fdx
 fi
 
-if ! git -C "${libassmod_source_dir}" checkout --force "${libassmod_ref}"; then
+libassmod_checkout_ref="${libassmod_ref}"
+if git -C "${libassmod_source_dir}" rev-parse --verify --quiet "origin/${libassmod_ref}^{commit}" >/dev/null; then
+  libassmod_checkout_ref="origin/${libassmod_ref}"
+fi
+
+if ! git -C "${libassmod_source_dir}" checkout --force "${libassmod_checkout_ref}"; then
   echo "Failed to resolve libassmod ref '${libassmod_ref}'. Check .github/workflows/windows-msys2.yml and ensure the ref is reachable from ${libassmod_repo_url}."
   exit 1
 fi

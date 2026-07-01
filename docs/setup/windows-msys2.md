@@ -37,7 +37,7 @@ pacman -S --needed \
 From a clean repository checkout:
 
 ```bash
-export UTSURE_LIBASSMOD_REF=88a338192faf50505eb4cedfe7d1320265f1081f
+export UTSURE_LIBASSMOD_REF=mangetsu
 export UTSURE_FFMPEG_VERSION=7.1.2
 export UTSURE_FFMS2_REF=25cef14386fcaaa58ee547065deee8f6e82c56a2
 ./scripts/ci/windows-msys2-build-ffmpeg.sh
@@ -51,7 +51,7 @@ What that does:
 
 - builds the pinned FFmpeg 7.1.2 source dependency into `.deps/ffmpeg/prefix`
 - builds the pinned FFMS2 preview dependency into `.deps/ffms2/prefix`
-- builds the pinned `libassmod` source dependency into `.deps/libassmod/prefix`
+- builds the `libassmod` source dependency from the `mangetsu` branch into `.deps/libassmod/prefix`
 - audits configure-time dependency discovery before the main build
 - configures `build/` with CMake and Ninja
 - builds the core library, desktop app, and core test executables
