@@ -46,6 +46,22 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M43 Preview transport yellow icon consistency implemented; awaiting GitHub Actions validation.
 - [x] M44 libassmod mangetsu branch switch implemented; awaiting GitHub Actions validation.
 - [x] M45 Subtitle renderer timestamp epsilon audit implemented; awaiting GitHub Actions validation.
+- [x] M46 Busy indicator yellow circle color implemented; awaiting GitHub Actions validation.
+
+### M46 Busy indicator yellow circle color
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Change only the top-right start/encode busy indicator circle color to the app's established gold accent.
+  * Do not change layout, icon size, animation timing, progress semantics, or encode behavior.
+
+Implemented:
+  * Changed the busy indicator track from the previous purple accent to `#ffce2e` with the existing transparency, matching the rest of the app's yellow treatment.
+
+Validation:
+  * Local compile/run was not performed because repository instructions reserve build and test validation for GitHub Actions.
+  * Static validation included `git diff --check`.
 
 ### M45 Subtitle renderer timestamp epsilon audit
 

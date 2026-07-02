@@ -888,7 +888,7 @@ QIcon make_busy_icon(const int phase, const double progress_fraction) {
     painter.translate(9, 9);
     painter.rotate(static_cast<qreal>(phase) * 30.0);
 
-    QColor track_color("#b241ff");
+    QColor track_color("#ffce2e");
     track_color.setAlpha(72);
     QColor ring_color("#ffce2e");
     const QRectF arc_rect(-6.0, -6.0, 12.0, 12.0);
