@@ -2459,6 +2459,10 @@ private:
                         message << "Subtitle composite start: frame="
                                 << task.output.frame.metadata.frame_index
                                 << ", pts_us=" << *task.subtitle_timestamp_microseconds
+                                << ", renderer_pts_ms="
+                                << subtitles::subtitle_timestamp_microseconds_to_renderer_milliseconds(
+                                    *task.subtitle_timestamp_microseconds
+                                )
                                 << ", worker_id=" << worker_id
                                 << ", thread_id=" << std::this_thread::get_id()
                                 << ", " << streaming_frame_buffer_identity(task.output.frame)
@@ -2490,6 +2494,10 @@ private:
                         message << "Subtitle composite end: frame="
                                 << task.output.frame.metadata.frame_index
                                 << ", pts_us=" << *task.subtitle_timestamp_microseconds
+                                << ", renderer_pts_ms="
+                                << subtitles::subtitle_timestamp_microseconds_to_renderer_milliseconds(
+                                    *task.subtitle_timestamp_microseconds
+                                )
                                 << ", worker_id=" << worker_id
                                 << ", thread_id=" << std::this_thread::get_id()
                                 << ", subtitles_applied=" << (task.output.subtitles_applied ? 1 : 0)

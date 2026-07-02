@@ -1176,6 +1176,11 @@ add_test(
     COMMAND utsure_core_subtitle_renderer_tests --error
 )
 
+add_test(
+    NAME utsure.core.subtitles.renderer.timestamp_conversion
+    COMMAND utsure_core_subtitle_renderer_tests --timestamp-conversion
+)
+
 add_executable(utsure_core_libassmod_subtitle_adapter_tests
     libassmod_subtitle_adapter_tests.cpp
 )

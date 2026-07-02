@@ -119,6 +119,12 @@ public:
 };
 
 [[nodiscard]] const char *to_string(SubtitleBitmapPixelFormat pixel_format) noexcept;
+[[nodiscard]] constexpr std::int64_t subtitle_timestamp_microseconds_to_renderer_milliseconds(
+    const std::int64_t timestamp_microseconds
+) noexcept {
+    return timestamp_microseconds / 1000;
+}
+[[nodiscard]] std::int64_t subtitle_timestamp_seconds_to_renderer_milliseconds(double timestamp_seconds) noexcept;
 [[nodiscard]] std::unique_ptr<SubtitleRenderer> create_default_subtitle_renderer();
 
 }  // namespace utsure::core::subtitles

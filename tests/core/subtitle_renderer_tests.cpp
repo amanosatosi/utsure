@@ -1,8 +1,11 @@
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -23,6 +26,8 @@ using utsure::core::subtitles::SubtitleRenderSessionCreateRequest;
 using utsure::core::subtitles::SubtitleRenderSessionResult;
 using utsure::core::subtitles::SubtitleRenderer;
 using utsure::core::subtitles::SubtitleRendererError;
+using utsure::core::subtitles::subtitle_timestamp_microseconds_to_renderer_milliseconds;
+using utsure::core::subtitles::subtitle_timestamp_seconds_to_renderer_milliseconds;
 using utsure::core::subtitles::to_string;
 
 constexpr std::string_view kExpectedFlowReport =
@@ -311,11 +316,54 @@ int run_error_assertion() {
     return 0;
 }
 
+int run_timestamp_conversion_assertion() {
+    static_assert(subtitle_timestamp_microseconds_to_renderer_milliseconds(518810000LL) == 518810LL);
+    static_assert(subtitle_timestamp_microseconds_to_renderer_milliseconds(518809999LL) == 518809LL);
+    static_assert(subtitle_timestamp_microseconds_to_renderer_milliseconds(42000000LL) == 42000LL);
+
+    const double aegisub_underflow_seconds = std::nextafter(518810.0 / 1000.0, 0.0);
+    const std::int64_t aegisub_underflow_ms =
+        subtitle_timestamp_seconds_to_renderer_milliseconds(aegisub_underflow_seconds);
+    if (aegisub_underflow_ms != 518810LL) {
+        return fail("Double seconds-to-renderer milliseconds conversion underflowed by one millisecond.");
+    }
+
+    if (subtitle_timestamp_seconds_to_renderer_milliseconds(42.0) != 42000LL ||
+        subtitle_timestamp_seconds_to_renderer_milliseconds(0.0) != 0LL ||
+        subtitle_timestamp_seconds_to_renderer_milliseconds(1.25) != 1250LL) {
+        return fail("Exact-boundary subtitle timestamp conversion changed.");
+    }
+
+    if (subtitle_timestamp_microseconds_to_renderer_milliseconds(518809999LL) != 518809LL) {
+        return fail("Integer microsecond timestamp conversion should remain integer truncation.");
+    }
+
+    if (subtitle_timestamp_seconds_to_renderer_milliseconds(std::numeric_limits<double>::max()) !=
+        std::numeric_limits<std::int64_t>::max()) {
+        return fail("Large positive double subtitle timestamp did not clamp before int64 overflow.");
+    }
+
+    if (subtitle_timestamp_seconds_to_renderer_milliseconds(-std::numeric_limits<double>::max()) !=
+        std::numeric_limits<std::int64_t>::min()) {
+        return fail("Large negative double subtitle timestamp did not clamp before int64 overflow.");
+    }
+
+    if (subtitle_timestamp_seconds_to_renderer_milliseconds(std::numeric_limits<double>::quiet_NaN()) != 0LL) {
+        return fail("Non-finite subtitle timestamp should resolve to a stable zero millisecond value.");
+    }
+
+    std::cout << "double_underflow_seconds=" << aegisub_underflow_seconds << '\n';
+    std::cout << "renderer_timestamp_ms=" << aegisub_underflow_ms << '\n';
+    std::cout << "integer_path_518809999us_ms="
+              << subtitle_timestamp_microseconds_to_renderer_milliseconds(518809999LL) << '\n';
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
     if (argc != 2) {
-        return fail("Usage: utsure_core_subtitle_renderer_tests [--flow|--error]");
+        return fail("Usage: utsure_core_subtitle_renderer_tests [--flow|--error|--timestamp-conversion]");
     }
 
     const std::string_view mode(argv[1]);
@@ -327,5 +375,9 @@ int main(int argc, char *argv[]) {
         return run_error_assertion();
     }
 
-    return fail("Unknown mode. Use --flow or --error.");
+    if (mode == "--timestamp-conversion") {
+        return run_timestamp_conversion_assertion();
+    }
+
+    return fail("Unknown mode. Use --flow, --error, or --timestamp-conversion.");
 }

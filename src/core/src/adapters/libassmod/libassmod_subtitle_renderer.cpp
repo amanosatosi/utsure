@@ -1171,6 +1171,8 @@ private:
                 << ", session_instance_id=" << session_instance_id_
                 << ", frame=" << request.debug_context->decoded_frame_index
                 << ", pts_us=" << request.timestamp_microseconds
+                << ", renderer_pts_ms="
+                << subtitle_timestamp_microseconds_to_renderer_milliseconds(request.timestamp_microseconds)
                 << ", thread_id=" << std::this_thread::get_id()
                 << ", renderer=" << pointer_to_string(renderer_.get())
                 << ", track=" << pointer_to_string(track_.get())
@@ -1340,9 +1342,15 @@ private:
         const SessionAccessGuard &access_guard
     ) const {
         int detect_change = 0;
-        const long long timestamp_milliseconds = static_cast<long long>(request.timestamp_microseconds / 1000);
+        const auto timestamp_milliseconds =
+            subtitle_timestamp_microseconds_to_renderer_milliseconds(request.timestamp_microseconds);
         return AutoRenderResultHandle(new ASS_RenderResult(with_optional_global_libassmod_lock([&]() {
-            return ass_render_frame_auto(access_guard.renderer(), access_guard.track(), timestamp_milliseconds, &detect_change);
+            return ass_render_frame_auto(
+                access_guard.renderer(),
+                access_guard.track(),
+                static_cast<long long>(timestamp_milliseconds),
+                &detect_change
+            );
         })));
     }
 

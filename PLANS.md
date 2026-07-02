@@ -45,6 +45,32 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M42 First-job subtitle burn-in crash hardening implemented; awaiting GitHub Actions validation.
 - [x] M43 Preview transport yellow icon consistency implemented; awaiting GitHub Actions validation.
 - [x] M44 libassmod mangetsu branch switch implemented; awaiting GitHub Actions validation.
+- [x] M45 Subtitle renderer timestamp epsilon audit implemented; awaiting GitHub Actions validation.
+
+### M45 Subtitle renderer timestamp epsilon audit
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Audit the streaming subtitle burn-in timestamp path from decoded/output PTS through subtitle render requests and the libassmod/Mangetsu render call.
+  * Keep integer PTS/microsecond/millisecond paths integer.
+  * Add epsilon protection only for explicit double-seconds to renderer-milliseconds conversion support.
+
+Implementation approach:
+  * Preserve the existing main-segment subtitle clock and integer microsecond render request contract.
+  * Add narrow subtitle timestamp conversion helpers: integer microseconds-to-renderer-milliseconds by integer division, and double seconds-to-renderer-milliseconds with Aegisub-style underflow epsilon.
+  * Route the libassmod/Mangetsu render call through the integer helper and add focused conversion tests without running local compile/CTest, per repository instructions.
+
+Implemented:
+  * Audited the streaming subtitle handoff path: decoded/output PTS values are rescaled as integer PTS/microseconds, main subtitles use a segment-relative integer microsecond clock, and libassmod/Mangetsu rendering receives integer milliseconds.
+  * Added subtitle timestamp conversion helpers, keeping integer microseconds-to-milliseconds as integer division and applying the `1e-6` epsilon only to explicit double-seconds conversion.
+  * Routed the libassmod/Mangetsu `ass_render_frame_auto()` call through the integer helper so copied RGBA, direct RGBA, and legacy bitmap paths share the same renderer timestamp source.
+  * Extended existing low-rate subtitle handoff/lifecycle diagnostics with the final `renderer_pts_ms` value passed to the renderer.
+  * Added subtitle renderer timestamp conversion tests for the 518810 ms double-underflow case, exact boundaries, integer-path truncation, non-finite input, and int64 overflow clamping.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included targeted searches for subtitle double-seconds-to-milliseconds conversions and `git diff --check`.
 
 ### M44 libassmod mangetsu branch switch
 
