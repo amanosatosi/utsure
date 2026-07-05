@@ -48,34 +48,31 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M45 Subtitle renderer timestamp epsilon audit implemented; awaiting GitHub Actions validation.
 - [x] M46 Busy indicator yellow circle color implemented; awaiting GitHub Actions validation.
 - [x] M47 Uncaught C++ encode crash diagnostics implemented; awaiting GitHub Actions validation.
-- [x] M48 FFmpeg-main libassmod Mangetsu colorcoding port implemented; awaiting GitHub Actions validation.
+- [ ] M48 FFmpeg-main libassmod port scope reset; Mangetsu metadata feeding deferred.
 
-### M48 FFmpeg-main libassmod Mangetsu colorcoding port
+### M48 FFmpeg-main libassmod port scope reset
 
-Status: Implemented; awaiting GitHub Actions validation
+Status: Re-scoped; Mangetsu metadata feeding removed from the active milestone
 
 Scope:
   * Keep FFmpeg/libav responsible for probing, demuxing, decoding, encoding, and muxing in the existing streaming path.
   * Keep libassmod as the subtitle parser/renderer and keep Utsure-owned RGBA subtitle blending before video frames are sent to the encoder.
-  * Feed top-block Mangetsu actor colorcoding metadata from ASS files into libassmod before the first render.
-  * Add focused parser/adapter diagnostics for accepted Mangetsu metadata without changing GUI layout, queue behavior, or unrelated encode settings.
+  * Defer ASS Mangetsu actor colorcoding metadata parsing/host-feeding until a later milestone.
+  * Do not change GUI layout, queue behavior, or unrelated encode settings in this scope reset.
 
 Implementation approach:
-  * Add a core ASS event metadata parser that supports reordered `Format:` fields and preserves the `Text` field exactly, including commas and override tags.
-  * Attach accepted top-block metadata lines to the subtitle render session request so all subtitle sessions, including worker-local sessions, receive identical host-fed metadata.
-  * Feed the metadata immediately after `ass_read_file` succeeds and before any render, treating missing metadata as normal and rejected lines as recoverable diagnostics.
+  * Remove the temporary ASS Mangetsu metadata parser, renderer request fields, libassmod feed call, focused tests, and crash-sidecar feed diagnostics.
+  * Keep the existing FFmpeg/libav streaming path and libassmod RGBA subtitle rendering path intact.
   * Validate locally with static checks only; compile and CTest execution remain reserved for GitHub Actions.
 
-Implemented:
-  * Added a core ASS Mangetsu colorcoding metadata scanner that locates `[Events]`, honors reordered `Format:` fields, preserves comma-bearing `Text`, accepts only top-block matching `Comment:` events, warns on bad matching lines, and ignores later matches after normal events begin.
-  * Threaded scanned metadata through `SubtitleRenderSessionCreateRequest` during subtitle session preparation while keeping direct renderer session creation able to scan as a fallback.
-  * Fed accepted metadata lines to libassmod with `ass_process_mangetsu_colorcoding_line(..., is_comment=1, is_top_block=1)` immediately after `ass_read_file` succeeds and before render/session use.
-  * Added feed diagnostics and crash-sidecar fields for subtitle path, Mangetsu accepted line count, and feed completion.
-  * Added parser tests plus a libassmod render test sample that expects three accepted top-block Mangetsu lines before first render.
+Scope changes:
+  * Removed the Mangetsu metadata test target from the active test set instead of patching CI to build it.
+  * Removed runtime diagnostics tied only to the deferred feed stage.
+  * Left the previously selected libassmod branch dependency direction unchanged.
 
 Validation:
-  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
-  * Static validation included `git diff --check`, direct trailing-whitespace scans for new files, and targeted searches confirming no FFmpeg `subtitles`/`ass` filter path was introduced.
+  * Static validation after rollback: `git diff --check` reported no whitespace errors, and targeted searches found no remaining Mangetsu metadata/feed symbols under `src` or `tests`.
+  * Local compile/CTest execution remains reserved for GitHub Actions.
 
 ### M47 Uncaught C++ encode crash diagnostics
 
@@ -97,6 +94,7 @@ Implemented:
   * Changed the vectored exception handler so first-chance software exceptions are ignored and only hard-fault SEH codes, such as access violations and stack overflows, trigger the backup dump path.
   * Added C++ terminate metadata fields to crash markers and JSON sidecars: `cxx_exception_active`, `cxx_exception_type`, and `cxx_exception_message`.
   * Extended crash writer tests with a handled C++ exception child process that must not write crash artifacts and an uncaught C++ exception child process that must write the new terminate metadata.
+  * Adjusted the controlled terminate-metadata child test to call `std::terminate()` while the test exception is actively handled, avoiding runtime-specific `std::current_exception()` behavior for truly uncaught exceptions on MSYS/MinGW.
   * Updated crash dump docs to describe the hard-fault-only vectored handler and C++ terminate metadata.
 
 Validation:

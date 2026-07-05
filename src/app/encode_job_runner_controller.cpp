@@ -11,7 +11,6 @@
 #include <atomic>
 #include <cstddef>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -212,9 +211,6 @@ bool EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &jo
         .active_job_count = utsure::app::crash::current_active_encode_job_count(),
         .input_path = path_to_utf8_string(job.input.main_source_path),
         .output_path = path_to_utf8_string(job.output.output_path),
-        .subtitle_path = job.subtitles.has_value()
-            ? std::optional<std::string>{path_to_utf8_string(job.subtitles->subtitle_path)}
-            : std::optional<std::string>{},
         .video_output_codec = utsure::core::media::to_string(job.output.video.codec),
         .current_stage = "controller_start_job",
         .subtitle_enabled = job.subtitles.has_value(),

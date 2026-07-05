@@ -17,7 +17,6 @@ struct CrashContextUpdate final {
     std::optional<int> active_job_count{};
     std::optional<std::string> input_path{};
     std::optional<std::string> output_path{};
-    std::optional<std::string> subtitle_path{};
     std::optional<std::string> source_codec{};
     std::optional<std::string> source_pixel_format{};
     std::optional<std::string> decoded_frame_format{};
@@ -51,8 +50,6 @@ struct CrashContextUpdate final {
     std::optional<std::string> last_registered_image_asset_name{};
     std::optional<std::string> last_registered_image_asset_path{};
     std::optional<bool> subtitle_cleanup_started{};
-    std::optional<int> mangetsu_colorcoding_accepted_lines{};
-    std::optional<bool> mangetsu_colorcoding_feed_completed{};
     std::optional<std::string> build_version{};
     std::optional<std::string> git_commit{};
     std::optional<std::string> last_log_message{};
@@ -64,7 +61,6 @@ struct CrashContextSnapshot final {
     int active_job_count{0};
     std::string input_path{};
     std::string output_path{};
-    std::string subtitle_path{};
     std::string source_codec{"unknown"};
     std::string source_pixel_format{"unknown"};
     std::string decoded_frame_format{"unknown"};
@@ -98,8 +94,6 @@ struct CrashContextSnapshot final {
     std::string last_registered_image_asset_name{};
     std::string last_registered_image_asset_path{};
     bool subtitle_cleanup_started{false};
-    int mangetsu_colorcoding_accepted_lines{0};
-    bool mangetsu_colorcoding_feed_completed{false};
     std::string build_version{};
     std::string git_commit{"unknown"};
     std::string last_log_message{};

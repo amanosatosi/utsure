@@ -412,25 +412,6 @@ std::optional<std::string> extract_tail_value_after(std::string_view message, st
     return std::string(message.substr(value_start, value_end - value_start));
 }
 
-std::optional<std::string> extract_quoted_value_after(
-    std::string_view message,
-    std::string_view key,
-    const char quote
-) {
-    const auto key_position = message.find(key);
-    if (key_position == std::string_view::npos) {
-        return std::nullopt;
-    }
-
-    const std::size_t value_start = key_position + key.size();
-    const auto value_end = message.find(quote, value_start);
-    if (value_end == std::string_view::npos || value_end <= value_start) {
-        return std::nullopt;
-    }
-
-    return std::string(message.substr(value_start, value_end - value_start));
-}
-
 std::optional<int> parse_int_value(std::string_view text) {
     int value = 0;
     bool has_digit = false;
@@ -516,9 +497,6 @@ void apply_optional(CrashContextSnapshot &snapshot, const CrashContextUpdate &up
     }
     if (update.output_path.has_value()) {
         snapshot.output_path = *update.output_path;
-    }
-    if (update.subtitle_path.has_value()) {
-        snapshot.subtitle_path = *update.subtitle_path;
     }
     if (update.source_codec.has_value()) {
         snapshot.source_codec = *update.source_codec;
@@ -618,12 +596,6 @@ void apply_optional(CrashContextSnapshot &snapshot, const CrashContextUpdate &up
     }
     if (update.subtitle_cleanup_started.has_value()) {
         snapshot.subtitle_cleanup_started = *update.subtitle_cleanup_started;
-    }
-    if (update.mangetsu_colorcoding_accepted_lines.has_value()) {
-        snapshot.mangetsu_colorcoding_accepted_lines = *update.mangetsu_colorcoding_accepted_lines;
-    }
-    if (update.mangetsu_colorcoding_feed_completed.has_value()) {
-        snapshot.mangetsu_colorcoding_feed_completed = *update.mangetsu_colorcoding_feed_completed;
     }
     if (update.build_version.has_value()) {
         snapshot.build_version = *update.build_version;
@@ -1051,7 +1023,6 @@ std::string crash_context_to_json(const CrashContextSnapshot &snapshot) {
     append_json_int(json, "active_job_count", snapshot.active_job_count, true);
     append_json_string(json, "input_path", snapshot.input_path, true);
     append_json_string(json, "output_path", snapshot.output_path, true);
-    append_json_string(json, "subtitle_path", snapshot.subtitle_path, true);
     append_json_string(json, "source_codec", snapshot.source_codec, true);
     append_json_string(json, "source_pixel_format", snapshot.source_pixel_format, true);
     append_json_string(json, "decoded_frame_format", snapshot.decoded_frame_format, true);
@@ -1085,8 +1056,6 @@ std::string crash_context_to_json(const CrashContextSnapshot &snapshot) {
     append_json_string(json, "last_registered_image_asset_name", snapshot.last_registered_image_asset_name, true);
     append_json_string(json, "last_registered_image_asset_path", snapshot.last_registered_image_asset_path, true);
     append_json_bool(json, "subtitle_cleanup_started", snapshot.subtitle_cleanup_started, true);
-    append_json_int(json, "mangetsu_colorcoding_accepted_lines", snapshot.mangetsu_colorcoding_accepted_lines, true);
-    append_json_bool(json, "mangetsu_colorcoding_feed_completed", snapshot.mangetsu_colorcoding_feed_completed, true);
     append_json_string(json, "last_log_message", snapshot.last_log_message, false);
     json << "}\n";
     return json.str();
@@ -1099,7 +1068,6 @@ void append_context_json_object(std::ostringstream &json, const CrashContextSnap
     append_json_int(json, "runner_slot_index", snapshot.runner_slot_index, true);
     append_json_string(json, "input_path", snapshot.input_path, true);
     append_json_string(json, "output_path", snapshot.output_path, true);
-    append_json_string(json, "subtitle_path", snapshot.subtitle_path, true);
     append_json_string(json, "source_codec", snapshot.source_codec, true);
     append_json_string(json, "source_pixel_format", snapshot.source_pixel_format, true);
     append_json_string(json, "decoded_frame_format", snapshot.decoded_frame_format, true);
@@ -1133,8 +1101,6 @@ void append_context_json_object(std::ostringstream &json, const CrashContextSnap
     append_json_string(json, "last_registered_image_asset_name", snapshot.last_registered_image_asset_name, true);
     append_json_string(json, "last_registered_image_asset_path", snapshot.last_registered_image_asset_path, true);
     append_json_bool(json, "subtitle_cleanup_started", snapshot.subtitle_cleanup_started, true);
-    append_json_int(json, "mangetsu_colorcoding_accepted_lines", snapshot.mangetsu_colorcoding_accepted_lines, true);
-    append_json_bool(json, "mangetsu_colorcoding_feed_completed", snapshot.mangetsu_colorcoding_feed_completed, true);
     append_json_string(json, "last_log_message", snapshot.last_log_message, false);
     json << indent << "}";
 }
@@ -1169,7 +1135,6 @@ std::string crash_context_collection_to_json(
     append_json_int(json, "runner_slot_index", snapshot.last_updated_context.runner_slot_index, true);
     append_json_string(json, "input_path", snapshot.last_updated_context.input_path, true);
     append_json_string(json, "output_path", snapshot.last_updated_context.output_path, true);
-    append_json_string(json, "subtitle_path", snapshot.last_updated_context.subtitle_path, true);
     append_json_string(json, "source_codec", snapshot.last_updated_context.source_codec, true);
     append_json_string(json, "decoded_frame_format", snapshot.last_updated_context.decoded_frame_format, true);
     append_json_string(json, "current_stage", snapshot.last_updated_context.current_stage, true);
@@ -1184,18 +1149,6 @@ std::string crash_context_collection_to_json(
     append_json_int(json, "last_subtitle_event_count", snapshot.last_updated_context.last_subtitle_event_count, true);
     append_json_int(json, "registered_image_asset_count", snapshot.last_updated_context.registered_image_asset_count, true);
     append_json_bool(json, "subtitle_cleanup_started", snapshot.last_updated_context.subtitle_cleanup_started, true);
-    append_json_int(
-        json,
-        "mangetsu_colorcoding_accepted_lines",
-        snapshot.last_updated_context.mangetsu_colorcoding_accepted_lines,
-        true
-    );
-    append_json_bool(
-        json,
-        "mangetsu_colorcoding_feed_completed",
-        snapshot.last_updated_context.mangetsu_colorcoding_feed_completed,
-        true
-    );
     append_json_string(json, "last_log_message", snapshot.last_updated_context.last_log_message, true);
     json << "  \"runner_contexts\": [\n";
     for (std::size_t index = 0; index < snapshot.runner_contexts.size(); ++index) {
@@ -1359,8 +1312,6 @@ void update_crash_context_from_runtime_log(const std::string_view message) {
     }
     if (message.find("Subtitle stage start") != std::string_view::npos) {
         update.current_stage = "subtitle_stage";
-    } else if (message.find("feeding-mangetsu-colorcoding") != std::string_view::npos) {
-        update.current_stage = "feeding-mangetsu-colorcoding";
     } else if (message.find("Decode stage start") != std::string_view::npos) {
         update.current_stage = "decode_stage";
     } else if (message.find("Encode stage start") != std::string_view::npos) {
@@ -1389,11 +1340,6 @@ void update_crash_context_from_runtime_log(const std::string_view message) {
     }
     if (auto value = extract_value_after(message, "name=")) {
         update.segment_name = *value;
-    }
-    if (auto value = extract_quoted_value_after(message, "subtitle_path='", '\'')) {
-        update.subtitle_path = *value;
-    } else if (auto value = extract_value_after(message, "subtitle_path=")) {
-        update.subtitle_path = *value;
     }
     if (auto value = extract_value_after(message, "decoder_active_thread_type=")) {
         update.decoder_thread_type = *value;
@@ -1467,12 +1413,6 @@ void update_crash_context_from_runtime_log(const std::string_view message) {
     }
     if (auto value = extract_value_after(message, "subtitle_cleanup_started=")) {
         update.subtitle_cleanup_started = parse_bool_value(*value);
-    }
-    if (auto value = extract_value_after(message, "mangetsu_colorcoding_accepted_lines=")) {
-        update.mangetsu_colorcoding_accepted_lines = parse_int_value(*value);
-    }
-    if (auto value = extract_value_after(message, "mangetsu_colorcoding_feed_completed=")) {
-        update.mangetsu_colorcoding_feed_completed = parse_bool_value(*value);
     }
     if (auto rss = parse_bytes_after(message, "current_rss=")) {
         update.current_rss_bytes = *rss;

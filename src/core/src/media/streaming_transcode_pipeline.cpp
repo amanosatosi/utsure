@@ -5599,25 +5599,6 @@ PreparedSubtitleSession create_subtitle_session(
         };
     }
 
-    emit_runtime_log(
-        log_callback,
-        "feeding-mangetsu-colorcoding: subtitle_path='" +
-            filesystem::path_to_utf8_string(subtitle_settings.subtitle_path.lexically_normal()) +
-            "', source_lines=" +
-            std::to_string(prepared_request.session_request.mangetsu_colorcoding_metadata.lines.size()) +
-            ", scan_completed=" +
-            std::to_string(
-                prepared_request.session_request.mangetsu_colorcoding_metadata.scan_completed ? 1 : 0
-            ) +
-            ", events_section_found=" +
-            std::to_string(
-                prepared_request.session_request.mangetsu_colorcoding_metadata.events_section_found ? 1 : 0
-            ) +
-            ", format_found=" +
-            std::to_string(prepared_request.session_request.mangetsu_colorcoding_metadata.format_found ? 1 : 0) +
-            "."
-    );
-
     auto session_result = subtitle_renderer.create_session(prepared_request.session_request);
     return PreparedSubtitleSession{
         .prepared_request = std::move(prepared_request),
