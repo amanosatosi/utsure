@@ -1,5 +1,6 @@
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
 #include "utsure/core/subtitles/subtitle_image_assets.hpp"
+#include "utsure/core/subtitles/subtitle_mangetsu_metadata.hpp"
 #include "libassmod_rgba_bitmap_validation.hpp"
 #include "../../runtime_anomaly_policy.hpp"
 #include "../../subtitles/subtitle_bitmap_compositor.hpp"
@@ -8,6 +9,15 @@
 
 extern "C" {
 #include <ass/ass.h>
+
+int ass_process_mangetsu_colorcoding_line(
+    ASS_Track *track,
+    const char *name,
+    const char *effect,
+    const char *text,
+    int is_comment,
+    int is_top_block
+);
 }
 
 #include <algorithm>
@@ -408,6 +418,93 @@ TrackHandle load_track(
     return track;
 }
 
+struct MangetsuColorcodingFeedResult final {
+    std::size_t source_line_count{0};
+    std::size_t accepted_line_count{0};
+    std::size_t rejected_line_count{0};
+    std::size_t error_line_count{0};
+    bool completed{false};
+    std::vector<std::string> diagnostics{};
+};
+
+MangetsuColorcodingMetadata resolve_mangetsu_colorcoding_metadata(
+    const SubtitleRenderSessionCreateRequest &request
+) {
+    if (request.mangetsu_colorcoding_metadata.scan_completed) {
+        return request.mangetsu_colorcoding_metadata;
+    }
+
+    return load_ass_mangetsu_colorcoding_metadata(request.subtitle_path);
+}
+
+MangetsuColorcodingFeedResult feed_mangetsu_colorcoding_metadata(
+    ASS_Track &track,
+    const MangetsuColorcodingMetadata &metadata
+) {
+    MangetsuColorcodingFeedResult result{
+        .source_line_count = metadata.lines.size(),
+        .accepted_line_count = 0U,
+        .rejected_line_count = 0U,
+        .error_line_count = 0U,
+        .completed = false,
+        .diagnostics = {}
+    };
+    result.diagnostics.insert(
+        result.diagnostics.end(),
+        metadata.warnings.begin(),
+        metadata.warnings.end()
+    );
+    result.diagnostics.push_back(
+        "feeding-mangetsu-colorcoding: source_lines=" + std::to_string(metadata.lines.size()) +
+        ", scan_completed=" + std::to_string(metadata.scan_completed ? 1 : 0) +
+        ", events_section_found=" + std::to_string(metadata.events_section_found ? 1 : 0) +
+        ", format_found=" + std::to_string(metadata.format_found ? 1 : 0) + "."
+    );
+
+    for (const auto &line : metadata.lines) {
+        const int accepted = with_optional_global_libassmod_lock([&track, &line]() {
+            return ass_process_mangetsu_colorcoding_line(
+                &track,
+                line.name.c_str(),
+                line.effect.c_str(),
+                line.text.c_str(),
+                line.is_comment ? 1 : 0,
+                line.is_top_block ? 1 : 0
+            );
+        });
+        if (accepted > 0) {
+            ++result.accepted_line_count;
+            continue;
+        }
+
+        if (accepted == 0) {
+            ++result.rejected_line_count;
+            result.diagnostics.push_back(
+                "libassmod did not accept Mangetsu colorcoding metadata line " +
+                std::to_string(line.source_line_number) + " for Name='" + line.name + "'."
+            );
+            continue;
+        }
+
+        ++result.error_line_count;
+        result.diagnostics.push_back(
+            "libassmod returned " + std::to_string(accepted) +
+            " while processing Mangetsu colorcoding metadata line " +
+            std::to_string(line.source_line_number) + " for Name='" + line.name + "'."
+        );
+    }
+
+    result.completed = true;
+    result.diagnostics.push_back(
+        "mangetsu-colorcoding-accepted-lines=" + std::to_string(result.accepted_line_count) +
+        ", mangetsu_colorcoding_accepted_lines=" + std::to_string(result.accepted_line_count) +
+        ", mangetsu_colorcoding_rejected_lines=" + std::to_string(result.rejected_line_count) +
+        ", mangetsu_colorcoding_error_lines=" + std::to_string(result.error_line_count) +
+        ", mangetsu_colorcoding_feed_completed=1."
+    );
+    return result;
+}
+
 ASS_TagImageFormat to_ass_tag_image_format(const SubtitleImageAssetFormat format) {
     switch (format) {
     case SubtitleImageAssetFormat::png:
@@ -792,6 +889,7 @@ public:
         std::string subtitle_path_string,
         std::vector<std::string> quirk_messages,
         std::vector<SubtitleImageAsset> image_assets,
+        MangetsuColorcodingFeedResult mangetsu_colorcoding_feed_result,
         LibraryHandle library,
         RendererHandle renderer,
         TrackHandle track
@@ -800,6 +898,7 @@ public:
           subtitle_path_string_(std::move(subtitle_path_string)),
           quirk_messages_(std::move(quirk_messages)),
           image_assets_(std::move(image_assets)),
+          mangetsu_colorcoding_feed_result_(std::move(mangetsu_colorcoding_feed_result)),
           library_(std::move(library)),
           renderer_(std::move(renderer)),
           track_(std::move(track)),
@@ -824,11 +923,20 @@ public:
                 << ", subtitle_renderer_created_thread_id=" << created_thread_id_
                 << ", last_subtitle_event_count=" << track_->n_events
                 << ", registered_image_asset_count=" << image_assets_.size()
+                << ", mangetsu_colorcoding_accepted_lines="
+                << mangetsu_colorcoding_feed_result_.accepted_line_count
+                << ", mangetsu_colorcoding_feed_completed="
+                << (mangetsu_colorcoding_feed_result_.completed ? 1 : 0)
                 << ", safe_mode=" << (runtime::environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ? 1 : 0)
                 << ", global_libass_lock=" << (runtime::global_libass_lock_enabled() ? 1 : 0)
                 << ", bitmap_transfer_mode=" << runtime::to_string(runtime_options_.bitmap_transfer_mode)
                 << ", composition_mode=" << runtime::to_string(runtime_options_.composition_mode);
         quirk_messages_.push_back(message.str());
+        quirk_messages_.insert(
+            quirk_messages_.end(),
+            mangetsu_colorcoding_feed_result_.diagnostics.begin(),
+            mangetsu_colorcoding_feed_result_.diagnostics.end()
+        );
         quirk_messages_.push_back(
             "ass_read_file success: path=" + subtitle_path_string_ +
             ", track=" + pointer_to_string(track_.get()) +
@@ -1132,6 +1240,16 @@ private:
 
         std::ostringstream message;
         message << format_renderer_setup_diagnostics(create_request_, image_assets_.size())
+                << ", mangetsu_colorcoding_source_lines="
+                << mangetsu_colorcoding_feed_result_.source_line_count
+                << ", mangetsu_colorcoding_accepted_lines="
+                << mangetsu_colorcoding_feed_result_.accepted_line_count
+                << ", mangetsu_colorcoding_rejected_lines="
+                << mangetsu_colorcoding_feed_result_.rejected_line_count
+                << ", mangetsu_colorcoding_error_lines="
+                << mangetsu_colorcoding_feed_result_.error_line_count
+                << ", mangetsu_colorcoding_feed_completed="
+                << (mangetsu_colorcoding_feed_result_.completed ? 1 : 0)
                 << ", renderer=" << pointer_to_string(renderer_.get())
                 << ", track=" << pointer_to_string(track_.get())
                 << ", library=" << pointer_to_string(library_.get())
@@ -1180,7 +1298,11 @@ private:
                 << ", active_subtitle_render_count=" << active_count
                 << ", subtitle_renderer_created_thread_id=" << created_thread_id_
                 << ", last_subtitle_event_count=" << (track_ != nullptr ? track_->n_events : 0)
-                << ", registered_image_asset_count=" << image_assets_.size();
+                << ", registered_image_asset_count=" << image_assets_.size()
+                << ", mangetsu_colorcoding_accepted_lines="
+                << mangetsu_colorcoding_feed_result_.accepted_line_count
+                << ", mangetsu_colorcoding_feed_completed="
+                << (mangetsu_colorcoding_feed_result_.completed ? 1 : 0);
         message << ", subtitle_cleanup_started=" << (cleanup_started_.load(std::memory_order_acquire) ? 1 : 0)
                 << ", safe_mode=" << (runtime::environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ? 1 : 0)
                 << ", global_libass_lock=" << (runtime::global_libass_lock_enabled() ? 1 : 0)
@@ -1358,6 +1480,7 @@ private:
     std::string subtitle_path_string_{};
     std::vector<std::string> quirk_messages_{};
     std::vector<SubtitleImageAsset> image_assets_{};
+    MangetsuColorcodingFeedResult mangetsu_colorcoding_feed_result_{};
     LibraryHandle library_{};
     RendererHandle renderer_{};
     TrackHandle track_{};
@@ -1476,12 +1599,18 @@ private:
                 ? std::vector<std::string>{}
                 : std::move(image_asset_result.diagnostics);
             auto track = load_track(*library, request);
+            auto mangetsu_colorcoding_metadata = resolve_mangetsu_colorcoding_metadata(request);
+            auto mangetsu_colorcoding_feed_result = feed_mangetsu_colorcoding_metadata(
+                *track,
+                mangetsu_colorcoding_metadata
+            );
 
             auto session = std::make_unique<LibassmodSubtitleRenderSession>(
                 request,
                 path_to_utf8_string(normalized_path),
                 std::move(quirk_messages),
                 std::move(image_asset_result.assets),
+                std::move(mangetsu_colorcoding_feed_result),
                 std::move(library),
                 std::move(renderer),
                 std::move(track)

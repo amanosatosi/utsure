@@ -48,6 +48,34 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M45 Subtitle renderer timestamp epsilon audit implemented; awaiting GitHub Actions validation.
 - [x] M46 Busy indicator yellow circle color implemented; awaiting GitHub Actions validation.
 - [x] M47 Uncaught C++ encode crash diagnostics implemented; awaiting GitHub Actions validation.
+- [x] M48 FFmpeg-main libassmod Mangetsu colorcoding port implemented; awaiting GitHub Actions validation.
+
+### M48 FFmpeg-main libassmod Mangetsu colorcoding port
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Keep FFmpeg/libav responsible for probing, demuxing, decoding, encoding, and muxing in the existing streaming path.
+  * Keep libassmod as the subtitle parser/renderer and keep Utsure-owned RGBA subtitle blending before video frames are sent to the encoder.
+  * Feed top-block Mangetsu actor colorcoding metadata from ASS files into libassmod before the first render.
+  * Add focused parser/adapter diagnostics for accepted Mangetsu metadata without changing GUI layout, queue behavior, or unrelated encode settings.
+
+Implementation approach:
+  * Add a core ASS event metadata parser that supports reordered `Format:` fields and preserves the `Text` field exactly, including commas and override tags.
+  * Attach accepted top-block metadata lines to the subtitle render session request so all subtitle sessions, including worker-local sessions, receive identical host-fed metadata.
+  * Feed the metadata immediately after `ass_read_file` succeeds and before any render, treating missing metadata as normal and rejected lines as recoverable diagnostics.
+  * Validate locally with static checks only; compile and CTest execution remain reserved for GitHub Actions.
+
+Implemented:
+  * Added a core ASS Mangetsu colorcoding metadata scanner that locates `[Events]`, honors reordered `Format:` fields, preserves comma-bearing `Text`, accepts only top-block matching `Comment:` events, warns on bad matching lines, and ignores later matches after normal events begin.
+  * Threaded scanned metadata through `SubtitleRenderSessionCreateRequest` during subtitle session preparation while keeping direct renderer session creation able to scan as a fallback.
+  * Fed accepted metadata lines to libassmod with `ass_process_mangetsu_colorcoding_line(..., is_comment=1, is_top_block=1)` immediately after `ass_read_file` succeeds and before render/session use.
+  * Added feed diagnostics and crash-sidecar fields for subtitle path, Mangetsu accepted line count, and feed completion.
+  * Added parser tests plus a libassmod render test sample that expects three accepted top-block Mangetsu lines before first render.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included `git diff --check`, direct trailing-whitespace scans for new files, and targeted searches confirming no FFmpeg `subtitles`/`ass` filter path was introduced.
 
 ### M47 Uncaught C++ encode crash diagnostics
 

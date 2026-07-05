@@ -1,5 +1,7 @@
 #include "utsure/core/subtitles/subtitle_font_recovery.hpp"
 
+#include "utsure/core/subtitles/subtitle_mangetsu_metadata.hpp"
+
 #include "../process/external_tool_runner.hpp"
 
 #include <algorithm>
@@ -547,6 +549,9 @@ PreparedSubtitleRenderSessionRequest prepare_subtitle_render_session_request(
         prepared_request.font_recovery_report.outcome = SubtitleFontRecoveryOutcome::not_applicable;
         return prepared_request;
     }
+
+    prepared_request.session_request.mangetsu_colorcoding_metadata =
+        load_ass_mangetsu_colorcoding_metadata(normalized_subtitle_path);
 
     const auto fontcollector_executable = resolve_fontcollector_executable(options);
     if (!fontcollector_executable.has_value()) {

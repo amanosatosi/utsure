@@ -1109,6 +1109,77 @@ int run_img_asset_render_assertion(const std::filesystem::path &subtitle_path) {
     return 0;
 }
 
+int run_mangetsu_colorcoding_render_assertion(const std::filesystem::path &subtitle_path) {
+    auto subtitle_renderer = create_default_subtitle_renderer();
+    if (!subtitle_renderer) {
+        return fail("The default subtitle renderer could not be created.");
+    }
+
+    const SubtitleRenderSessionCreateRequest session_request{
+        .subtitle_path = subtitle_path,
+        .format_hint = "ass",
+        .canvas_width = 320,
+        .canvas_height = 180,
+        .sample_aspect_ratio = Rational{1, 1}
+    };
+
+    auto session_result = subtitle_renderer->create_session(session_request);
+    if (!session_result.succeeded()) {
+        return fail(
+            "The libassmod Mangetsu colorcoding sample unexpectedly failed session creation: " +
+            session_result.error->message +
+            " Hint: " +
+            session_result.error->actionable_hint
+        );
+    }
+
+    std::vector<std::string> diagnostics{};
+    const SubtitleCompositionDebugContext debug_context{
+        .decoded_frame_index = 0,
+        .output_pts = 0,
+        .subtitle_timestamp_microseconds = 0,
+        .worker_id = 0,
+        .session_id = 1,
+        .log_frame_details = true,
+        .log_bitmap_details = false,
+        .log_callback = [&diagnostics](const std::string &message) {
+            diagnostics.push_back(message);
+        },
+        .lifecycle_callback = [&diagnostics](const std::string &message) {
+            diagnostics.push_back(message);
+        }
+    };
+
+    const auto render_result = session_result.session->render(SubtitleRenderRequest{
+        .timestamp_microseconds = 41667,
+        .debug_context = &debug_context
+    });
+    if (!render_result.succeeded()) {
+        return fail(
+            "The libassmod Mangetsu colorcoding sample failed to render: " +
+            render_result.error->message +
+            " Hint: " +
+            render_result.error->actionable_hint
+        );
+    }
+    if (render_result.rendered_frame->bitmaps.empty()) {
+        return fail("Expected visible subtitle content after Mangetsu colorcoding metadata feed.");
+    }
+
+    if (!string_messages_contain_text(diagnostics, "feeding-mangetsu-colorcoding") ||
+        !string_messages_contain_text(diagnostics, "mangetsu-colorcoding-accepted-lines=3") ||
+        !string_messages_contain_text(diagnostics, "mangetsu_colorcoding_accepted_lines=3") ||
+        !string_messages_contain_text(diagnostics, "mangetsu_colorcoding_feed_completed=1")) {
+        return fail("Mangetsu colorcoding feed diagnostics did not report three accepted top-block lines.");
+    }
+
+    std::cout << "session.subtitle_path=" << format_path_leaf(subtitle_path) << '\n';
+    std::cout << "mangetsu_colorcoding.accepted_lines=3\n";
+    std::cout << "mangetsu_colorcoding.feed_completed=yes\n";
+    std::cout << "visible.has_content=yes\n";
+    return 0;
+}
+
 int run_subtitle_render_lifecycle_trace_assertion(
     const std::filesystem::path &subtitle_path,
     const std::string_view trace_mode
@@ -2582,7 +2653,8 @@ int main(int argc, char *argv[]) {
             "Usage: utsure_core_subtitle_burn_in_tests "
             "[--render <subtitle>|--render-gradient <subtitle>|--render-empty-effect <subtitle>|"
             "--render-img-asset <subtitle>|--render-bs4 <subtitle>|--render-bs4-gradient <subtitle>|"
-            "--render-bs4-forced-rgba <subtitle>|--render-lifecycle-trace-off <subtitle>|"
+            "--render-bs4-forced-rgba <subtitle>|--render-mangetsu-colorcoding <subtitle>|"
+            "--render-lifecycle-trace-off <subtitle>|"
             "--render-lifecycle-trace-throttled <subtitle>|--render-lifecycle-trace-full <subtitle>|"
             "--h264 <input> <subtitle> <plain-output> <burned-output>|"
             "--empty-bitmap-h264 <input> <subtitle> <plain-output> <burned-output>|"
@@ -2638,6 +2710,10 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--render-img-missing" && argc == 3) {
         return run_missing_img_asset_render_assertion(std::filesystem::path(argv[2]));
+    }
+
+    if (mode == "--render-mangetsu-colorcoding" && argc == 3) {
+        return run_mangetsu_colorcoding_render_assertion(std::filesystem::path(argv[2]));
     }
 
     if (mode == "--render-lifecycle-trace-off" && argc == 3) {

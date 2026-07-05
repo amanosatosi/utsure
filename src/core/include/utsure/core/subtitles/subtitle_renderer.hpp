@@ -2,6 +2,7 @@
 
 #include "utsure/core/media/decoded_media.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -17,6 +18,23 @@ enum class SubtitleBitmapPixelFormat : std::uint8_t {
     rgba8_premultiplied
 };
 
+struct MangetsuColorcodingMetadataLine final {
+    std::string name{};
+    std::string effect{};
+    std::string text{};
+    bool is_comment{true};
+    bool is_top_block{true};
+    std::size_t source_line_number{0};
+};
+
+struct MangetsuColorcodingMetadata final {
+    std::vector<MangetsuColorcodingMetadataLine> lines{};
+    std::vector<std::string> warnings{};
+    bool scan_completed{false};
+    bool events_section_found{false};
+    bool format_found{false};
+};
+
 struct SubtitleRenderSessionCreateRequest final {
     std::filesystem::path subtitle_path{};
     std::string format_hint{"auto"};
@@ -24,6 +42,7 @@ struct SubtitleRenderSessionCreateRequest final {
     int canvas_height{0};
     media::Rational sample_aspect_ratio{1, 1};
     std::optional<std::filesystem::path> font_search_directory{};
+    MangetsuColorcodingMetadata mangetsu_colorcoding_metadata{};
 };
 
 struct SubtitleCompositionDebugContext final {

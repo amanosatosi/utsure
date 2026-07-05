@@ -227,6 +227,7 @@ int assert_crash_context_snapshot_and_json() {
         .active_job_count = 3,
         .input_path = "C:/input/hevc.mp4",
         .output_path = "C:/output/out.mp4",
+        .subtitle_path = "C:/subs/mangetsu.ass",
         .source_codec = "hevc",
         .source_pixel_format = "yuv420p",
         .decoded_frame_format = "yuv420p",
@@ -246,11 +247,23 @@ int assert_crash_context_snapshot_and_json() {
         .current_rss_bytes = 123456,
         .peak_rss_bytes = 234567,
         .cancellation_requested = false,
+        .mangetsu_colorcoding_accepted_lines = 2,
+        .mangetsu_colorcoding_feed_completed = false,
         .build_version = "utsure test",
         .git_commit = "abc123",
         .last_log_message = "First decoded video frame diagnostics"
     });
     utsure::app::crash::set_current_thread_runner_slot(2);
+    utsure::app::crash::update_crash_context_from_runtime_log(
+        "feeding-mangetsu-colorcoding: subtitle_path='C:/subs/mangetsu.ass', source_lines=3, "
+        "scan_completed=1, events_section_found=1, format_found=1."
+    );
+    const auto feeding_snapshot = utsure::app::crash::crash_context_snapshot();
+    if (feeding_snapshot.current_stage != "feeding-mangetsu-colorcoding" ||
+        feeding_snapshot.subtitle_path != "C:/subs/mangetsu.ass") {
+        return fail("Crash context runtime-log parser did not capture the Mangetsu feeding breadcrumb.");
+    }
+
     utsure::app::crash::update_crash_context_from_runtime_log(
         "Streaming frame checkpoint: segment=main, frame=43, pts=2002, source_codec=hevc, "
         "video_queue_depth=1, decoder_threads=1, encoder_threads=2, current_rss=345678, peak_rss=456789."
@@ -269,6 +282,7 @@ int assert_crash_context_snapshot_and_json() {
         "subtitle render start: operation=compose, session_instance_id=5, frame=44, pts_us=1138596000, "
         "thread_id=1234, renderer=0x1111, track=0x2222, library=0x3333, active_subtitle_render_count=1, "
         "subtitle_renderer_created_thread_id=99, last_subtitle_event_count=77, registered_image_asset_count=2, "
+        "mangetsu_colorcoding_accepted_lines=3, mangetsu_colorcoding_feed_completed=1, "
         "subtitle_cleanup_started=0, safe_mode=1, last_registered_image_asset_name=logo.png, "
         "last_registered_image_asset_path=C:/anime/z ui refrence/logo, final.png"
     );
@@ -276,6 +290,7 @@ int assert_crash_context_snapshot_and_json() {
         "subtitle render end: operation=compose, session_instance_id=5, frame=44, pts_us=1138596000, "
         "thread_id=1234, renderer=0x1111, track=0x2222, library=0x3333, active_subtitle_render_count=1, "
         "subtitle_renderer_created_thread_id=99, last_subtitle_event_count=77, registered_image_asset_count=2, "
+        "mangetsu_colorcoding_accepted_lines=3, mangetsu_colorcoding_feed_completed=1, "
         "subtitle_cleanup_started=0, safe_mode=1, last_registered_image_asset_name=logo.png, "
         "last_registered_image_asset_path=C:/anime/z ui refrence/logo, final.png"
     );
@@ -286,6 +301,7 @@ int assert_crash_context_snapshot_and_json() {
     if (snapshot.runner_slot_index != 2 ||
         snapshot.active_job_count != 3 ||
         snapshot.source_codec != "hevc" ||
+        snapshot.subtitle_path != "C:/subs/mangetsu.ass" ||
         snapshot.frame_index != 44 ||
         snapshot.pts != 1138596000 ||
         snapshot.current_rss_bytes == 0 ||
@@ -299,12 +315,15 @@ int assert_crash_context_snapshot_and_json() {
         snapshot.last_subtitle_render_end_pts != 1138596000 ||
         snapshot.last_subtitle_event_count != 77 ||
         snapshot.registered_image_asset_count != 2 ||
+        snapshot.mangetsu_colorcoding_accepted_lines != 3 ||
+        !snapshot.mangetsu_colorcoding_feed_completed ||
         snapshot.last_registered_image_asset_path != "C:/anime/z ui refrence/logo, final.png" ||
         snapshot.subtitle_cleanup_started) {
         std::cerr
             << "snapshot.runner_slot_index=" << snapshot.runner_slot_index
             << " active_job_count=" << snapshot.active_job_count
             << " source_codec=" << snapshot.source_codec
+            << " subtitle_path=" << snapshot.subtitle_path
             << " frame_index=" << snapshot.frame_index
             << " pts=" << snapshot.pts
             << " current_rss_bytes=" << snapshot.current_rss_bytes
@@ -318,6 +337,8 @@ int assert_crash_context_snapshot_and_json() {
             << " last_subtitle_render_end_pts=" << snapshot.last_subtitle_render_end_pts
             << " last_subtitle_event_count=" << snapshot.last_subtitle_event_count
             << " registered_image_asset_count=" << snapshot.registered_image_asset_count
+            << " mangetsu_colorcoding_accepted_lines=" << snapshot.mangetsu_colorcoding_accepted_lines
+            << " mangetsu_colorcoding_feed_completed=" << snapshot.mangetsu_colorcoding_feed_completed
             << " last_registered_image_asset_path=" << snapshot.last_registered_image_asset_path
             << " subtitle_cleanup_started=" << snapshot.subtitle_cleanup_started
             << '\n';
@@ -328,6 +349,7 @@ int assert_crash_context_snapshot_and_json() {
         collection.active_job_count != 0 ||
         collection.runner_contexts.size() <= 2U ||
         collection.runner_contexts[2].source_codec != "hevc" ||
+        collection.runner_contexts[2].subtitle_path != "C:/subs/mangetsu.ass" ||
         collection.runner_contexts[2].frame_index != 44 ||
         collection.runner_contexts[2].subtitle_renderer_ptr != "0x1111") {
         return fail("Crash context collection did not preserve per-runner slot fields.");
@@ -337,9 +359,12 @@ int assert_crash_context_snapshot_and_json() {
     if (!contains_text(json, "\"source_codec\": \"hevc\"") ||
         !contains_text(json, "\"decoded_frame_format\": \"yuv420p\"") ||
         !contains_text(json, "\"frame_transfer_path\": \"sws_scale\"") ||
+        !contains_text(json, "\"subtitle_path\": \"C:/subs/mangetsu.ass\"") ||
         !contains_text(json, "\"subtitle_renderer_ptr\": \"0x1111\"") ||
         !contains_text(json, "\"last_subtitle_render_start_pts\": 1138596000") ||
         !contains_text(json, "\"registered_image_asset_count\": 2") ||
+        !contains_text(json, "\"mangetsu_colorcoding_accepted_lines\": 3") ||
+        !contains_text(json, "\"mangetsu_colorcoding_feed_completed\": true") ||
         !contains_text(json, "\"runner_slot_index\": 2") ||
         !contains_text(json, "\"runner_contexts\"") ||
         !contains_text(json, "\"crashing_thread_id\": 99")) {
