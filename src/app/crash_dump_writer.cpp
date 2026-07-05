@@ -22,6 +22,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <typeinfo>
 #include <utility>
 
 #if defined(_WIN32)
@@ -281,6 +282,24 @@ std::string sanitize_message_value(std::string value) {
         value += "...";
     }
     return value;
+}
+
+void capture_current_cxx_exception_metadata(CrashDumpSidecarMetadata &metadata) noexcept {
+    const auto active_exception = std::current_exception();
+    if (active_exception == nullptr) {
+        return;
+    }
+
+    metadata.cxx_exception_active = true;
+    try {
+        std::rethrow_exception(active_exception);
+    } catch (const std::exception &exception) {
+        metadata.cxx_exception_type = sanitize_message_value(typeid(exception).name());
+        metadata.cxx_exception_message = sanitize_message_value(exception.what());
+    } catch (...) {
+        metadata.cxx_exception_type = "unknown_non_standard_exception";
+        metadata.cxx_exception_message = "A non-standard C++ exception was active during termination.";
+    }
 }
 
 std::string json_escape(const std::string &value) {
@@ -666,6 +685,45 @@ std::string selected_dump_type_name() {
     return "normal";
 }
 
+bool is_hard_fault_exception_code(const DWORD code) noexcept {
+    constexpr DWORD kStatusHeapCorruption = 0xC0000374UL;
+    constexpr DWORD kStatusStackBufferOverrun = 0xC0000409UL;
+
+    switch (code) {
+    case EXCEPTION_ACCESS_VIOLATION:
+    case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+    case EXCEPTION_DATATYPE_MISALIGNMENT:
+    case EXCEPTION_FLT_DENORMAL_OPERAND:
+    case EXCEPTION_FLT_DIVIDE_BY_ZERO:
+    case EXCEPTION_FLT_INEXACT_RESULT:
+    case EXCEPTION_FLT_INVALID_OPERATION:
+    case EXCEPTION_FLT_OVERFLOW:
+    case EXCEPTION_FLT_STACK_CHECK:
+    case EXCEPTION_FLT_UNDERFLOW:
+    case EXCEPTION_ILLEGAL_INSTRUCTION:
+    case EXCEPTION_IN_PAGE_ERROR:
+    case EXCEPTION_INT_DIVIDE_BY_ZERO:
+    case EXCEPTION_INT_OVERFLOW:
+    case EXCEPTION_INVALID_DISPOSITION:
+    case EXCEPTION_NONCONTINUABLE_EXCEPTION:
+    case EXCEPTION_PRIV_INSTRUCTION:
+    case EXCEPTION_STACK_OVERFLOW:
+    case kStatusHeapCorruption:
+    case kStatusStackBufferOverrun:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool should_write_vectored_exception_dump(EXCEPTION_POINTERS *exception_pointers) noexcept {
+    if (exception_pointers == nullptr || exception_pointers->ExceptionRecord == nullptr) {
+        return false;
+    }
+
+    return is_hard_fault_exception_code(exception_pointers->ExceptionRecord->ExceptionCode);
+}
+
 unsigned long exception_code_from_pointers(void *exception_pointers) noexcept {
     if (exception_pointers == nullptr) {
         return 0UL;
@@ -745,7 +803,9 @@ LONG WINAPI unhandled_exception_filter(EXCEPTION_POINTERS *exception_pointers) {
 }
 
 LONG CALLBACK vectored_exception_handler(EXCEPTION_POINTERS *exception_pointers) {
-    (void)write_crash_dump_for_current_process(exception_pointers);
+    if (should_write_vectored_exception_dump(exception_pointers)) {
+        (void)write_crash_dump_for_current_process(exception_pointers);
+    }
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -1065,6 +1125,9 @@ std::string crash_context_collection_to_json(
     append_json_string(json, "dump_path_attempted", metadata.dump_path_attempted, true);
     append_json_uint(json, "exception_code", metadata.seh_exception_code, true);
     append_json_string(json, "exception_address", metadata.exception_address, true);
+    append_json_bool(json, "cxx_exception_active", metadata.cxx_exception_active, true);
+    append_json_string(json, "cxx_exception_type", metadata.cxx_exception_type, true);
+    append_json_string(json, "cxx_exception_message", metadata.cxx_exception_message, true);
     append_json_uint(json, "crashing_thread_id", snapshot.crashing_thread_id, true);
     append_json_int(json, "last_updated_runner_slot", snapshot.last_updated_runner_slot, true);
     append_json_int(json, "active_job_count", snapshot.active_job_count, true);
@@ -1440,6 +1503,9 @@ std::string crash_marker_text(
          << "dump_path_attempted=" << metadata.dump_path_attempted << '\n'
          << "exception_code=" << metadata.seh_exception_code << '\n'
          << "exception_address=" << metadata.exception_address << '\n'
+         << "cxx_exception_active=" << (metadata.cxx_exception_active ? 1 : 0) << '\n'
+         << "cxx_exception_type=" << metadata.cxx_exception_type << '\n'
+         << "cxx_exception_message=" << metadata.cxx_exception_message << '\n'
          << "current_stage=" << snapshot.last_updated_context.current_stage << '\n'
          << "last_log_message=" << snapshot.last_updated_context.last_log_message << '\n';
     return text.str();
@@ -1583,6 +1649,7 @@ CrashDumpWriteResult write_crash_dump_for_current_process(void *exception_pointe
         metadata.seh_exception_code = exception_code_from_pointers(exception_pointers);
         metadata.exception_address = exception_address_from_pointers(exception_pointers);
 #endif
+        capture_current_cxx_exception_metadata(metadata);
         std::string marker_error{};
         result.handler_marker_written = write_handler_entered_marker_for_test(
             paths,

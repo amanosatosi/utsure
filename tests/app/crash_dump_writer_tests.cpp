@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 
@@ -423,7 +424,10 @@ int assert_marker_and_failure_sidecar_write() {
         .dump_write_error_message = "access denied",
         .dump_path_attempted = paths.dump_path.string(),
         .seh_exception_code = 3221225477UL,
-        .exception_address = "0x1234"
+        .exception_address = "0x1234",
+        .cxx_exception_active = true,
+        .cxx_exception_type = "std::runtime_error",
+        .cxx_exception_message = "controlled metadata failure"
     };
 
     std::string error_message{};
@@ -443,10 +447,14 @@ int assert_marker_and_failure_sidecar_write() {
         !contains_text(failure_text, "dump_write_error_code=5") ||
         !contains_text(handler_text, "exception_code=3221225477") ||
         !contains_text(handler_text, "exception_address=0x1234") ||
+        !contains_text(handler_text, "cxx_exception_active=1") ||
+        !contains_text(handler_text, "cxx_exception_message=controlled metadata failure") ||
         !contains_text(sidecar_text, "\"handler_entered\": true") ||
         !contains_text(sidecar_text, "\"dump_write_success\": false") ||
         !contains_text(sidecar_text, "\"dump_write_error_code\": 5") ||
         !contains_text(sidecar_text, "\"exception_code\": 3221225477") ||
+        !contains_text(sidecar_text, "\"cxx_exception_active\": true") ||
+        !contains_text(sidecar_text, "\"cxx_exception_message\": \"controlled metadata failure\"") ||
         !contains_text(sidecar_text, "\"dump_path_attempted\"")) {
         return fail("Crash marker or sidecar metadata did not include expected dump failure fields.");
     }
@@ -490,6 +498,37 @@ int assert_crash_dump_setup_log() {
 }
 
 #if defined(_WIN32)
+int handled_cxx_exception_child_process() {
+    utsure::app::crash::reset_crash_context_for_tests();
+    utsure::app::crash::install_crash_handlers();
+    utsure::app::crash::update_crash_context(utsure::app::crash::CrashContextUpdate{
+        .current_stage = "controlled_handled_cxx_exception",
+        .build_version = "utsure child handled cxx",
+        .git_commit = "child-test"
+    });
+    try {
+        throw std::runtime_error("controlled handled cxx exception");
+    } catch (const std::runtime_error &) {
+        return 0;
+    }
+    return 1;
+}
+
+[[noreturn]] void uncaught_cxx_exception_child_process() {
+    utsure::app::crash::reset_crash_context_for_tests();
+    utsure::app::crash::install_crash_handlers();
+    (void)utsure::app::crash::begin_active_encode_job(4);
+    utsure::app::crash::update_crash_context(utsure::app::crash::CrashContextUpdate{
+        .runner_slot_index = 4,
+        .input_path = "child-input-cxx.mp4",
+        .source_codec = "h264",
+        .current_stage = "controlled_uncaught_cxx_exception",
+        .build_version = "utsure child uncaught cxx",
+        .git_commit = "child-test"
+    });
+    throw std::runtime_error("controlled uncaught cxx exception");
+}
+
 [[noreturn]] void crash_child_process() {
     utsure::app::crash::reset_crash_context_for_tests();
     utsure::app::crash::install_crash_handlers();
@@ -558,6 +597,87 @@ int assert_controlled_child_dump(const char *executable_path) {
     std::cout << "crash_dump_writer.controlled_child_dump=ok\n";
     return 0;
 }
+
+int assert_handled_cxx_exception_does_not_write_dump(const char *executable_path) {
+    const auto dump_dir = std::filesystem::temp_directory_path() / "utsure-handled-cxx-exception-dump-test";
+    std::error_code error{};
+    std::filesystem::remove_all(dump_dir, error);
+    std::filesystem::create_directories(dump_dir, error);
+    if (error) {
+        return fail("Failed to create handled C++ exception dump temp directory.");
+    }
+
+    set_env_var("UTSURE_CRASH_DUMP_DIR", dump_dir.string());
+    const std::string command = "\"" + std::filesystem::absolute(executable_path).string() + "\" --child-cxx-handled";
+    const int child_exit = std::system(command.c_str());
+    unset_env_var("UTSURE_CRASH_DUMP_DIR");
+    if (child_exit != 0) {
+        return fail("Handled C++ exception child did not exit cleanly.");
+    }
+
+    bool found_crash_artifact = false;
+    for (const auto &entry : std::filesystem::directory_iterator(dump_dir, error)) {
+        if (entry.path().extension() == ".dmp" ||
+            entry.path().extension() == ".json" ||
+            contains_text(entry.path().filename().string(), ".handler-entered") ||
+            contains_text(entry.path().filename().string(), ".dump-failed")) {
+            found_crash_artifact = true;
+            break;
+        }
+    }
+    if (found_crash_artifact) {
+        return fail("Handled C++ exception unexpectedly wrote a crash artifact.");
+    }
+
+    std::filesystem::remove_all(dump_dir, error);
+    std::cout << "crash_dump_writer.handled_cxx_no_dump=ok\n";
+    return 0;
+}
+
+int assert_uncaught_cxx_exception_sidecar_metadata(const char *executable_path) {
+    const auto dump_dir = std::filesystem::temp_directory_path() / "utsure-uncaught-cxx-exception-dump-test";
+    std::error_code error{};
+    std::filesystem::remove_all(dump_dir, error);
+    std::filesystem::create_directories(dump_dir, error);
+    if (error) {
+        return fail("Failed to create uncaught C++ exception dump temp directory.");
+    }
+
+    set_env_var("UTSURE_CRASH_DUMP_DIR", dump_dir.string());
+    const std::string command = "\"" + std::filesystem::absolute(executable_path).string() + "\" --child-cxx-uncaught";
+    const int child_exit = std::system(command.c_str());
+    unset_env_var("UTSURE_CRASH_DUMP_DIR");
+    if (child_exit == 0) {
+        return fail("Uncaught C++ exception child did not fail as expected.");
+    }
+
+    bool found_sidecar = false;
+    bool found_handler_marker = false;
+    std::string sidecar_text{};
+    for (const auto &entry : std::filesystem::directory_iterator(dump_dir, error)) {
+        if (entry.path().extension() == ".json") {
+            found_sidecar = true;
+            sidecar_text = read_text_file(entry.path());
+        } else if (contains_text(entry.path().filename().string(), ".handler-entered")) {
+            found_handler_marker = true;
+        }
+    }
+    if (!found_handler_marker) {
+        return fail("Uncaught C++ exception child did not write a handler marker.");
+    }
+    if (!found_sidecar ||
+        !contains_text(sidecar_text, "\"build_version\": \"utsure child uncaught cxx\"") ||
+        !contains_text(sidecar_text, "\"current_stage\": \"controlled_uncaught_cxx_exception\"") ||
+        !contains_text(sidecar_text, "\"runner_slot_index\": 4") ||
+        !contains_text(sidecar_text, "\"cxx_exception_active\": true") ||
+        !contains_text(sidecar_text, "\"cxx_exception_message\": \"controlled uncaught cxx exception\"")) {
+        return fail("Uncaught C++ exception sidecar did not include active C++ exception metadata.");
+    }
+
+    std::filesystem::remove_all(dump_dir, error);
+    std::cout << "crash_dump_writer.uncaught_cxx_metadata=ok\n";
+    return 0;
+}
 #endif
 
 }  // namespace
@@ -566,6 +686,12 @@ int main(int argc, char *argv[]) {
 #if defined(_WIN32)
     if (argc > 1 && std::string(argv[1]) == "--child-crash") {
         crash_child_process();
+    }
+    if (argc > 1 && std::string(argv[1]) == "--child-cxx-handled") {
+        return handled_cxx_exception_child_process();
+    }
+    if (argc > 1 && std::string(argv[1]) == "--child-cxx-uncaught") {
+        uncaught_cxx_exception_child_process();
     }
 #endif
     if (assert_crash_path_helpers() != 0 ||
@@ -582,7 +708,9 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 #if defined(_WIN32)
-    if (assert_controlled_child_dump(argv[0]) != 0) {
+    if (assert_controlled_child_dump(argv[0]) != 0 ||
+        assert_handled_cxx_exception_does_not_write_dump(argv[0]) != 0 ||
+        assert_uncaught_cxx_exception_sidecar_metadata(argv[0]) != 0) {
         return 1;
     }
 #endif

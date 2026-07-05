@@ -7,7 +7,7 @@ On Windows, utsure installs a crash handler early in app startup. If the process
 - `<folder containing utsure.exe>\crash-dumps\utsure-crash-YYYYMMDD-HHMMSS-mmm-pid-<pid>-tid-<tid>-seq-<nnnn>.json`
 - `<folder containing utsure.exe>\crash-dumps\utsure-crash-YYYYMMDD-HHMMSS-mmm-pid-<pid>-tid-<tid>-seq-<nnnn>.dump-failed.txt` when minidump writing fails
 
-The `.dmp` is a Windows minidump. The `.json` sidecar contains the last-known encode context, including stage, paths, codecs, frame position, thread counts, queue context, memory counters when available, and build metadata.
+The `.dmp` is a Windows minidump. The `.json` sidecar contains the last-known encode context, including stage, paths, codecs, frame position, thread counts, queue context, memory counters when available, build metadata, and active C++ exception type/message when the dump is written from `std::terminate`.
 The crash handler writes the handler-entered marker before attempting `MiniDumpWriteDump`, then writes the `.json` sidecar whether minidump writing succeeds or fails. Crash artifacts are created with no-overwrite path selection; an existing dump, marker, or sidecar is never silently replaced.
 
 Interpret missing or partial artifacts this way:
@@ -50,9 +50,11 @@ At startup, utsure logs whether the crash dump writer is enabled, the resolved d
 Covered paths:
 
 - Top-level unhandled SEH exceptions through `SetUnhandledExceptionFilter`
-- A backup first-chance vectored exception handler through `AddVectoredExceptionHandler`
+- A backup first-chance vectored exception handler through `AddVectoredExceptionHandler`, limited to hard-fault SEH codes such as access violations and stack overflows
 - `std::terminate`
 - `SIGABRT`, `SIGILL`, and `SIGFPE`
+
+Normal first-chance software exceptions, including C++ exception code `0xE06D7363`, are intentionally ignored by the vectored handler because they may be caught by Qt, the C++ runtime, or app code. If a C++ exception is actually uncaught, the terminate handler writes a sidecar with `cxx_exception_active`, `cxx_exception_type`, and `cxx_exception_message`.
 
 Not covered reliably:
 

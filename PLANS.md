@@ -47,6 +47,33 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M44 libassmod mangetsu branch switch implemented; awaiting GitHub Actions validation.
 - [x] M45 Subtitle renderer timestamp epsilon audit implemented; awaiting GitHub Actions validation.
 - [x] M46 Busy indicator yellow circle color implemented; awaiting GitHub Actions validation.
+- [x] M47 Uncaught C++ encode crash diagnostics implemented; awaiting GitHub Actions validation.
+
+### M47 Uncaught C++ encode crash diagnostics
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Analyze the provided Windows crash artifacts from `C:\anime\hyakkano 3\crash`.
+  * Fix the diagnostic gap where repeated `0xE06D7363` C++ exception dumps show only `current_stage=starting`, `active_job_count=0`, and no thrown exception detail.
+  * Keep changes limited to crash/exception context and encode-launch failure handling unless the dump analysis identifies a narrower encoding-path defect.
+
+Implementation approach:
+  * Parse the minidump and sidecars without local compilation; repository validation remains GitHub Actions based.
+  * Capture active C++ exception type/message in the terminate crash sidecar before writing a dump.
+  * Add focused regression coverage for terminate-exception metadata and encode-runner crash context preservation.
+  * Run only static validation locally.
+
+Implemented:
+  * Parsed the provided crash artifacts and confirmed the repeated dumps are `0xE06D7363` Microsoft C++ exception records raised from `KERNELBASE.dll`, with empty encode context and no active runner state.
+  * Changed the vectored exception handler so first-chance software exceptions are ignored and only hard-fault SEH codes, such as access violations and stack overflows, trigger the backup dump path.
+  * Added C++ terminate metadata fields to crash markers and JSON sidecars: `cxx_exception_active`, `cxx_exception_type`, and `cxx_exception_message`.
+  * Extended crash writer tests with a handled C++ exception child process that must not write crash artifacts and an uncaught C++ exception child process that must write the new terminate metadata.
+  * Updated crash dump docs to describe the hard-fault-only vectored handler and C++ terminate metadata.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included `git diff --check` and targeted searches for the new C++ exception metadata and vectored handler behavior.
 
 ### M46 Busy indicator yellow circle color
 

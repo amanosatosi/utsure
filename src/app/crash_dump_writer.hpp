@@ -123,6 +123,9 @@ struct CrashDumpSidecarMetadata final {
     std::string dump_path_attempted{};
     unsigned long seh_exception_code{0};
     std::string exception_address{};
+    bool cxx_exception_active{false};
+    std::string cxx_exception_type{};
+    std::string cxx_exception_message{};
 };
 
 struct CrashDumpWriteResult final {
