@@ -363,10 +363,10 @@ MangetsuActorColorcodingMetadata load_ass_mangetsu_actor_colorcoding_metadata(
         return metadata;
     }
 
-    const std::string text(
+    const std::string text{
         std::istreambuf_iterator<char>(input),
         std::istreambuf_iterator<char>()
-    );
+    };
     return scan_ass_mangetsu_actor_colorcoding_metadata(text);
 }
 
