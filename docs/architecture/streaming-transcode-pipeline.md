@@ -139,6 +139,8 @@ ASS subtitle sessions are prepared with `FontCollector` before libassmod session
 
 For libassmod `\img` tags, Utsure acts only as a host asset provider. During subtitle session setup it scans rendered Dialogue event text for `\img` references, rejects absolute or path-traversal references, resolves assets next to the `.ass` file or in simple `assets`, `images`, and `img` sidecar folders, decodes supported PNG/JPEG/WebP images to RGBA, and registers them once with libassmod. libassmod owns tag parsing and rendering; Utsure does not manually draw `\img` output.
 
+For Mangetsu actor colorcoding in external ASS files, Utsure scans only the documented top contiguous `Comment:` metadata block immediately after the `[Events]` `Format:` line. Accepted metadata comments must have `Effect=mangetsu-colorcoding` and a non-empty `Name` field; late matching comments after the first nonmatching event are ignored, and metadata comments are not rendered as visible subtitle events. Utsure feeds accepted metadata lines to libassmod before the first render while keeping normal ASS parsing intact.
+
 The libassmod calls currently used in the adapter are:
 
 - `ass_library_init`
@@ -151,6 +153,7 @@ The libassmod calls currently used in the adapter are:
 - `ass_set_use_margins`
 - `ass_set_fonts`
 - `ass_read_file`
+- `ass_process_mangetsu_colorcoding_line`
 - `ass_set_tag_image_rgba`
 - `ass_render_frame_rgba`
 - `ass_free_images_rgba`

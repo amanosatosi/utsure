@@ -34,6 +34,7 @@ To keep this explicit:
 - The CI build installs it into `.deps/libassmod/prefix`.
 - CMake requires `UTSURE_LIBASSMOD_ROOT` when subtitle dependency validation is enabled.
 - The dependency audit fails if `pkg-config libass` resolves outside that prefix.
+- The dependency audit also requires `ass_process_mangetsu_colorcoding_line()`, which means the source checkout must include libassmod commit `1d05f0dd78b1a53f45cb7a1e7c87a4a2dc691f7e` or newer.
 
 ## Why FFMS2 is handled separately
 
@@ -85,7 +86,7 @@ The active transcode path does not depend on `libavfilter`.
 - Clone and build `libassmod` from the upstream repository, using the `mangetsu` branch.
 - Put the FFmpeg, FFMS2, and `libassmod` prefixes ahead of the default pkg-config search path.
 - Run configure-time dependency audit.
-- Fail configure if any required FFmpeg or FFMS2 pkg-config module resolves outside the pinned prefix, or if the pinned `ffmpeg` executable reports a release outside the `7.1.x` series.
+- Fail configure if any required FFmpeg or FFMS2 pkg-config module resolves outside the pinned prefix, if the pinned `ffmpeg` executable reports a release outside the `7.1.x` series, or if the libassmod prefix does not expose the Mangetsu actor-colorcoding host API.
 - Build the repository targets and smoke-launch the Qt app.
 
 ## Unresolved assumptions

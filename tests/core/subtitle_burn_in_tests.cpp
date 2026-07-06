@@ -658,6 +658,169 @@ bool has_near_frame_bitmap(const utsure::core::subtitles::RenderedSubtitleFrame 
     return false;
 }
 
+struct SubtitleBitmapSignature final {
+    int origin_x{0};
+    int origin_y{0};
+    int width{0};
+    int height{0};
+    int line_stride_bytes{0};
+    utsure::core::subtitles::SubtitleBitmapPixelFormat pixel_format{
+        utsure::core::subtitles::SubtitleBitmapPixelFormat::unknown
+    };
+    std::size_t byte_count{0};
+    std::uint64_t bytes_hash{0};
+};
+
+struct RenderedSubtitleSignature final {
+    int canvas_width{0};
+    int canvas_height{0};
+    std::vector<SubtitleBitmapSignature> bitmaps{};
+};
+
+std::uint64_t fnv1a_hash_bytes(const std::vector<std::uint8_t> &bytes) {
+    std::uint64_t hash = 14695981039346656037ULL;
+    for (const auto byte : bytes) {
+        hash ^= static_cast<std::uint64_t>(byte);
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+RenderedSubtitleSignature make_rendered_subtitle_signature(
+    const utsure::core::subtitles::RenderedSubtitleFrame &rendered_frame
+) {
+    RenderedSubtitleSignature signature{
+        .canvas_width = rendered_frame.canvas_width,
+        .canvas_height = rendered_frame.canvas_height,
+        .bitmaps = {}
+    };
+    signature.bitmaps.reserve(rendered_frame.bitmaps.size());
+    for (const auto &bitmap : rendered_frame.bitmaps) {
+        signature.bitmaps.push_back(SubtitleBitmapSignature{
+            .origin_x = bitmap.origin_x,
+            .origin_y = bitmap.origin_y,
+            .width = bitmap.width,
+            .height = bitmap.height,
+            .line_stride_bytes = bitmap.line_stride_bytes,
+            .pixel_format = bitmap.pixel_format,
+            .byte_count = bitmap.bytes.size(),
+            .bytes_hash = fnv1a_hash_bytes(bitmap.bytes)
+        });
+    }
+    return signature;
+}
+
+bool render_signatures_match(
+    const RenderedSubtitleSignature &left,
+    const RenderedSubtitleSignature &right
+) {
+    if (left.canvas_width != right.canvas_width ||
+        left.canvas_height != right.canvas_height ||
+        left.bitmaps.size() != right.bitmaps.size()) {
+        return false;
+    }
+
+    for (std::size_t index = 0; index < left.bitmaps.size(); ++index) {
+        const auto &left_bitmap = left.bitmaps[index];
+        const auto &right_bitmap = right.bitmaps[index];
+        if (left_bitmap.origin_x != right_bitmap.origin_x ||
+            left_bitmap.origin_y != right_bitmap.origin_y ||
+            left_bitmap.width != right_bitmap.width ||
+            left_bitmap.height != right_bitmap.height ||
+            left_bitmap.line_stride_bytes != right_bitmap.line_stride_bytes ||
+            left_bitmap.pixel_format != right_bitmap.pixel_format ||
+            left_bitmap.byte_count != right_bitmap.byte_count ||
+            left_bitmap.bytes_hash != right_bitmap.bytes_hash) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+struct RenderSignatureResult final {
+    std::optional<RenderedSubtitleSignature> signature{};
+    std::vector<std::string> diagnostics{};
+    std::string error{};
+};
+
+RenderSignatureResult render_subtitle_signature(
+    const std::filesystem::path &subtitle_path,
+    const std::int64_t timestamp_microseconds
+) {
+    auto subtitle_renderer = create_default_subtitle_renderer();
+    if (!subtitle_renderer) {
+        return RenderSignatureResult{
+            .signature = std::nullopt,
+            .diagnostics = {},
+            .error = "The default subtitle renderer could not be created."
+        };
+    }
+
+    const SubtitleRenderSessionCreateRequest session_request{
+        .subtitle_path = subtitle_path,
+        .format_hint = "ass",
+        .canvas_width = 320,
+        .canvas_height = 180,
+        .sample_aspect_ratio = Rational{1, 1}
+    };
+
+    auto session_result = subtitle_renderer->create_session(session_request);
+    if (!session_result.succeeded()) {
+        return RenderSignatureResult{
+            .signature = std::nullopt,
+            .diagnostics = {},
+            .error = std::string("libassmod session creation failed: ") +
+                session_result.error->message + " Hint: " + session_result.error->actionable_hint
+        };
+    }
+
+    std::vector<std::string> diagnostics{};
+    const SubtitleCompositionDebugContext debug_context{
+        .decoded_frame_index = 0,
+        .output_pts = timestamp_microseconds,
+        .subtitle_timestamp_microseconds = timestamp_microseconds,
+        .worker_id = 0,
+        .session_id = 1,
+        .log_frame_details = true,
+        .log_bitmap_details = false,
+        .log_callback = [&diagnostics](const std::string &message) {
+            diagnostics.push_back(message);
+        },
+        .lifecycle_callback = [&diagnostics](const std::string &message) {
+            diagnostics.push_back(message);
+        }
+    };
+
+    const auto render_result = session_result.session->render(SubtitleRenderRequest{
+        .timestamp_microseconds = timestamp_microseconds,
+        .debug_context = &debug_context
+    });
+    if (!render_result.succeeded()) {
+        return RenderSignatureResult{
+            .signature = std::nullopt,
+            .diagnostics = std::move(diagnostics),
+            .error = std::string("libassmod render failed: ") +
+                render_result.error->message + " Hint: " + render_result.error->actionable_hint
+        };
+    }
+    if (render_result.rendered_frame->bitmaps.empty()) {
+        return RenderSignatureResult{
+            .signature = std::nullopt,
+            .diagnostics = std::move(diagnostics),
+            .error = "Expected visible subtitle content for render signature comparison."
+        };
+    }
+
+    return RenderSignatureResult{
+        .signature = std::optional<RenderedSubtitleSignature>{
+            make_rendered_subtitle_signature(*render_result.rendered_frame)
+        },
+        .diagnostics = std::move(diagnostics),
+        .error = {}
+    };
+}
+
 int assert_decoded_output(
     const DecodedMediaSource &decoded_output,
     const std::size_t expected_frame_count,
@@ -1106,6 +1269,136 @@ int run_img_asset_render_assertion(const std::filesystem::path &subtitle_path) {
     std::cout << "img_asset.registration_once=yes\n";
     std::cout << "render.succeeded=yes\n";
     std::cout << "render.bitmap_count=" << render_result.rendered_frame->bitmaps.size() << '\n';
+    return 0;
+}
+
+std::string actor_colorcoding_comparison_ass(const std::string_view events) {
+    return std::string(R"([Script Info]
+Title: utsure actor colorcoding comparison
+ScriptType: v4.00+
+PlayResX: 320
+PlayResY: 180
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,34,&H00FFFFFF,&H000000FF,&H80000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+Style: Other,Arial,34,&H00FFFFFF,&H000000FF,&H80000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,5,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+)") + std::string(events);
+}
+
+int assert_actor_colorcoding_signature_match(
+    const char *label,
+    const std::filesystem::path &metadata_subtitle_path,
+    const std::filesystem::path &comparison_subtitle_path,
+    const std::int64_t timestamp_microseconds,
+    const std::optional<std::vector<std::string>> required_metadata_diagnostics = std::nullopt
+) {
+    const auto metadata_result = render_subtitle_signature(metadata_subtitle_path, timestamp_microseconds);
+    if (!metadata_result.signature.has_value()) {
+        return fail(std::string(label) + " metadata render failed: " + metadata_result.error);
+    }
+
+    if (required_metadata_diagnostics.has_value()) {
+        for (const auto &needle : *required_metadata_diagnostics) {
+            if (!string_messages_contain_text(metadata_result.diagnostics, needle)) {
+                return fail(std::string(label) + " metadata diagnostics did not contain '" + needle + "'.");
+            }
+        }
+    }
+
+    const auto comparison_result = render_subtitle_signature(comparison_subtitle_path, timestamp_microseconds);
+    if (!comparison_result.signature.has_value()) {
+        return fail(std::string(label) + " comparison render failed: " + comparison_result.error);
+    }
+
+    if (!render_signatures_match(*metadata_result.signature, *comparison_result.signature)) {
+        return fail(std::string(label) + " metadata render did not match the inline comparison signature.");
+    }
+
+    return 0;
+}
+
+int run_actor_colorcoding_render_assertion(const std::filesystem::path &subtitle_path) {
+    const auto generated_dir = subtitle_path.parent_path();
+    const auto inline_nene_path = generated_dir / "subtitle-burn-actor-colorcoding-inline-nene.ass";
+    const auto default_plain_path = generated_dir / "subtitle-burn-actor-colorcoding-default-plain.ass";
+    const auto other_nene_path = generated_dir / "subtitle-burn-actor-colorcoding-other-nene.ass";
+    const auto inline_border_path = generated_dir / "subtitle-burn-actor-colorcoding-inline-border.ass";
+
+    write_text_file(
+        inline_nene_path,
+        actor_colorcoding_comparison_ass(
+            R"(Dialogue: 0,0:00:01.00,0:00:03.00,Default,Nene,0,0,0,,{\1c&HFFB6D9&\pos(160,90)}Hello
+)"
+        )
+    );
+    write_text_file(
+        default_plain_path,
+        actor_colorcoding_comparison_ass(
+            R"(Dialogue: 0,0:00:04.00,0:00:06.00,Default,Plain,0,0,0,,{\pos(160,90)}Plain
+)"
+        )
+    );
+    write_text_file(
+        other_nene_path,
+        actor_colorcoding_comparison_ass(
+            R"(Dialogue: 0,0:00:07.00,0:00:09.00,Other,Nene,0,0,0,,{\pos(160,90)}Other
+)"
+        )
+    );
+    write_text_file(
+        inline_border_path,
+        actor_colorcoding_comparison_ass(
+            R"(Dialogue: 0,0:00:10.00,0:00:12.00,Default,Border,0,0,0,,{\2bs3\2bc&H7161DF&\pos(160,90)}Border
+)"
+        )
+    );
+
+    const std::vector<std::string> required_diagnostics{
+        "mangetsu-actor-colorcoding scan: scanned=1",
+        "metadata_lines=3",
+        "whitelist_found=1",
+        "late_match_ignored=1",
+        "accepted_names=mangetsu-colorcode-applied-styles|Nene|Border",
+        "mangetsu-actor-colorcoding feed: accepted=3"
+    };
+
+    if (assert_actor_colorcoding_signature_match(
+            "actor-colorcoding Nene",
+            subtitle_path,
+            inline_nene_path,
+            1500000LL,
+            std::optional<std::vector<std::string>>{required_diagnostics}
+        ) != 0 ||
+        assert_actor_colorcoding_signature_match(
+            "actor-colorcoding unknown actor",
+            subtitle_path,
+            default_plain_path,
+            4500000LL
+        ) != 0 ||
+        assert_actor_colorcoding_signature_match(
+            "actor-colorcoding whitelist",
+            subtitle_path,
+            other_nene_path,
+            7500000LL
+        ) != 0 ||
+        assert_actor_colorcoding_signature_match(
+            "actor-colorcoding multi-border",
+            subtitle_path,
+            inline_border_path,
+            10500000LL
+        ) != 0) {
+        return 1;
+    }
+
+    std::cout << "actor_colorcoding.metadata_feed=yes\n";
+    std::cout << "actor_colorcoding.render_equivalence=yes\n";
+    std::cout << "actor_colorcoding.unknown_actor_default=yes\n";
+    std::cout << "actor_colorcoding.whitelist_default_only=yes\n";
+    std::cout << "actor_colorcoding.multi_border_passthrough=yes\n";
     return 0;
 }
 
@@ -2582,7 +2875,7 @@ int main(int argc, char *argv[]) {
             "Usage: utsure_core_subtitle_burn_in_tests "
             "[--render <subtitle>|--render-gradient <subtitle>|--render-empty-effect <subtitle>|"
             "--render-img-asset <subtitle>|--render-bs4 <subtitle>|--render-bs4-gradient <subtitle>|"
-            "--render-bs4-forced-rgba <subtitle>|"
+            "--render-bs4-forced-rgba <subtitle>|--render-actor-colorcoding <subtitle>|"
             "--render-lifecycle-trace-off <subtitle>|"
             "--render-lifecycle-trace-throttled <subtitle>|--render-lifecycle-trace-full <subtitle>|"
             "--h264 <input> <subtitle> <plain-output> <burned-output>|"
@@ -2639,6 +2932,10 @@ int main(int argc, char *argv[]) {
 
     if (mode == "--render-img-missing" && argc == 3) {
         return run_missing_img_asset_render_assertion(std::filesystem::path(argv[2]));
+    }
+
+    if (mode == "--render-actor-colorcoding" && argc == 3) {
+        return run_actor_colorcoding_render_assertion(std::filesystem::path(argv[2]));
     }
 
     if (mode == "--render-lifecycle-trace-off" && argc == 3) {

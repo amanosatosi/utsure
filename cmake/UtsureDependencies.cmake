@@ -340,6 +340,36 @@ macro(utsure_configure_dependencies)
                 )
             endif()
 
+            include(CheckCXXSourceCompiles)
+            set(_utsure_saved_required_includes "${CMAKE_REQUIRED_INCLUDES}")
+            set(_utsure_saved_required_libraries "${CMAKE_REQUIRED_LIBRARIES}")
+            set(_utsure_saved_required_quiet "${CMAKE_REQUIRED_QUIET}")
+            set(CMAKE_REQUIRED_INCLUDES "${_libassmod_root}/include")
+            set(CMAKE_REQUIRED_LIBRARIES PkgConfig::UTSURE_LIBASS)
+            set(CMAKE_REQUIRED_QUIET TRUE)
+            unset(UTSURE_LIBASSMOD_HAS_MANGETSU_ACTOR_COLORCODING CACHE)
+            check_cxx_source_compiles([=[
+extern "C" {
+#include <ass/ass.h>
+}
+
+int main() {
+    return ass_process_mangetsu_colorcoding_line(nullptr, nullptr, nullptr, nullptr, 1, 1);
+}
+]=] UTSURE_LIBASSMOD_HAS_MANGETSU_ACTOR_COLORCODING)
+            set(CMAKE_REQUIRED_INCLUDES "${_utsure_saved_required_includes}")
+            set(CMAKE_REQUIRED_LIBRARIES "${_utsure_saved_required_libraries}")
+            set(CMAKE_REQUIRED_QUIET "${_utsure_saved_required_quiet}")
+            unset(_utsure_saved_required_includes)
+            unset(_utsure_saved_required_libraries)
+            unset(_utsure_saved_required_quiet)
+            if(NOT UTSURE_LIBASSMOD_HAS_MANGETSU_ACTOR_COLORCODING)
+                message(FATAL_ERROR
+                    "libassmod at '${_libassmod_root}' does not provide ass_process_mangetsu_colorcoding_line(). "
+                    "Use libassmod commit 1d05f0dd78b1a53f45cb7a1e7c87a4a2dc691f7e or newer."
+                )
+            endif()
+
             if(NOT TARGET utsure_subtitle_renderer_dependency)
                 add_library(utsure_subtitle_renderer_dependency INTERFACE)
                 add_library(utsure::subtitle_renderer_dependency ALIAS utsure_subtitle_renderer_dependency)

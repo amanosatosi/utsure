@@ -28,6 +28,7 @@ set(UTSURE_SUBTITLE_STRESS_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-s
 set(UTSURE_SUBTITLE_OUTPUT_TIMELINE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-output-timeline-sample.ass")
 set(UTSURE_SUBTITLE_TRANSFORM_SCHEDULE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-transform-schedule-sample.ass")
 set(UTSURE_SUBTITLE_MOVE_SCHEDULE_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-move-schedule-sample.ass")
+set(UTSURE_SUBTITLE_ACTOR_COLORCODING_SAMPLE_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-actor-colorcoding-sample.ass")
 set(UTSURE_SUBTITLE_STRESS_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-stress-main.mp4")
 set(UTSURE_SUBTITLE_SPEED_15X_MAIN_FILE "${UTSURE_TEST_MEDIA_DIR}/subtitle-speed-15x-main.mp4")
 set(UTSURE_THUMBNAIL_PREROLL_IMAGE_FILE "${UTSURE_TEST_MEDIA_DIR}/thumbnail.png")
@@ -143,6 +144,11 @@ configure_file(
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-move-schedule-sample.ass"
     "${UTSURE_SUBTITLE_MOVE_SCHEDULE_SAMPLE_FILE}"
+    COPYONLY
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/subtitle-burn-actor-colorcoding-sample.ass"
+    "${UTSURE_SUBTITLE_ACTOR_COLORCODING_SAMPLE_FILE}"
     COPYONLY
 )
 
@@ -1153,6 +1159,24 @@ add_test(
         "${UTSURE_SAMPLE_MEDIA_FILE}"
 )
 
+add_executable(utsure_core_subtitle_mangetsu_metadata_tests
+    subtitle_mangetsu_metadata_tests.cpp
+)
+
+target_link_libraries(utsure_core_subtitle_mangetsu_metadata_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_compile_features(utsure_core_subtitle_mangetsu_metadata_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_subtitle_mangetsu_metadata_tests)
+
+add_test(
+    NAME utsure.core.subtitles.mangetsu_metadata
+    COMMAND utsure_core_subtitle_mangetsu_metadata_tests
+)
+
 add_executable(utsure_core_subtitle_renderer_tests
     subtitle_renderer_tests.cpp
 )
@@ -1434,6 +1458,12 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.subtitles.libassmod.render.actor_colorcoding
+    COMMAND utsure_core_subtitle_burn_in_tests --render-actor-colorcoding
+        "${UTSURE_SUBTITLE_ACTOR_COLORCODING_SAMPLE_FILE}"
+)
+
+add_test(
     NAME utsure.core.subtitles.burn_in.h264
     COMMAND utsure_core_subtitle_burn_in_tests --h264
         "${UTSURE_SAMPLE_MEDIA_FILE}"
@@ -1660,7 +1690,7 @@ add_test(
 )
 utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.sequential_stability.h264)
 
-utsure_label_tests_matching("^utsure\\.core\\.(output_naming|resize|audio_stream_selection|source_import_paths|batch_parallelism|subtitle_auto_selection|thumbnail_preroll|subtitle_renderer|subtitle_bitmap_compositor|libassmod_subtitle_adapter)" unit smoke)
+utsure_label_tests_matching("^utsure\\.core\\.(output_naming|resize|audio_stream_selection|source_import_paths|batch_parallelism|subtitle_auto_selection|thumbnail_preroll|subtitles\\.mangetsu_metadata|subtitle_renderer|subtitle_bitmap_compositor|libassmod_subtitle_adapter)" unit smoke)
 utsure_label_tests_matching("^utsure\\.core\\.(media|job\\.encode|job\\.preflight|timeline|subtitles\\.burn_in|subtitles\\.image_assets|subtitles\\.font_recovery)" integration media)
 utsure_label_tests_matching("^utsure\\.core\\.subtitles\\.burn_in\\.(h264|img_asset\\.h264|timeline\\.h264|timeline\\.resize\\.h264|timeline\\.thumbnail_preroll\\.resize\\.h264|sequential_stability\\.h264)$" smoke)
 utsure_label_tests_matching("^utsure\\.core\\.media\\.(inspection|decode|encode)\\." smoke)

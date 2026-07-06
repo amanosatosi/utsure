@@ -48,31 +48,40 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M45 Subtitle renderer timestamp epsilon audit implemented; awaiting GitHub Actions validation.
 - [x] M46 Busy indicator yellow circle color implemented; awaiting GitHub Actions validation.
 - [x] M47 Uncaught C++ encode crash diagnostics implemented; awaiting GitHub Actions validation.
-- [ ] M48 FFmpeg-main libassmod port scope reset; Mangetsu metadata feeding deferred.
+- [x] M48 Mangetsu actor colorcoding host feed implemented; awaiting GitHub Actions validation.
 
-### M48 FFmpeg-main libassmod port scope reset
+### M48 Mangetsu actor colorcoding host feed
 
-Status: Re-scoped; Mangetsu metadata feeding removed from the active milestone
+Status: Implemented; awaiting GitHub Actions validation
 
 Scope:
   * Keep FFmpeg/libav responsible for probing, demuxing, decoding, encoding, and muxing in the existing streaming path.
   * Keep libassmod as the subtitle parser/renderer and keep Utsure-owned RGBA subtitle blending before video frames are sent to the encoder.
-  * Defer ASS Mangetsu actor colorcoding metadata parsing/host-feeding until a later milestone.
-  * Do not change GUI layout, queue behavior, or unrelated encode settings in this scope reset.
+  * Support documented Mangetsu actor colorcoding metadata in external ASS files by feeding the top contiguous `Comment:` metadata block to libassmod before first render.
+  * Do not change GUI layout, queue behavior, output settings, FFmpeg subtitle filters, or unrelated encode behavior.
 
 Implementation approach:
-  * Remove the temporary ASS Mangetsu metadata parser, renderer request fields, libassmod feed call, focused tests, and crash-sidecar feed diagnostics.
-  * Keep the existing FFmpeg/libav streaming path and libassmod RGBA subtitle rendering path intact.
+  * Add a small core ASS Events metadata scanner that reads the `Format:` line, maps `Name`, `Effect`, and `Text`, accepts only the immediate top-block `Comment:` lines whose trimmed effect is exactly `mangetsu-colorcoding`, and ignores later matches.
+  * Require libassmod's `ass_process_mangetsu_colorcoding_line()` symbol at build time and feed accepted metadata lines immediately after `ass_read_file()`.
+  * Log scan/feed status, accepted actor names, whitelist presence, missing `[Events]`/`Format:` cases, and late ignored matches without dumping full override text by default.
+  * Add focused scanner tests plus render/signature tests that compare actor metadata output to inline ASS overrides.
   * Validate locally with static checks only; compile and CTest execution remain reserved for GitHub Actions.
 
-Scope changes:
-  * Removed the Mangetsu metadata test target from the active test set instead of patching CI to build it.
-  * Removed runtime diagnostics tied only to the deferred feed stage.
-  * Left the previously selected libassmod branch dependency direction unchanged.
+Implementation notes:
+  * Preserve host-side `\img` asset resolution, RGBA subtitle rendering, bitmap compositor behavior, font recovery, and normal ASS rendering.
+  * Keep the existing libassmod `mangetsu` branch dependency direction; CI should fail clearly if the installed header/library do not expose the new host API.
+
+Implemented:
+  * Added a core ASS Mangetsu actor colorcoding metadata scanner that maps `Name`, `Effect`, and `Text` from `[Events] Format:`, accepts only the top contiguous `Comment:` block with exact `Effect=mangetsu-colorcoding`, preserves comma-bearing `Text`, tracks whitelist presence, and records late ignored matches.
+  * Fed accepted metadata lines to libassmod with `ass_process_mangetsu_colorcoding_line(..., is_comment=1, is_top_block=1)` immediately after `ass_read_file()` succeeds and before session render use.
+  * Added session diagnostics for scan/feed status, accepted names, whitelist presence, late ignored matches, and feed counters without logging full override text.
+  * Added a configure-time libassmod API probe for `ass_process_mangetsu_colorcoding_line()` and a clear failure message for older prefixes.
+  * Added scanner tests, a sample actor-colorcoding ASS file, render-signature equivalence tests for metadata vs inline overrides, unknown actor default behavior, whitelist behavior, and multi-border passthrough.
+  * Updated subtitle/dependency/setup docs for the supported metadata shape and libassmod API requirement.
 
 Validation:
-  * Static validation after rollback: `git diff --check` reported no whitespace errors, and targeted searches found no remaining Mangetsu metadata/feed symbols under `src` or `tests`.
-  * Local compile/CTest execution remains reserved for GitHub Actions.
+  * Static validation included `git diff --check`, direct trailing-whitespace scans for new files, targeted wiring searches for the new CMake/CI/test paths, and a targeted search confirming no FFmpeg subtitle filter path was introduced.
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
 
 ### M47 Uncaught C++ encode crash diagnostics
 

@@ -112,4 +112,5 @@ The FontCollector bundling step requires a Windows Python on `PATH`; GitHub Acti
 - The only documented release output today is the portable Windows bundle.
 - Large jobs can still be rejected during preflight if the bounded-memory streaming pipeline estimate exceeds its safety limit.
 - libassmod `\img` subtitle scripts can use host-side registered PNG, JPEG, or WebP assets resolved next to the `.ass` file or in simple sidecar asset folders; Utsure does not render those tags itself.
+- Mangetsu actor colorcoding in external ASS files is supported on the libassmod subtitle burn-in path when the source-built libassmod prefix exposes `ass_process_mangetsu_colorcoding_line()` from commit `1d05f0dd78b1a53f45cb7a1e7c87a4a2dc691f7e` or newer. Metadata must be the top contiguous `Comment:` block after `[Events] Format:`; late matching comments are ignored and comments are not rendered.
 - Local build verification is still secondary to GitHub Actions for this repository state; the FFMS2 preview backend was integrated for CI-first validation, not for local compile/testing.

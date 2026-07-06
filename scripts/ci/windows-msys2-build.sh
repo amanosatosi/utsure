@@ -72,6 +72,7 @@ cmake --build "${build_dir}" --target utsure_core_subtitle_image_assets_tests --
 cmake --build "${build_dir}" --target utsure_core_thumbnail_preroll_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_subtitle_font_recovery_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_timeline_tests --parallel
+cmake --build "${build_dir}" --target utsure_core_subtitle_mangetsu_metadata_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_subtitle_renderer_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_libassmod_subtitle_adapter_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_libassmod_rgba_reproducer --parallel
