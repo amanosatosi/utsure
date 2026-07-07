@@ -6,6 +6,8 @@ shopt -s nullglob
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 build_dir="${UTSURE_BUILD_DIR:-${project_root}/build}"
 artifact_root="${UTSURE_ARTIFACT_ROOT:-${project_root}/artifacts}"
+third_party_root="${UTSURE_THIRD_PARTY_ROOT:-${project_root}/.deps}"
+libassmod_prefix="${UTSURE_LIBASSMOD_PREFIX:-${third_party_root}/libassmod/prefix}"
 bundle_name="${UTSURE_PORTABLE_BUNDLE_NAME:-encoder-windows-x64-portable}"
 bundle_dir="${artifact_root}/${bundle_name}"
 commit_sha="${GITHUB_SHA:-$(git -C "${project_root}" rev-parse HEAD 2>/dev/null || printf 'unknown')}"
@@ -30,6 +32,13 @@ find "${build_dir}" -type f \( -name 'utsure*.dll' -o -name 'libutsure*.dll' \) 
     cp "${binary_path}" "${symbols_dir}/build/"
   done
 
+if [[ -d "${libassmod_prefix}/bin" ]]; then
+  find "${libassmod_prefix}/bin" -maxdepth 1 -type f \( -name 'libass*.dll' -o -name 'libass*.pdb' \) -print0 |
+    while IFS= read -r -d '' binary_path; do
+      cp "${binary_path}" "${symbols_dir}/build/"
+    done
+fi
+
 if [[ -d "${bundle_dir}" ]]; then
   find "${bundle_dir}" -maxdepth 1 -type f \( -name '*.exe' -o -name '*.dll' \) -print0 |
     while IFS= read -r -d '' binary_path; do
@@ -41,6 +50,8 @@ fi
   printf 'commit=%s\n' "${commit_sha}"
   printf 'build_type=%s\n' "${UTSURE_CMAKE_BUILD_TYPE:-unknown}"
   printf 'toolchain=%s\n' "${UTSURE_TOOLCHAIN_ID_PREFIX:-unknown}"
+  printf 'libassmod_ref=%s\n' "${UTSURE_LIBASSMOD_REF:-unknown}"
+  printf 'libassmod_buildtype=%s\n' "${UTSURE_LIBASSMOD_BUILDTYPE:-debugoptimized}"
   printf 'bundle_name=%s\n' "${bundle_name}"
   printf 'generated_utc=%s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 } > "${symbols_dir}/build-metadata.txt"

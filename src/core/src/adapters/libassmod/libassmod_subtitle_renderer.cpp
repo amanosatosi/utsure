@@ -36,18 +36,26 @@ extern "C" {
 #ifndef UTSURE_LIBASSMOD_REF
 #define UTSURE_LIBASSMOD_REF "unknown"
 #endif
+#ifndef UTSURE_LIBASSMOD_HAS_MANGETSU_ACTOR_COLORCODING
+#define UTSURE_LIBASSMOD_HAS_MANGETSU_ACTOR_COLORCODING 1
+#endif
 
 namespace utsure::core::subtitles {
 
 namespace {
 
-std::mutex &libassmod_global_mutex();
+std::recursive_mutex &libassmod_global_mutex();
 bool should_serialize_all_libassmod_calls() noexcept;
 
 struct LibraryDeleter final {
     void operator()(ASS_Library *library) const noexcept {
         if (library != nullptr) {
-            ass_library_done(library);
+            if (should_serialize_all_libassmod_calls()) {
+                const std::lock_guard lock(libassmod_global_mutex());
+                ass_library_done(library);
+            } else {
+                ass_library_done(library);
+            }
         }
     }
 };
@@ -57,7 +65,12 @@ using LibraryHandle = std::unique_ptr<ASS_Library, LibraryDeleter>;
 struct RendererDeleter final {
     void operator()(ASS_Renderer *renderer) const noexcept {
         if (renderer != nullptr) {
-            ass_renderer_done(renderer);
+            if (should_serialize_all_libassmod_calls()) {
+                const std::lock_guard lock(libassmod_global_mutex());
+                ass_renderer_done(renderer);
+            } else {
+                ass_renderer_done(renderer);
+            }
         }
     }
 };
@@ -67,7 +80,12 @@ using RendererHandle = std::unique_ptr<ASS_Renderer, RendererDeleter>;
 struct TrackDeleter final {
     void operator()(ASS_Track *track) const noexcept {
         if (track != nullptr) {
-            ass_free_track(track);
+            if (should_serialize_all_libassmod_calls()) {
+                const std::lock_guard lock(libassmod_global_mutex());
+                ass_free_track(track);
+            } else {
+                ass_free_track(track);
+            }
         }
     }
 };
@@ -316,8 +334,8 @@ std::mutex &subtitle_setup_mutex() {
     return mutex;
 }
 
-std::mutex &libassmod_global_mutex() {
-    static std::mutex mutex;
+std::recursive_mutex &libassmod_global_mutex() {
+    static std::recursive_mutex mutex;
     return mutex;
 }
 
@@ -473,6 +491,7 @@ MangetsuActorColorcodingFeedResult feed_mangetsu_actor_colorcoding_metadata(
     result.diagnostics.insert(result.diagnostics.end(), metadata.warnings.begin(), metadata.warnings.end());
     result.diagnostics.insert(result.diagnostics.end(), metadata.debug_notes.begin(), metadata.debug_notes.end());
 
+#if UTSURE_LIBASSMOD_HAS_MANGETSU_ACTOR_COLORCODING
     for (const auto &line : metadata.lines) {
         const int accepted = with_optional_global_libassmod_lock([&track, &line]() {
             return ass_process_mangetsu_colorcoding_line(
@@ -505,6 +524,16 @@ MangetsuActorColorcodingFeedResult feed_mangetsu_actor_colorcoding_metadata(
             std::to_string(line.source_line_number) + " for Name='" + line.name + "'."
         );
     }
+#else
+    (void)track;
+    if (!metadata.lines.empty()) {
+        result.rejected_line_count = metadata.lines.size();
+        result.diagnostics.push_back(
+            "mangetsu-actor-colorcoding feed skipped because this diagnostic build is linked against libass "
+            "without ass_process_mangetsu_colorcoding_line()."
+        );
+    }
+#endif
 
     result.completed = true;
     result.diagnostics.push_back(
@@ -893,6 +922,68 @@ bool should_emit_subtitle_render_trace(const SubtitleRenderRequest &request) noe
     return frame_index < 5 || frame_index % 300 == 0;
 }
 
+std::optional<std::int64_t> read_int64_environment_variable(const char *name) noexcept {
+    const char *value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return std::nullopt;
+    }
+
+    char *end = nullptr;
+    const long long parsed = std::strtoll(value, &end, 10);
+    if (end == value) {
+        return std::nullopt;
+    }
+    return static_cast<std::int64_t>(parsed);
+}
+
+bool should_log_active_ass_events_for_request(const SubtitleRenderRequest &request) noexcept {
+    if (request.debug_context == nullptr || !request.debug_context->log_callback) {
+        return false;
+    }
+
+    const auto target_frame = read_int64_environment_variable("UTSURE_SUBTITLE_EVENT_LOG_FRAME");
+    if (target_frame.has_value() && request.debug_context->decoded_frame_index == *target_frame) {
+        return true;
+    }
+
+    const auto target_ms = read_int64_environment_variable("UTSURE_SUBTITLE_EVENT_LOG_PTS_MS");
+    if (target_ms.has_value() &&
+        subtitle_timestamp_microseconds_to_renderer_milliseconds(request.timestamp_microseconds) == *target_ms) {
+        return true;
+    }
+
+    if (runtime::environment_flag_enabled("UTSURE_SUBTITLE_EVENT_LOG_REPORTED_FRAME") &&
+        (request.debug_context->decoded_frame_index == 28109 ||
+         subtitle_timestamp_microseconds_to_renderer_milliseconds(request.timestamp_microseconds) == 1172380)) {
+        return true;
+    }
+
+    return false;
+}
+
+std::string shortened_ass_text_preview(const char *text) {
+    if (text == nullptr) {
+        return {};
+    }
+
+    std::string preview(text);
+    for (char &character : preview) {
+        if (character == '\r' || character == '\n' || character == '\t') {
+            character = ' ';
+        }
+    }
+    constexpr std::size_t kMaxPreviewBytes = 120U;
+    if (preview.size() > kMaxPreviewBytes) {
+        preview.resize(kMaxPreviewBytes);
+        preview += "...";
+    }
+    return preview;
+}
+
+std::string nullable_ass_string(const char *text) {
+    return text != nullptr ? std::string(text) : std::string{};
+}
+
 class LibassmodSubtitleRenderSession final : public SubtitleRenderSession {
 public:
     LibassmodSubtitleRenderSession(
@@ -913,6 +1004,9 @@ public:
           library_(std::move(library)),
           renderer_(std::move(renderer)),
           track_(std::move(track)),
+          initial_library_ptr_(library_.get()),
+          initial_renderer_ptr_(renderer_.get()),
+          initial_track_ptr_(track_.get()),
           runtime_options_(runtime::resolve_subtitle_runtime_options()),
           session_instance_id_(next_session_instance_id()),
           created_thread_id_(std::this_thread::get_id()) {
@@ -965,6 +1059,7 @@ public:
         {
             std::unique_lock lock(access_mutex_);
             cleanup_started_.store(true, std::memory_order_release);
+            log_session_lifecycle_without_request_locked("subtitle cleanup started");
             access_available_.wait(lock, [this]() {
                 return active_render_count_ == 0;
             });
@@ -972,6 +1067,8 @@ public:
         }
 
         destroyed_thread_id_ = std::this_thread::get_id();
+        log_session_lifecycle_without_request("subtitle cleanup teardown");
+        assert(!runtime::strict_same_thread_lifetime_enabled() || destroyed_thread_id_ == created_thread_id_);
         with_optional_global_libassmod_lock([this]() {
             if (renderer_) {
                 ass_clear_tag_images(renderer_.get());
@@ -1294,6 +1391,119 @@ private:
         quirk_diagnostics_logged_ = true;
     }
 
+    void remember_lifecycle_callback(const SubtitleRenderRequest &request) {
+        if (request.debug_context != nullptr && request.debug_context->lifecycle_callback) {
+            lifecycle_callback_ = request.debug_context->lifecycle_callback;
+        }
+    }
+
+    void log_session_lifecycle_without_request_locked(const std::string_view event) const {
+        if (!lifecycle_callback_) {
+            return;
+        }
+
+        std::ostringstream message;
+        message << event
+                << ": session_instance_id=" << session_instance_id_
+                << ", renderer=" << pointer_to_string(renderer_.get())
+                << ", track=" << pointer_to_string(track_.get())
+                << ", library=" << pointer_to_string(library_.get())
+                << ", active_subtitle_render_count=" << active_render_count_
+                << ", subtitle_renderer_created_thread_id=" << created_thread_id_
+                << ", subtitle_renderer_destroyed_thread_id=" << destroyed_thread_id_
+                << ", last_subtitle_event_count=" << (track_ != nullptr ? track_->n_events : 0)
+                << ", registered_image_asset_count=" << image_assets_.size()
+                << ", subtitle_cleanup_started=" << (cleanup_started_.load(std::memory_order_acquire) ? 1 : 0)
+                << ", safe_mode=" << (runtime::environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ? 1 : 0)
+                << ", strict_same_thread=" << (runtime::strict_same_thread_lifetime_enabled() ? 1 : 0)
+                << ", global_libass_lock=" << (runtime::global_libass_lock_enabled() ? 1 : 0)
+                << ", bitmap_transfer_mode=" << runtime::to_string(runtime_options_.bitmap_transfer_mode)
+                << ", composition_mode=" << runtime::to_string(runtime_options_.composition_mode);
+        try {
+            lifecycle_callback_(message.str());
+        } catch (...) {
+        }
+    }
+
+    void log_session_lifecycle_without_request(const std::string_view event) const {
+        std::lock_guard lock(access_mutex_);
+        log_session_lifecycle_without_request_locked(event);
+    }
+
+    void assert_session_identity_locked() const {
+        assert(library_.get() == initial_library_ptr_);
+        assert(renderer_.get() == initial_renderer_ptr_);
+        assert(track_.get() == initial_track_ptr_);
+        if (library_.get() != initial_library_ptr_ ||
+            renderer_.get() != initial_renderer_ptr_ ||
+            track_.get() != initial_track_ptr_) {
+            throw std::runtime_error(
+                "libassmod subtitle session " + std::to_string(session_instance_id_) +
+                " changed renderer, track, or library pointer unexpectedly."
+            );
+        }
+    }
+
+    void enforce_same_thread_lifetime_locked(const char *operation) const {
+        if (!runtime::strict_same_thread_lifetime_enabled()) {
+            return;
+        }
+
+        if (std::this_thread::get_id() != created_thread_id_) {
+            throw std::runtime_error(
+                "Strict libassmod same-thread mode blocked " + std::string(operation) +
+                " on a different thread than session creation for subtitle session " +
+                std::to_string(session_instance_id_) + "."
+            );
+        }
+    }
+
+    void maybe_log_active_ass_events(const SubtitleRenderRequest &request) const {
+        if (!should_log_active_ass_events_for_request(request) ||
+            request.debug_context == nullptr ||
+            !request.debug_context->log_callback ||
+            track_ == nullptr) {
+            return;
+        }
+
+        const auto timestamp_ms =
+            subtitle_timestamp_microseconds_to_renderer_milliseconds(request.timestamp_microseconds);
+        int active_count = 0;
+        for (int index = 0; index < track_->n_events; ++index) {
+            const ASS_Event &event = track_->events[index];
+            const auto start_ms = static_cast<std::int64_t>(event.Start);
+            const auto end_ms = start_ms + static_cast<std::int64_t>(event.Duration);
+            if (timestamp_ms < start_ms || timestamp_ms >= end_ms) {
+                continue;
+            }
+
+            ++active_count;
+            std::string style_name{};
+            if (track_->styles != nullptr && event.Style >= 0 && event.Style < track_->n_styles) {
+                style_name = nullable_ass_string(track_->styles[event.Style].Name);
+            }
+            std::ostringstream message;
+            message << "Active ASS event at subtitle frame: frame="
+                    << request.debug_context->decoded_frame_index
+                    << ", renderer_pts_ms=" << timestamp_ms
+                    << ", event_index=" << index
+                    << ", layer=" << event.Layer
+                    << ", style=" << style_name
+                    << ", actor=" << nullable_ass_string(event.Name)
+                    << ", start_ms=" << start_ms
+                    << ", end_ms=" << end_ms
+                    << ", effect=" << nullable_ass_string(event.Effect)
+                    << ", text_preview=" << shortened_ass_text_preview(event.Text);
+            request.debug_context->log_callback(message.str());
+        }
+
+        std::ostringstream summary;
+        summary << "Active ASS event summary: frame=" << request.debug_context->decoded_frame_index
+                << ", renderer_pts_ms=" << timestamp_ms
+                << ", active_event_count=" << active_count;
+        request.debug_context->log_callback(summary.str());
+    }
+
     void log_render_lifecycle(
         const SubtitleRenderRequest &request,
         const std::string_view event,
@@ -1442,12 +1652,15 @@ private:
         const SubtitleRenderRequest &request
     ) {
         std::unique_lock lock(access_mutex_);
+        remember_lifecycle_callback(request);
         if (cleanup_started_.load(std::memory_order_acquire)) {
+            log_session_lifecycle_without_request_locked("subtitle render rejected after cleanup started");
             throw std::runtime_error(
                 "Attempted to " + std::string(operation) + " while cleanup had begun for libassmod subtitle session " +
                 std::to_string(session_instance_id_) + '.'
             );
         }
+        enforce_same_thread_lifetime_locked(operation);
 
         if (render_in_progress_) {
             throw std::runtime_error(
@@ -1466,10 +1679,12 @@ private:
             assert(library_ != nullptr);
             assert(renderer_ != nullptr);
             assert(track_ != nullptr);
+            assert_session_identity_locked();
         } catch (...) {
             throw;
         }
 
+        maybe_log_active_ass_events(request);
         render_in_progress_ = true;
         ++active_render_count_;
         active_subtitle_render_count_.store(active_render_count_, std::memory_order_release);
@@ -1505,6 +1720,9 @@ private:
     LibraryHandle library_{};
     RendererHandle renderer_{};
     TrackHandle track_{};
+    ASS_Library *initial_library_ptr_{nullptr};
+    ASS_Renderer *initial_renderer_ptr_{nullptr};
+    ASS_Track *initial_track_ptr_{nullptr};
     runtime::SubtitleRuntimeOptions runtime_options_{};
     int session_instance_id_{0};
     std::thread::id created_thread_id_{};
@@ -1522,6 +1740,7 @@ private:
     bool quirk_diagnostics_logged_{false};
     bool off_frame_bitmap_warning_logged_{false};
     bool clipped_bitmap_warning_logged_{false};
+    std::function<void(const std::string &)> lifecycle_callback_{};
 };
 
 class LibassmodSubtitleRenderer final : public SubtitleRenderer {

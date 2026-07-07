@@ -128,6 +128,11 @@ strip_portable_debug_symbols() {
     return 0
   fi
 
+  if [[ "${UTSURE_DIAGNOSTIC_SYMBOLS:-OFF}" == "ON" || "${UTSURE_CMAKE_BUILD_TYPE:-}" == "Debug" ]]; then
+    echo "Keeping portable debug symbols for diagnostic build."
+    return 0
+  fi
+
   if ! command -v strip >/dev/null 2>&1; then
     echo "Portable packaging expected strip to be available for RelWithDebInfo bundle slimming."
     exit 1

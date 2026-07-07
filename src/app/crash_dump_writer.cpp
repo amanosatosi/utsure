@@ -373,6 +373,26 @@ void append_json_bool(std::ostringstream &json, const char *key, const bool valu
     json << '\n';
 }
 
+void append_json_string_array(
+    std::ostringstream &json,
+    const char *key,
+    const std::vector<std::string> &values,
+    const bool trailing_comma
+) {
+    json << "  \"" << key << "\": [";
+    for (std::size_t index = 0; index < values.size(); ++index) {
+        if (index > 0) {
+            json << ", ";
+        }
+        json << '"' << json_escape(values[index]) << '"';
+    }
+    json << ']';
+    if (trailing_comma) {
+        json << ',';
+    }
+    json << '\n';
+}
+
 std::optional<std::string> extract_value_after(std::string_view message, std::string_view key) {
     const auto key_position = message.find(key);
     if (key_position == std::string_view::npos) {
@@ -582,6 +602,9 @@ void apply_optional(CrashContextSnapshot &snapshot, const CrashContextUpdate &up
     if (update.last_subtitle_render_end_pts.has_value()) {
         snapshot.last_subtitle_render_end_pts = *update.last_subtitle_render_end_pts;
     }
+    if (update.subtitle_renderer_pts_ms.has_value()) {
+        snapshot.subtitle_renderer_pts_ms = *update.subtitle_renderer_pts_ms;
+    }
     if (update.last_subtitle_event_count.has_value()) {
         snapshot.last_subtitle_event_count = *update.last_subtitle_event_count;
     }
@@ -724,17 +747,6 @@ bool should_write_vectored_exception_dump(EXCEPTION_POINTERS *exception_pointers
     return is_hard_fault_exception_code(exception_pointers->ExceptionRecord->ExceptionCode);
 }
 
-unsigned long exception_code_from_pointers(void *exception_pointers) noexcept {
-    if (exception_pointers == nullptr) {
-        return 0UL;
-    }
-    const auto *pointers = static_cast<EXCEPTION_POINTERS *>(exception_pointers);
-    if (pointers->ExceptionRecord == nullptr) {
-        return 0UL;
-    }
-    return static_cast<unsigned long>(pointers->ExceptionRecord->ExceptionCode);
-}
-
 std::string exception_address_from_pointers(void *exception_pointers) {
     if (exception_pointers == nullptr) {
         return {};
@@ -746,6 +758,217 @@ std::string exception_address_from_pointers(void *exception_pointers) {
     std::ostringstream text;
     text << "0x" << std::hex << reinterpret_cast<std::uintptr_t>(pointers->ExceptionRecord->ExceptionAddress);
     return text.str();
+}
+
+std::string hex_pointer(const std::uintptr_t value) {
+    std::ostringstream text;
+    text << "0x" << std::hex << value;
+    return text.str();
+}
+
+struct ModuleAddressInfo final {
+    bool found{false};
+    std::string name{};
+    std::string path{};
+    std::uintptr_t base{0};
+    std::uint64_t size{0};
+    unsigned long checksum{0};
+    unsigned long timestamp{0};
+};
+
+std::string narrow_windows_path(const std::wstring &path) {
+    return utf8_path_string(std::filesystem::path(path));
+}
+
+ModuleAddressInfo module_info_for_address(const void *address) {
+    ModuleAddressInfo info{};
+    if (address == nullptr) {
+        return info;
+    }
+
+    HMODULE module = nullptr;
+    if (GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            static_cast<LPCWSTR>(address),
+            &module
+        ) == 0 ||
+        module == nullptr) {
+        return info;
+    }
+
+    MODULEINFO module_info{};
+    if (GetModuleInformation(GetCurrentProcess(), module, &module_info, sizeof(module_info)) != 0) {
+        info.base = reinterpret_cast<std::uintptr_t>(module_info.lpBaseOfDll);
+        info.size = static_cast<std::uint64_t>(module_info.SizeOfImage);
+    } else {
+        info.base = reinterpret_cast<std::uintptr_t>(module);
+    }
+
+    std::array<wchar_t, 32768> path_buffer{};
+    const DWORD path_length = GetModuleFileNameW(module, path_buffer.data(), static_cast<DWORD>(path_buffer.size()));
+    if (path_length > 0 && path_length < path_buffer.size()) {
+        try {
+            info.path = narrow_windows_path(std::wstring(path_buffer.data(), path_length));
+            info.name = std::filesystem::path(info.path).filename().string();
+        } catch (...) {
+            info.path.clear();
+        }
+    }
+
+    const auto *dos_header = reinterpret_cast<const IMAGE_DOS_HEADER *>(module);
+    if (dos_header != nullptr && dos_header->e_magic == IMAGE_DOS_SIGNATURE) {
+        const auto *nt_headers = reinterpret_cast<const IMAGE_NT_HEADERS *>(
+            reinterpret_cast<const std::byte *>(module) + dos_header->e_lfanew
+        );
+        if (nt_headers != nullptr && nt_headers->Signature == IMAGE_NT_SIGNATURE) {
+            info.checksum = static_cast<unsigned long>(nt_headers->OptionalHeader.CheckSum);
+            info.timestamp = static_cast<unsigned long>(nt_headers->FileHeader.TimeDateStamp);
+        }
+    }
+
+    if (info.name.empty()) {
+        info.name = hex_pointer(reinterpret_cast<std::uintptr_t>(module));
+    }
+    info.found = true;
+    return info;
+}
+
+std::string module_rva_text(const ModuleAddressInfo &module, const std::uintptr_t address) {
+    if (!module.found || module.base == 0U || address < module.base) {
+        return {};
+    }
+
+    std::ostringstream text;
+    text << module.name << "+0x" << std::hex << (address - module.base);
+    return text.str();
+}
+
+std::string module_rva_text_for_address(const void *address) noexcept {
+    try {
+        const auto module = module_info_for_address(address);
+        return module_rva_text(module, reinterpret_cast<std::uintptr_t>(address));
+    } catch (...) {
+        return {};
+    }
+}
+
+std::string access_violation_operation_from_record(const EXCEPTION_RECORD &record) {
+    if (record.ExceptionCode != EXCEPTION_ACCESS_VIOLATION || record.NumberParameters < 1) {
+        return {};
+    }
+    switch (record.ExceptionInformation[0]) {
+    case 0:
+        return "read";
+    case 1:
+        return "write";
+    case 8:
+        return "execute";
+    default:
+        return "unknown";
+    }
+}
+
+std::string access_violation_address_from_record(const EXCEPTION_RECORD &record) {
+    if (record.ExceptionCode != EXCEPTION_ACCESS_VIOLATION || record.NumberParameters < 2) {
+        return {};
+    }
+    return hex_pointer(static_cast<std::uintptr_t>(record.ExceptionInformation[1]));
+}
+
+std::string registers_from_context(const CONTEXT *context) {
+    if (context == nullptr) {
+        return {};
+    }
+
+    std::ostringstream text;
+#if defined(_M_X64) || defined(__x86_64__)
+    text << "RAX=" << hex_pointer(static_cast<std::uintptr_t>(context->Rax))
+         << " RBX=" << hex_pointer(static_cast<std::uintptr_t>(context->Rbx))
+         << " RCX=" << hex_pointer(static_cast<std::uintptr_t>(context->Rcx))
+         << " RDX=" << hex_pointer(static_cast<std::uintptr_t>(context->Rdx))
+         << " RSI=" << hex_pointer(static_cast<std::uintptr_t>(context->Rsi))
+         << " RDI=" << hex_pointer(static_cast<std::uintptr_t>(context->Rdi))
+         << " RBP=" << hex_pointer(static_cast<std::uintptr_t>(context->Rbp))
+         << " RSP=" << hex_pointer(static_cast<std::uintptr_t>(context->Rsp))
+         << " RIP=" << hex_pointer(static_cast<std::uintptr_t>(context->Rip))
+         << " R8=" << hex_pointer(static_cast<std::uintptr_t>(context->R8))
+         << " R9=" << hex_pointer(static_cast<std::uintptr_t>(context->R9))
+         << " R10=" << hex_pointer(static_cast<std::uintptr_t>(context->R10))
+         << " R11=" << hex_pointer(static_cast<std::uintptr_t>(context->R11))
+         << " R12=" << hex_pointer(static_cast<std::uintptr_t>(context->R12))
+         << " R13=" << hex_pointer(static_cast<std::uintptr_t>(context->R13))
+         << " R14=" << hex_pointer(static_cast<std::uintptr_t>(context->R14))
+         << " R15=" << hex_pointer(static_cast<std::uintptr_t>(context->R15));
+#else
+    text << "register_capture_unsupported_arch";
+#endif
+    return text.str();
+}
+
+std::vector<std::string> stack_module_addresses_from_context(const CONTEXT *context) {
+    std::vector<std::string> addresses{};
+    if (context == nullptr) {
+        return addresses;
+    }
+
+#if defined(_M_X64) || defined(__x86_64__)
+    auto *stack = reinterpret_cast<const std::uintptr_t *>(context->Rsp);
+    MEMORY_BASIC_INFORMATION memory{};
+    if (stack == nullptr ||
+        VirtualQuery(stack, &memory, sizeof(memory)) == 0 ||
+        memory.State != MEM_COMMIT ||
+        (memory.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0) {
+        return addresses;
+    }
+
+    const auto region_end = reinterpret_cast<std::uintptr_t>(memory.BaseAddress) + memory.RegionSize;
+    const auto stack_start = reinterpret_cast<std::uintptr_t>(stack);
+    const std::size_t readable_qwords = static_cast<std::size_t>(
+        std::min<std::uintptr_t>((region_end - stack_start) / sizeof(std::uintptr_t), 128U)
+    );
+    for (std::size_t index = 0; index < readable_qwords && addresses.size() < 16U; ++index) {
+        const auto candidate = stack[index];
+        const auto module = module_info_for_address(reinterpret_cast<const void *>(candidate));
+        if (!module.found) {
+            continue;
+        }
+        const auto module_text = module_rva_text(module, candidate);
+        if (!module_text.empty()) {
+            addresses.push_back(module_text);
+        }
+    }
+#endif
+    return addresses;
+}
+
+void populate_seh_metadata_from_pointers(
+    CrashDumpSidecarMetadata &metadata,
+    void *exception_pointers
+) {
+    if (exception_pointers == nullptr) {
+        return;
+    }
+    const auto *pointers = static_cast<EXCEPTION_POINTERS *>(exception_pointers);
+    if (pointers->ExceptionRecord == nullptr) {
+        return;
+    }
+
+    metadata.seh_exception_code = static_cast<unsigned long>(pointers->ExceptionRecord->ExceptionCode);
+    metadata.exception_address = exception_address_from_pointers(exception_pointers);
+    metadata.exception_address_module = module_rva_text_for_address(pointers->ExceptionRecord->ExceptionAddress);
+    metadata.access_violation_operation = access_violation_operation_from_record(*pointers->ExceptionRecord);
+    metadata.access_violation_address = access_violation_address_from_record(*pointers->ExceptionRecord);
+    const auto faulting_module = module_info_for_address(pointers->ExceptionRecord->ExceptionAddress);
+    if (faulting_module.found) {
+        metadata.faulting_module_name = faulting_module.name;
+        metadata.faulting_module_path = faulting_module.path;
+        metadata.faulting_module_base = hex_pointer(faulting_module.base);
+        metadata.faulting_module_size = faulting_module.size;
+        metadata.faulting_module_checksum = faulting_module.checksum;
+        metadata.faulting_module_timestamp = faulting_module.timestamp;
+    }
+    metadata.crashing_thread_registers = registers_from_context(pointers->ContextRecord);
+    metadata.stack_module_addresses = stack_module_addresses_from_context(pointers->ContextRecord);
 }
 
 struct MiniDumpAttemptResult final {
@@ -1051,6 +1274,7 @@ std::string crash_context_to_json(const CrashContextSnapshot &snapshot) {
     append_json_int(json, "active_subtitle_render_count", snapshot.active_subtitle_render_count, true);
     append_json_int(json, "last_subtitle_render_start_pts", snapshot.last_subtitle_render_start_pts, true);
     append_json_int(json, "last_subtitle_render_end_pts", snapshot.last_subtitle_render_end_pts, true);
+    append_json_int(json, "subtitle_renderer_pts_ms", snapshot.subtitle_renderer_pts_ms, true);
     append_json_int(json, "last_subtitle_event_count", snapshot.last_subtitle_event_count, true);
     append_json_int(json, "registered_image_asset_count", snapshot.registered_image_asset_count, true);
     append_json_string(json, "last_registered_image_asset_name", snapshot.last_registered_image_asset_name, true);
@@ -1096,6 +1320,7 @@ void append_context_json_object(std::ostringstream &json, const CrashContextSnap
     append_json_int(json, "active_subtitle_render_count", snapshot.active_subtitle_render_count, true);
     append_json_int(json, "last_subtitle_render_start_pts", snapshot.last_subtitle_render_start_pts, true);
     append_json_int(json, "last_subtitle_render_end_pts", snapshot.last_subtitle_render_end_pts, true);
+    append_json_int(json, "subtitle_renderer_pts_ms", snapshot.subtitle_renderer_pts_ms, true);
     append_json_int(json, "last_subtitle_event_count", snapshot.last_subtitle_event_count, true);
     append_json_int(json, "registered_image_asset_count", snapshot.registered_image_asset_count, true);
     append_json_string(json, "last_registered_image_asset_name", snapshot.last_registered_image_asset_name, true);
@@ -1125,6 +1350,17 @@ std::string crash_context_collection_to_json(
     append_json_string(json, "dump_path_attempted", metadata.dump_path_attempted, true);
     append_json_uint(json, "exception_code", metadata.seh_exception_code, true);
     append_json_string(json, "exception_address", metadata.exception_address, true);
+    append_json_string(json, "exception_address_module", metadata.exception_address_module, true);
+    append_json_string(json, "faulting_module_name", metadata.faulting_module_name, true);
+    append_json_string(json, "faulting_module_path", metadata.faulting_module_path, true);
+    append_json_string(json, "faulting_module_base", metadata.faulting_module_base, true);
+    append_json_uint(json, "faulting_module_size", metadata.faulting_module_size, true);
+    append_json_uint(json, "faulting_module_checksum", metadata.faulting_module_checksum, true);
+    append_json_uint(json, "faulting_module_timestamp", metadata.faulting_module_timestamp, true);
+    append_json_string(json, "access_violation_operation", metadata.access_violation_operation, true);
+    append_json_string(json, "access_violation_address", metadata.access_violation_address, true);
+    append_json_string(json, "crashing_thread_registers", metadata.crashing_thread_registers, true);
+    append_json_string_array(json, "stack_module_addresses", metadata.stack_module_addresses, true);
     append_json_bool(json, "cxx_exception_active", metadata.cxx_exception_active, true);
     append_json_string(json, "cxx_exception_type", metadata.cxx_exception_type, true);
     append_json_string(json, "cxx_exception_message", metadata.cxx_exception_message, true);
@@ -1146,6 +1382,7 @@ std::string crash_context_collection_to_json(
     append_json_int(json, "active_subtitle_render_count", snapshot.last_updated_context.active_subtitle_render_count, true);
     append_json_int(json, "last_subtitle_render_start_pts", snapshot.last_updated_context.last_subtitle_render_start_pts, true);
     append_json_int(json, "last_subtitle_render_end_pts", snapshot.last_updated_context.last_subtitle_render_end_pts, true);
+    append_json_int(json, "subtitle_renderer_pts_ms", snapshot.last_updated_context.subtitle_renderer_pts_ms, true);
     append_json_int(json, "last_subtitle_event_count", snapshot.last_updated_context.last_subtitle_event_count, true);
     append_json_int(json, "registered_image_asset_count", snapshot.last_updated_context.registered_image_asset_count, true);
     append_json_bool(json, "subtitle_cleanup_started", snapshot.last_updated_context.subtitle_cleanup_started, true);
@@ -1368,11 +1605,17 @@ void update_crash_context_from_runtime_log(const std::string_view message) {
             update.last_subtitle_render_start_pts = parse_int64_value(*value);
             update.pts = parse_int64_value(*value);
         }
+        if (auto value = extract_value_after(message, "renderer_pts_ms=")) {
+            update.subtitle_renderer_pts_ms = parse_int64_value(*value);
+        }
     }
     if (message.find("subtitle render end") != std::string_view::npos) {
         if (auto value = extract_value_after(message, "pts_us=")) {
             update.last_subtitle_render_end_pts = parse_int64_value(*value);
             update.pts = parse_int64_value(*value);
+        }
+        if (auto value = extract_value_after(message, "renderer_pts_ms=")) {
+            update.subtitle_renderer_pts_ms = parse_int64_value(*value);
         }
     }
     if (auto value = extract_value_after(message, "renderer=")) {
@@ -1492,17 +1735,27 @@ std::string crash_marker_text(
     const CrashDumpSidecarMetadata &metadata
 ) {
     std::ostringstream text;
+    const bool handler_marker = std::string_view(marker_name) == "handler_entered";
     text << "marker=" << marker_name << '\n'
          << "timestamp_unix_ms=" << current_unix_milliseconds() << '\n'
          << "pid=" << current_process_id() << '\n'
          << "tid=" << snapshot.crashing_thread_id << '\n'
          << "handler_entered=" << (metadata.handler_entered ? 1 : 0) << '\n'
-         << "dump_write_success=" << (metadata.dump_write_success ? 1 : 0) << '\n'
+         << "dump_write_success=" << (handler_marker ? "pending" : (metadata.dump_write_success ? "1" : "0")) << '\n'
          << "dump_write_error_code=" << metadata.dump_write_error_code << '\n'
          << "dump_write_error_message=" << metadata.dump_write_error_message << '\n'
          << "dump_path_attempted=" << metadata.dump_path_attempted << '\n'
          << "exception_code=" << metadata.seh_exception_code << '\n'
          << "exception_address=" << metadata.exception_address << '\n'
+         << "exception_address_module=" << metadata.exception_address_module << '\n'
+         << "faulting_module_name=" << metadata.faulting_module_name << '\n'
+         << "faulting_module_base=" << metadata.faulting_module_base << '\n'
+         << "faulting_module_size=" << metadata.faulting_module_size << '\n'
+         << "faulting_module_checksum=" << metadata.faulting_module_checksum << '\n'
+         << "faulting_module_timestamp=" << metadata.faulting_module_timestamp << '\n'
+         << "access_violation_operation=" << metadata.access_violation_operation << '\n'
+         << "access_violation_address=" << metadata.access_violation_address << '\n'
+         << "crashing_thread_registers=" << metadata.crashing_thread_registers << '\n'
          << "cxx_exception_active=" << (metadata.cxx_exception_active ? 1 : 0) << '\n'
          << "cxx_exception_type=" << metadata.cxx_exception_type << '\n'
          << "cxx_exception_message=" << metadata.cxx_exception_message << '\n'
@@ -1646,8 +1899,7 @@ CrashDumpWriteResult write_crash_dump_for_current_process(void *exception_pointe
             .dump_path_attempted = utf8_path_string(paths.dump_path)
         };
 #if defined(_WIN32)
-        metadata.seh_exception_code = exception_code_from_pointers(exception_pointers);
-        metadata.exception_address = exception_address_from_pointers(exception_pointers);
+        populate_seh_metadata_from_pointers(metadata, exception_pointers);
 #endif
         capture_current_cxx_exception_metadata(metadata);
         std::string marker_error{};

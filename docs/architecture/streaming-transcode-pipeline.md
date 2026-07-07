@@ -114,7 +114,9 @@ Subtitle crash isolation flags:
 - `UTSURE_SUBTITLE_SYNC=1` forces serialized subtitle composition, copied subtitle bitmaps, and global libassmod call serialization.
 - `UTSURE_SUBTITLE_BITMAP_COPY=1` forces app-owned copied subtitle bitmaps.
 - `UTSURE_DISABLE_DIRECT_SUBTITLE_BITMAPS=1` ignores direct-bitmap requests and keeps copied mode.
-- `UTSURE_LIBASS_GLOBAL_LOCK=1` serializes libassmod setup, render, image-free, image-tag, and teardown calls across sessions.
+- `UTSURE_SUBTITLE_STRICT_SAME_THREAD=1` creates, uses, and destroys each libass subtitle session on the same subtitle worker thread.
+- `UTSURE_LIBASS_GLOBAL_LOCK=1` serializes libassmod setup, render, image-free, image-tag, renderer configuration, and teardown calls across sessions.
+- `UTSURE_SUBTITLE_STOP_AFTER_FRAME_RANGE=28100-28120` stops a diagnostic subtitle encode after the requested frame range.
 
 ## Audio Rules
 

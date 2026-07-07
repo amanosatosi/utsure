@@ -49,6 +49,40 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M46 Busy indicator yellow circle color implemented; awaiting GitHub Actions validation.
 - [x] M47 Uncaught C++ encode crash diagnostics implemented; awaiting GitHub Actions validation.
 - [x] M48 Mangetsu actor colorcoding host feed implemented; awaiting GitHub Actions validation.
+- [x] M49 Subtitle/libass crash diagnostics and strict lifetime modes implemented; awaiting GitHub Actions validation.
+
+### M49 Subtitle/libass crash diagnostics and strict lifetime modes
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Focus on the real `0xC0000005` subtitle-rendering crash in `libass-9.dll` at RVA `0x5A415`.
+  * Improve crash sidecar diagnostics before changing runtime behavior.
+  * Add temporary diagnostic modes for strict same-thread libass lifetime, complete global libass serialization, active ASS-event logging around the reported frame/timestamp, and short frame-range reproductions.
+  * Keep GUI behavior and normal encode output unchanged unless diagnostic environment variables are set.
+  * Do not prioritize `\img` host-asset debugging for this crash because the provided sidecar showed `registered_image_asset_count=0`.
+
+Implementation approach:
+  * Extend the Windows crash writer with module/RVA mapping, module metadata, access-violation decoding, register capture, and bounded stack qword module mapping using Windows module APIs only.
+  * Preserve the existing early handler marker but stop recording a false final dump result there by using `dump_write_success=pending`; keep the final JSON and dump-failed marker as the authoritative result.
+  * Move subtitle session creation into the worker thread only in strict diagnostic mode, and add session-level pointer identity and same-thread assertions/logging.
+  * Extend the existing global lock path so RAII teardown/free calls are serialized too.
+  * Document debug-symbol builds, RVA symbolization commands, strict/global-lock/event/range switches, and the upstream-libass comparison path.
+
+Implemented:
+  * Crash JSON now records `exception_address_module`, faulting module name/path/base/size/checksum/timestamp, access-violation operation/address, crashing-thread registers, and up to 16 stack qwords mapped to `module+RVA`.
+  * Handler-entered markers now record `dump_write_success=pending`, removing the misleading `0` vs final JSON `true` inconsistency.
+  * Added `UTSURE_SUBTITLE_STRICT_SAME_THREAD=1`, with safe mode also enabling strict same-thread behavior. In that mode subtitle sessions are created, used, and destroyed on the same subtitle worker thread.
+  * Added libass session pointer identity checks and cleanup/render lifecycle diagnostics, including rejection if render starts after cleanup has begun.
+  * Extended `UTSURE_LIBASS_GLOBAL_LOCK=1` coverage to library/renderer/track deleters in addition to init, config, read, render, image registration/free, tag clear, and teardown.
+  * Added active ASS-event logging for the reported frame/time via `UTSURE_SUBTITLE_EVENT_LOG_REPORTED_FRAME=1`, plus explicit `UTSURE_SUBTITLE_EVENT_LOG_FRAME` and `UTSURE_SUBTITLE_EVENT_LOG_PTS_MS`.
+  * Added `UTSURE_SUBTITLE_STOP_AFTER_FRAME_RANGE=28100-28120` to stop long subtitle repro runs after the requested range.
+  * Made libassmod dependency builds default to `debugoptimized`, included `libass-9.dll` in the symbols artifact, and made diagnostic/Debug portable packaging keep debug info.
+  * Added `UTSURE_ALLOW_UPSTREAM_LIBASS_DIAGNOSTIC=ON` so an ABI-compatible upstream libass prefix can be used for comparison builds while skipping the libassmod-only Mangetsu host metadata feed.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included targeted searches for new crash JSON fields, diagnostic environment switches, upstream-libass comparison wiring, and the handler marker consistency fix.
 
 ### M48 Mangetsu actor colorcoding host feed
 

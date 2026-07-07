@@ -268,14 +268,14 @@ int assert_crash_context_snapshot_and_json() {
 
     utsure::app::crash::update_crash_context_from_runtime_log(
         "subtitle render start: operation=compose, session_instance_id=5, frame=44, pts_us=1138596000, "
-        "thread_id=1234, renderer=0x1111, track=0x2222, library=0x3333, active_subtitle_render_count=1, "
+        "renderer_pts_ms=1138596, thread_id=1234, renderer=0x1111, track=0x2222, library=0x3333, active_subtitle_render_count=1, "
         "subtitle_renderer_created_thread_id=99, last_subtitle_event_count=77, registered_image_asset_count=2, "
         "subtitle_cleanup_started=0, safe_mode=1, last_registered_image_asset_name=logo.png, "
         "last_registered_image_asset_path=C:/anime/z ui refrence/logo, final.png"
     );
     utsure::app::crash::update_crash_context_from_runtime_log(
         "subtitle render end: operation=compose, session_instance_id=5, frame=44, pts_us=1138596000, "
-        "thread_id=1234, renderer=0x1111, track=0x2222, library=0x3333, active_subtitle_render_count=1, "
+        "renderer_pts_ms=1138596, thread_id=1234, renderer=0x1111, track=0x2222, library=0x3333, active_subtitle_render_count=1, "
         "subtitle_renderer_created_thread_id=99, last_subtitle_event_count=77, registered_image_asset_count=2, "
         "subtitle_cleanup_started=0, safe_mode=1, last_registered_image_asset_name=logo.png, "
         "last_registered_image_asset_path=C:/anime/z ui refrence/logo, final.png"
@@ -298,6 +298,7 @@ int assert_crash_context_snapshot_and_json() {
         snapshot.active_subtitle_render_count != 1 ||
         snapshot.last_subtitle_render_start_pts != 1138596000 ||
         snapshot.last_subtitle_render_end_pts != 1138596000 ||
+        snapshot.subtitle_renderer_pts_ms != 1138596 ||
         snapshot.last_subtitle_event_count != 77 ||
         snapshot.registered_image_asset_count != 2 ||
         snapshot.last_registered_image_asset_path != "C:/anime/z ui refrence/logo, final.png" ||
@@ -317,6 +318,7 @@ int assert_crash_context_snapshot_and_json() {
             << " active_subtitle_render_count=" << snapshot.active_subtitle_render_count
             << " last_subtitle_render_start_pts=" << snapshot.last_subtitle_render_start_pts
             << " last_subtitle_render_end_pts=" << snapshot.last_subtitle_render_end_pts
+            << " subtitle_renderer_pts_ms=" << snapshot.subtitle_renderer_pts_ms
             << " last_subtitle_event_count=" << snapshot.last_subtitle_event_count
             << " registered_image_asset_count=" << snapshot.registered_image_asset_count
             << " last_registered_image_asset_path=" << snapshot.last_registered_image_asset_path
@@ -426,6 +428,16 @@ int assert_marker_and_failure_sidecar_write() {
         .dump_path_attempted = paths.dump_path.string(),
         .seh_exception_code = 3221225477UL,
         .exception_address = "0x1234",
+        .exception_address_module = "libass-9.dll+0x5a415",
+        .faulting_module_name = "libass-9.dll",
+        .faulting_module_base = "0x7ff8bc180000",
+        .faulting_module_size = 123456,
+        .faulting_module_checksum = 99,
+        .faulting_module_timestamp = 88,
+        .access_violation_operation = "read",
+        .access_violation_address = "0xffffffffffffffff",
+        .crashing_thread_registers = "RIP=0x1234 RSP=0x5678",
+        .stack_module_addresses = {"libass-9.dll+0x3f900", "utsure.exe+0x27b336"},
         .cxx_exception_active = true,
         .cxx_exception_type = "std::runtime_error",
         .cxx_exception_message = "controlled metadata failure"
@@ -448,12 +460,21 @@ int assert_marker_and_failure_sidecar_write() {
         !contains_text(failure_text, "dump_write_error_code=5") ||
         !contains_text(handler_text, "exception_code=3221225477") ||
         !contains_text(handler_text, "exception_address=0x1234") ||
+        !contains_text(handler_text, "dump_write_success=pending") ||
+        !contains_text(handler_text, "exception_address_module=libass-9.dll+0x5a415") ||
+        !contains_text(handler_text, "access_violation_operation=read") ||
+        !contains_text(handler_text, "access_violation_address=0xffffffffffffffff") ||
         !contains_text(handler_text, "cxx_exception_active=1") ||
         !contains_text(handler_text, "cxx_exception_message=controlled metadata failure") ||
         !contains_text(sidecar_text, "\"handler_entered\": true") ||
         !contains_text(sidecar_text, "\"dump_write_success\": false") ||
         !contains_text(sidecar_text, "\"dump_write_error_code\": 5") ||
         !contains_text(sidecar_text, "\"exception_code\": 3221225477") ||
+        !contains_text(sidecar_text, "\"exception_address_module\": \"libass-9.dll+0x5a415\"") ||
+        !contains_text(sidecar_text, "\"faulting_module_name\": \"libass-9.dll\"") ||
+        !contains_text(sidecar_text, "\"access_violation_operation\": \"read\"") ||
+        !contains_text(sidecar_text, "\"access_violation_address\": \"0xffffffffffffffff\"") ||
+        !contains_text(sidecar_text, "\"stack_module_addresses\": [\"libass-9.dll+0x3f900\", \"utsure.exe+0x27b336\"]") ||
         !contains_text(sidecar_text, "\"cxx_exception_active\": true") ||
         !contains_text(sidecar_text, "\"cxx_exception_message\": \"controlled metadata failure\"") ||
         !contains_text(sidecar_text, "\"dump_path_attempted\"")) {

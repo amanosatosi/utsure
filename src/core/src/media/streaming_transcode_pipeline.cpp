@@ -2180,6 +2180,28 @@ bool should_log_frame_handoff_diagnostics(const std::int64_t frame_index) noexce
     return frame_index >= 0 && (frame_index < 5 || (frame_index % 300) == 0);
 }
 
+std::optional<std::pair<std::int64_t, std::int64_t>> subtitle_stop_after_frame_range() noexcept {
+    const char *value = std::getenv("UTSURE_SUBTITLE_STOP_AFTER_FRAME_RANGE");
+    if (value == nullptr || value[0] == '\0') {
+        return std::nullopt;
+    }
+
+    char *end = nullptr;
+    const long long first = std::strtoll(value, &end, 10);
+    if (end == value || *end != '-') {
+        return std::nullopt;
+    }
+    char *second_end = nullptr;
+    const long long last = std::strtoll(end + 1, &second_end, 10);
+    if (second_end == end + 1 || first < 0 || last < first) {
+        return std::nullopt;
+    }
+    return std::pair<std::int64_t, std::int64_t>{
+        static_cast<std::int64_t>(first),
+        static_cast<std::int64_t>(last)
+    };
+}
+
 std::string pointer_to_string(const void *pointer) {
     std::ostringstream stream;
     stream << pointer;
@@ -2229,6 +2251,7 @@ public:
         std::function<bool()> cancellation_requested = {}
     )
         : max_in_flight_(max_in_flight),
+          subtitle_worker_session_template_(std::move(subtitle_worker_session_template)),
           subtitle_diagnostics_(std::move(subtitle_diagnostics)),
           cancellation_requested_(std::move(cancellation_requested)) {
         if (worker_count == 0U) {
@@ -2240,11 +2263,12 @@ public:
         }
 
         std::vector<WorkerSubtitleSession> worker_subtitle_sessions{};
-        if (subtitle_worker_session_template.has_value()) {
+        if (subtitle_worker_session_template_.has_value() &&
+            !subtitles::runtime::strict_same_thread_lifetime_enabled()) {
             worker_subtitle_sessions.reserve(worker_count);
             for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
                 worker_subtitle_sessions.push_back(
-                    create_worker_subtitle_session(*subtitle_worker_session_template)
+                    create_worker_subtitle_session(*subtitle_worker_session_template_)
                 );
             }
         }
@@ -2365,6 +2389,12 @@ private:
     }
 
     void worker_main(const int worker_id, WorkerSubtitleSession subtitle_session) {
+        if (!subtitle_session.session &&
+            subtitle_worker_session_template_.has_value() &&
+            subtitles::runtime::strict_same_thread_lifetime_enabled()) {
+            subtitle_session = create_worker_subtitle_session(*subtitle_worker_session_template_);
+        }
+
         SwsContextHandle scale_context{};
         int scale_width = 0;
         int scale_height = 0;
@@ -2554,6 +2584,7 @@ private:
     std::exception_ptr failure_{};
     std::size_t outstanding_count_{0};
     std::uint64_t next_ready_order_index_{0};
+    std::optional<SubtitleWorkerSessionTemplate> subtitle_worker_session_template_{};
     std::optional<SubtitleDiagnosticSettings> subtitle_diagnostics_{};
     std::function<bool()> cancellation_requested_{};
     bool closing_{false};
@@ -4972,6 +5003,14 @@ SegmentProcessResult process_segment(
                     timeline_plan.output_video_time_base,
                     segment_output_start_pts
                 );
+                if (const auto frame_range = subtitle_stop_after_frame_range();
+                    frame_range.has_value() && video_frame.metadata.frame_index > frame_range->second) {
+                    throw std::runtime_error(
+                        "Stopped subtitle encode after requested diagnostic frame range " +
+                        std::to_string(frame_range->first) + "-" + std::to_string(frame_range->second) +
+                        " at frame " + std::to_string(video_frame.metadata.frame_index) + "."
+                    );
+                }
             }
 
             while (video_frame_processor->outstanding_count() >= video_frame_processor->max_in_flight()) {

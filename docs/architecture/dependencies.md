@@ -35,6 +35,7 @@ To keep this explicit:
 - CMake requires `UTSURE_LIBASSMOD_ROOT` when subtitle dependency validation is enabled.
 - The dependency audit fails if `pkg-config libass` resolves outside that prefix.
 - The dependency audit also requires `ass_process_mangetsu_colorcoding_line()`, which means the source checkout must include libassmod commit `1d05f0dd78b1a53f45cb7a1e7c87a4a2dc691f7e` or newer.
+- Diagnostic upstream-libass comparison builds may set `UTSURE_ALLOW_UPSTREAM_LIBASS_DIAGNOSTIC=ON`; this keeps the isolated-prefix check but disables only the libassmod-only Mangetsu host metadata feed.
 
 ## Why FFMS2 is handled separately
 

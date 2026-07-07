@@ -45,6 +45,7 @@ struct CrashContextUpdate final {
     std::optional<int> active_subtitle_render_count{};
     std::optional<std::int64_t> last_subtitle_render_start_pts{};
     std::optional<std::int64_t> last_subtitle_render_end_pts{};
+    std::optional<std::int64_t> subtitle_renderer_pts_ms{};
     std::optional<int> last_subtitle_event_count{};
     std::optional<int> registered_image_asset_count{};
     std::optional<std::string> last_registered_image_asset_name{};
@@ -89,6 +90,7 @@ struct CrashContextSnapshot final {
     int active_subtitle_render_count{0};
     std::int64_t last_subtitle_render_start_pts{0};
     std::int64_t last_subtitle_render_end_pts{0};
+    std::int64_t subtitle_renderer_pts_ms{0};
     int last_subtitle_event_count{0};
     int registered_image_asset_count{0};
     std::string last_registered_image_asset_name{};
@@ -123,6 +125,17 @@ struct CrashDumpSidecarMetadata final {
     std::string dump_path_attempted{};
     unsigned long seh_exception_code{0};
     std::string exception_address{};
+    std::string exception_address_module{};
+    std::string faulting_module_name{};
+    std::string faulting_module_path{};
+    std::string faulting_module_base{};
+    std::uint64_t faulting_module_size{0};
+    unsigned long faulting_module_checksum{0};
+    unsigned long faulting_module_timestamp{0};
+    std::string access_violation_operation{};
+    std::string access_violation_address{};
+    std::string crashing_thread_registers{};
+    std::vector<std::string> stack_module_addresses{};
     bool cxx_exception_active{false};
     std::string cxx_exception_type{};
     std::string cxx_exception_message{};

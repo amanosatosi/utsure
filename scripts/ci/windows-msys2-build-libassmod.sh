@@ -10,10 +10,12 @@ libassmod_ref="${UTSURE_LIBASSMOD_REF:-mangetsu}"
 libassmod_source_dir="${UTSURE_LIBASSMOD_SOURCE_DIR:-${libassmod_root}/src}"
 libassmod_build_dir="${UTSURE_LIBASSMOD_BUILD_DIR:-${libassmod_root}/build}"
 libassmod_prefix="${UTSURE_LIBASSMOD_PREFIX:-${libassmod_root}/prefix}"
+libassmod_buildtype="${UTSURE_LIBASSMOD_BUILDTYPE:-debugoptimized}"
 
 mkdir -p "${libassmod_root}"
 
 echo "Using libassmod ref: ${libassmod_ref}"
+echo "Using libassmod Meson buildtype: ${libassmod_buildtype}"
 
 if [ ! -d "${libassmod_source_dir}/.git" ]; then
   if ! git clone "${libassmod_repo_url}" "${libassmod_source_dir}"; then
@@ -37,7 +39,7 @@ if ! git -C "${libassmod_source_dir}" checkout --force "${libassmod_checkout_ref
 fi
 
 meson setup "${libassmod_build_dir}" "${libassmod_source_dir}" \
-  --buildtype release \
+  --buildtype "${libassmod_buildtype}" \
   --default-library shared \
   --prefix "${libassmod_prefix}" \
   -Dfontconfig=disabled \

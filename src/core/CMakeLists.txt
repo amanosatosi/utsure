@@ -59,6 +59,7 @@ target_compile_definitions(utsure_encoder_core
     PRIVATE
         UTSURE_PROJECT_VERSION="${PROJECT_VERSION}"
         UTSURE_LIBASSMOD_REF="${UTSURE_LIBASSMOD_REF}"
+        UTSURE_LIBASSMOD_HAS_MANGETSU_ACTOR_COLORCODING=$<BOOL:${UTSURE_LIBASSMOD_HAS_MANGETSU_ACTOR_COLORCODING}>
 )
 
 utsure_enable_warnings(utsure_encoder_core)

@@ -8,7 +8,8 @@ On Windows, utsure installs a crash handler early in app startup. If the process
 - `<folder containing utsure.exe>\crash-dumps\utsure-crash-YYYYMMDD-HHMMSS-mmm-pid-<pid>-tid-<tid>-seq-<nnnn>.dump-failed.txt` when minidump writing fails
 
 The `.dmp` is a Windows minidump. The `.json` sidecar contains the last-known encode context, including stage, paths, codecs, frame position, thread counts, queue context, memory counters when available, build metadata, and active C++ exception type/message when the dump is written from `std::terminate`.
-The crash handler writes the handler-entered marker before attempting `MiniDumpWriteDump`, then writes the `.json` sidecar whether minidump writing succeeds or fails. Crash artifacts are created with no-overwrite path selection; an existing dump, marker, or sidecar is never silently replaced.
+For SEH crashes, the sidecar also maps `exception_address` to `module+RVA`, records the faulting module name/path/base/size/checksum/timestamp, decodes access violations as read/write/execute plus fault address, records crashing-thread registers when a `CONTEXT` is available, and records up to 16 stack qwords that map to loaded modules as `module+RVA`.
+The crash handler writes the handler-entered marker before attempting `MiniDumpWriteDump`, then writes the `.json` sidecar whether minidump writing succeeds or fails. The early marker uses `dump_write_success=pending` because the dump has not been attempted yet; use the final JSON or `.dump-failed.txt` for the actual result. Crash artifacts are created with no-overwrite path selection; an existing dump, marker, or sidecar is never silently replaced.
 
 Interpret missing or partial artifacts this way:
 
@@ -74,6 +75,46 @@ For parallel encode crashes, the sidecar contains the crashing thread id when av
 When reporting a crash, include both the `.dmp` and `.json` sidecar. On the next startup, utsure logs recent crash dump paths and asks the user to include them in crash reports.
 
 CI uploads a separate `utsure-windows-symbols-<commit>` artifact. Match the dump to the artifact from the same commit SHA. Use the matching `utsure.exe`, utsure-built DLLs/libs, and `build-metadata.txt` from that artifact when resolving stack traces.
+
+For subtitle-rendering crashes, diagnostic builds should keep debug information in both `utsure.exe` and `libass-9.dll`:
+
+```bash
+export UTSURE_CMAKE_BUILD_TYPE=Debug
+export UTSURE_LIBASSMOD_BUILDTYPE=debug
+export UTSURE_DIAGNOSTIC_SYMBOLS=ON
+export UTSURE_STRIP_PORTABLE_DEBUG=OFF
+./scripts/ci/windows-msys2-build-libassmod.sh
+./scripts/ci/windows-msys2-build.sh
+./scripts/ci/windows-msys2-package-symbols.sh
+./scripts/ci/windows-msys2-package-portable.sh
+```
+
+Resolve reported RVAs with the unstripped binaries from the symbols artifact or build tree:
+
+```bash
+llvm-addr2line -f -C -e libass-9.dll 0x5A415 0x3F900 0x52182 0x557DF
+llvm-addr2line -f -C -e utsure.exe 0x27B336 0x1DBB2F
+```
+
+The MinGW equivalent is `addr2line -f -C -e <binary> <rva>` if LLVM tools are unavailable.
+
+Subtitle/libass diagnostic switches:
+
+- `UTSURE_SUBTITLE_STRICT_SAME_THREAD=1`: create, use, and destroy each libass subtitle session on the same subtitle worker thread.
+- `UTSURE_LIBASS_GLOBAL_LOCK=1`: protect all libass/libassmod init, config, render, image registration, free, and teardown calls with one global mutex.
+- `UTSURE_SUBTITLE_EVENT_LOG_REPORTED_FRAME=1`: log active ASS events at frame `28109` or renderer timestamp `1172380 ms`.
+- `UTSURE_SUBTITLE_EVENT_LOG_FRAME=28109` or `UTSURE_SUBTITLE_EVENT_LOG_PTS_MS=1172380`: log active ASS events for an explicit frame or timestamp.
+- `UTSURE_SUBTITLE_STOP_AFTER_FRAME_RANGE=28100-28120`: stop a subtitle encode after rendering the range, useful for shorter reproductions.
+
+To compare libassmod with clean upstream libass when the ABI remains compatible, build the dependency prefix from a different source/ref and then rebuild Utsure against that prefix:
+
+```bash
+export UTSURE_LIBASSMOD_SOURCE_URL=https://github.com/libass/libass.git
+export UTSURE_LIBASSMOD_REF=master
+export UTSURE_LIBASSMOD_BUILDTYPE=debug
+./scripts/ci/windows-msys2-build-libassmod.sh
+UTSURE_CMAKE_EXTRA_ARGS="-DUTSURE_ALLOW_UPSTREAM_LIBASS_DIAGNOSTIC=ON" ./scripts/ci/windows-msys2-build.sh
+```
 
 As a fallback when the process is too corrupted for utsure's in-process writer, enable Windows Error Reporting LocalDumps:
 

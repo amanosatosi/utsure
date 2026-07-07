@@ -7,6 +7,7 @@ option(UTSURE_ENABLE_DEPENDENCY_AUDIT "Verify the planned external dependency st
 option(UTSURE_REQUIRE_FFMPEG "Require FFmpeg to be available from an explicit isolated prefix." ON)
 option(UTSURE_REQUIRE_FFMS2 "Require FFMS2 to be available from an explicit isolated prefix." ON)
 option(UTSURE_REQUIRE_LIBASSMOD "Require libassmod to be available during dependency audit." ON)
+option(UTSURE_ALLOW_UPSTREAM_LIBASS_DIAGNOSTIC "Allow an ABI-compatible upstream libass prefix without libassmod-only host APIs for crash comparison builds." OFF)
 set(
     UTSURE_FFMPEG_ROOT
     ""
@@ -364,10 +365,18 @@ int main() {
             unset(_utsure_saved_required_libraries)
             unset(_utsure_saved_required_quiet)
             if(NOT UTSURE_LIBASSMOD_HAS_MANGETSU_ACTOR_COLORCODING)
-                message(FATAL_ERROR
-                    "libassmod at '${_libassmod_root}' does not provide ass_process_mangetsu_colorcoding_line(). "
-                    "Use libassmod commit 1d05f0dd78b1a53f45cb7a1e7c87a4a2dc691f7e or newer."
-                )
+                if(UTSURE_ALLOW_UPSTREAM_LIBASS_DIAGNOSTIC)
+                    message(WARNING
+                        "libass at '${_libassmod_root}' does not provide ass_process_mangetsu_colorcoding_line(); "
+                        "continuing because UTSURE_ALLOW_UPSTREAM_LIBASS_DIAGNOSTIC=ON. Mangetsu host metadata feed is disabled."
+                    )
+                else()
+                    message(FATAL_ERROR
+                        "libassmod at '${_libassmod_root}' does not provide ass_process_mangetsu_colorcoding_line(). "
+                        "Use libassmod commit 1d05f0dd78b1a53f45cb7a1e7c87a4a2dc691f7e or newer, or set "
+                        "UTSURE_ALLOW_UPSTREAM_LIBASS_DIAGNOSTIC=ON for a diagnostic upstream-libass comparison build."
+                    )
+                endif()
             endif()
 
             if(NOT TARGET utsure_subtitle_renderer_dependency)
