@@ -208,7 +208,7 @@ struct SwrContextDeleter final {
 
 using SwrContextHandle = std::unique_ptr<SwrContext, SwrContextDeleter>;
 
-// The bounded host-side video processor uses at most four worker-local RGBA scratch surfaces.
+// The bounded host-side video processor uses at most four RGBA scratch surfaces.
 // Keep the memory budget conservative so aggressive CPU mode cannot silently overrun RAM.
 constexpr std::uint64_t kInFlightRgbaSurfaceCount = 4ULL;
 constexpr std::uint64_t kEncoderWorkingSurfaceCount = 2ULL;
@@ -951,10 +951,7 @@ StreamingRuntimeBehavior resolve_streaming_runtime_behavior(
     const auto video_worker_count = requested_video_worker_count.value_or(
         detail::choose_video_processing_worker_count(threading, effective_core_count)
     );
-    const auto subtitle_worker_count =
-        subtitle_runtime_options.composition_mode == subtitles::runtime::SubtitleCompositionMode::worker_local
-            ? video_worker_count
-            : 1U;
+    const auto subtitle_worker_count = 1U;
     return StreamingRuntimeBehavior{
         .detected_logical_core_count = detected_logical_core_count,
         .effective_logical_core_count = effective_core_count,
@@ -2262,23 +2259,10 @@ public:
             throw std::runtime_error("The streaming video processor requires bounded in-flight capacity.");
         }
 
-        std::vector<WorkerSubtitleSession> worker_subtitle_sessions{};
-        if (subtitle_worker_session_template_.has_value() &&
-            !subtitles::runtime::strict_same_thread_lifetime_enabled()) {
-            worker_subtitle_sessions.reserve(worker_count);
-            for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
-                worker_subtitle_sessions.push_back(
-                    create_worker_subtitle_session(*subtitle_worker_session_template_)
-                );
-            }
-        }
-
         workers_.reserve(worker_count);
         for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
-            workers_.emplace_back([this, worker_id = static_cast<int>(worker_index), subtitle_session = worker_subtitle_sessions.empty()
-                ? WorkerSubtitleSession{}
-                : std::move(worker_subtitle_sessions[worker_index])]() mutable {
-                worker_main(worker_id, std::move(subtitle_session));
+            workers_.emplace_back([this, worker_id = static_cast<int>(worker_index)]() {
+                worker_main(worker_id);
             });
         }
     }
@@ -2388,10 +2372,9 @@ private:
         };
     }
 
-    void worker_main(const int worker_id, WorkerSubtitleSession subtitle_session) {
-        if (!subtitle_session.session &&
-            subtitle_worker_session_template_.has_value() &&
-            subtitles::runtime::strict_same_thread_lifetime_enabled()) {
+    void worker_main(const int worker_id) {
+        WorkerSubtitleSession subtitle_session{};
+        if (subtitle_worker_session_template_.has_value()) {
             subtitle_session = create_worker_subtitle_session(*subtitle_worker_session_template_);
         }
 
@@ -6064,7 +6047,7 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
 
             prepared_subtitle_session->session_result.session.reset();
             throw_if_cancellation_requested(request.cancellation_requested);
-            emit_runtime_log(request.log_callback, "Subtitle stage end: prepared session template for worker-local creation.");
+            emit_runtime_log(request.log_callback, "Subtitle stage end: prepared session template for owner-thread creation.");
         }
 
         timeline::TimelineCompositionSummary timeline_summary{

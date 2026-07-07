@@ -111,12 +111,19 @@ Subtitle tiles are owned only for one frame render/composite pass:
 Subtitle crash isolation flags:
 
 - `UTSURE_VIDEO_WORKERS=<1-4>` overrides host-side video worker planning; use `1` for single-worker isolation.
-- `UTSURE_SUBTITLE_SYNC=1` forces serialized subtitle composition, copied subtitle bitmaps, and global libassmod call serialization.
+- `UTSURE_SUBTITLE_SYNC=1` forces copied subtitle bitmaps and global libassmod call serialization.
 - `UTSURE_SUBTITLE_BITMAP_COPY=1` forces app-owned copied subtitle bitmaps.
 - `UTSURE_DISABLE_DIRECT_SUBTITLE_BITMAPS=1` ignores direct-bitmap requests and keeps copied mode.
-- `UTSURE_SUBTITLE_STRICT_SAME_THREAD=1` creates, uses, and destroys each libass subtitle session on the same subtitle worker thread.
+- `UTSURE_SUBTITLE_STRICT_SAME_THREAD=1` asserts that each libass subtitle session is created, used, and destroyed on the same subtitle worker thread.
 - `UTSURE_LIBASS_GLOBAL_LOCK=1` serializes libassmod setup, render, image-free, image-tag, renderer configuration, and teardown calls across sessions.
 - `UTSURE_SUBTITLE_STOP_AFTER_FRAME_RANGE=28100-28120` stops a diagnostic subtitle encode after the requested frame range.
+
+Subtitle ownership model:
+
+- Legacy decoded-media burn-in created one subtitle session and rendered/composited frames synchronously in the same caller flow.
+- Streaming FFmpeg burn-in keeps FFmpeg decode/encode streaming, but subtitle rendering is an owner-thread island: one subtitle processing worker creates the libass library, renderer, and track on its own thread, performs every render/compose operation there, and destroys the libass objects on that same thread.
+- Encoder submission receives only Utsure-owned frame data after subtitle composition. No raw `ASS_Image*`, libass bitmap pointer, `ASS_Renderer*`, `ASS_Track*`, or `ASS_Library*` leaves the subtitle session boundary.
+- The old worker-local/multi-session subtitle composition mode is retired; `UTSURE_SUBTITLE_COMPOSITION_MODE=worker_local` now resolves to serialized owner-thread behavior.
 
 ## Audio Rules
 

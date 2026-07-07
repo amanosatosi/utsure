@@ -16,8 +16,7 @@ enum class SubtitleBitmapTransferMode : std::uint8_t {
 };
 
 enum class SubtitleCompositionMode : std::uint8_t {
-    serialized = 0,
-    worker_local
+    serialized = 0
 };
 
 enum class SubtitleDiagnosticsMode : std::uint8_t {
@@ -112,10 +111,6 @@ inline SubtitleCompositionMode resolve_composition_mode() noexcept {
         return SubtitleCompositionMode::serialized;
     }
 
-    if (*value == "worker" || *value == "worker_local" || *value == "worker-local" || *value == "parallel") {
-        return SubtitleCompositionMode::worker_local;
-    }
-
     return SubtitleCompositionMode::serialized;
 }
 
@@ -159,8 +154,6 @@ inline const char *to_string(const SubtitleCompositionMode mode) noexcept {
     switch (mode) {
     case SubtitleCompositionMode::serialized:
         return "serialized";
-    case SubtitleCompositionMode::worker_local:
-        return "worker_local";
     default:
         return "unknown";
     }

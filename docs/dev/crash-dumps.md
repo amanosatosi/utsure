@@ -100,7 +100,7 @@ The MinGW equivalent is `addr2line -f -C -e <binary> <rva>` if LLVM tools are un
 
 Subtitle/libass diagnostic switches:
 
-- `UTSURE_SUBTITLE_STRICT_SAME_THREAD=1`: create, use, and destroy each libass subtitle session on the same subtitle worker thread.
+- `UTSURE_SUBTITLE_STRICT_SAME_THREAD=1`: assert/log that each libass subtitle session is created, used, and destroyed on the same subtitle worker thread. The FFmpeg streaming path uses this owner-thread model by default.
 - `UTSURE_LIBASS_GLOBAL_LOCK=1`: protect all libass/libassmod init, config, render, image registration, free, and teardown calls with one global mutex.
 - `UTSURE_SUBTITLE_EVENT_LOG_REPORTED_FRAME=1`: log active ASS events at frame `28109` or renderer timestamp `1172380 ms`.
 - `UTSURE_SUBTITLE_EVENT_LOG_FRAME=28109` or `UTSURE_SUBTITLE_EVENT_LOG_PTS_MS=1172380`: log active ASS events for an explicit frame or timestamp.

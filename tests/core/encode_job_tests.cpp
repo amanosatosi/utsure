@@ -879,7 +879,7 @@ int run_threading_mode_selection_assertion() {
 
     {
         ScopedEnvVar worker_override("UTSURE_VIDEO_WORKERS", "1");
-        ScopedEnvVar worker_local("UTSURE_SUBTITLE_COMPOSITION_MODE", "worker_local");
+        ScopedEnvVar retired_worker_local("UTSURE_SUBTITLE_COMPOSITION_MODE", "worker_local");
         const auto single_worker_runtime = utsure::core::media::streaming::resolve_streaming_runtime_behavior(
             utsure::core::media::TranscodeThreadingSettings{
                 .cpu_usage_mode = CpuUsageMode::auto_select,
@@ -888,13 +888,13 @@ int run_threading_mode_selection_assertion() {
         );
         if (single_worker_runtime.video_processing_worker_count != 1U ||
             single_worker_runtime.subtitle_processing_worker_count != 1U ||
-            single_worker_runtime.subtitle_composition_mode != "worker_local") {
-            return fail("Video worker override did not clamp worker-local runtime planning.");
+            single_worker_runtime.subtitle_composition_mode != "serialized") {
+            return fail("Retired worker-local subtitle mode did not resolve to serialized owner-thread runtime planning.");
         }
     }
 
     {
-        ScopedEnvVar worker_local("UTSURE_SUBTITLE_COMPOSITION_MODE", "worker_local");
+        ScopedEnvVar retired_worker_local("UTSURE_SUBTITLE_COMPOSITION_MODE", "worker_local");
         ScopedEnvVar sync_mode("UTSURE_SUBTITLE_SYNC", "1");
         const auto sync_runtime = utsure::core::media::streaming::resolve_streaming_runtime_behavior(
             utsure::core::media::TranscodeThreadingSettings{

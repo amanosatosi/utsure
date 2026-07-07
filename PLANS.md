@@ -59,6 +59,7 @@ Scope:
   * Focus on the real `0xC0000005` subtitle-rendering crash in `libass-9.dll` at RVA `0x5A415`.
   * Improve crash sidecar diagnostics before changing runtime behavior.
   * Add temporary diagnostic modes for strict same-thread libass lifetime, complete global libass serialization, active ASS-event logging around the reported frame/timestamp, and short frame-range reproductions.
+  * Compare the legacy decoded-media subtitle burn-in path with the FFmpeg streaming path and remove the cross-thread subtitle session creation difference that made the new crash repeatable.
   * Keep GUI behavior and normal encode output unchanged unless diagnostic environment variables are set.
   * Do not prioritize `\img` host-asset debugging for this crash because the provided sidecar showed `registered_image_asset_count=0`.
 
@@ -66,6 +67,7 @@ Implementation approach:
   * Extend the Windows crash writer with module/RVA mapping, module metadata, access-violation decoding, register capture, and bounded stack qword module mapping using Windows module APIs only.
   * Preserve the existing early handler marker but stop recording a false final dump result there by using `dump_write_success=pending`; keep the final JSON and dump-failed marker as the authoritative result.
   * Move subtitle session creation into the worker thread only in strict diagnostic mode, and add session-level pointer identity and same-thread assertions/logging.
+  * Follow-up: make owner-thread subtitle session creation permanent for the FFmpeg streaming path and retire the old worker-local/multi-session subtitle composition mode.
   * Extend the existing global lock path so RAII teardown/free calls are serialized too.
   * Document debug-symbol builds, RVA symbolization commands, strict/global-lock/event/range switches, and the upstream-libass comparison path.
 
@@ -73,6 +75,8 @@ Implemented:
   * Crash JSON now records `exception_address_module`, faulting module name/path/base/size/checksum/timestamp, access-violation operation/address, crashing-thread registers, and up to 16 stack qwords mapped to `module+RVA`.
   * Handler-entered markers now record `dump_write_success=pending`, removing the misleading `0` vs final JSON `true` inconsistency.
   * Added `UTSURE_SUBTITLE_STRICT_SAME_THREAD=1`, with safe mode also enabling strict same-thread behavior. In that mode subtitle sessions are created, used, and destroyed on the same subtitle worker thread.
+  * Follow-up made same-thread subtitle ownership the normal FFmpeg streaming behavior: a single subtitle processing worker now creates, renders/composes, and destroys its libass session on the worker thread.
+  * Retired env-selected `worker_local` subtitle composition; `UTSURE_SUBTITLE_COMPOSITION_MODE=worker_local` now resolves to serialized owner-thread behavior.
   * Added libass session pointer identity checks and cleanup/render lifecycle diagnostics, including rejection if render starts after cleanup has begun.
   * Extended `UTSURE_LIBASS_GLOBAL_LOCK=1` coverage to library/renderer/track deleters in addition to init, config, read, render, image registration/free, tag clear, and teardown.
   * Added active ASS-event logging for the reported frame/time via `UTSURE_SUBTITLE_EVENT_LOG_REPORTED_FRAME=1`, plus explicit `UTSURE_SUBTITLE_EVENT_LOG_FRAME` and `UTSURE_SUBTITLE_EVENT_LOG_PTS_MS`.

@@ -467,29 +467,7 @@ std::string current_subtitle_bitmap_mode() {
 }
 
 std::string current_subtitle_composition_mode() {
-    const auto forced_flag_enabled = [](const char *name) {
-        const char *raw = std::getenv(name);
-        if (raw == nullptr || raw[0] == '\0') {
-            return false;
-        }
-
-        const auto normalized = lowercase_ascii(std::string(raw));
-        return normalized == "1" || normalized == "true" || normalized == "on" || normalized == "yes";
-    };
-    if (forced_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ||
-        forced_flag_enabled("UTSURE_SUBTITLE_SYNC")) {
-        return "serialized";
-    }
-
-    const char *value = std::getenv("UTSURE_SUBTITLE_COMPOSITION_MODE");
-    if (value == nullptr || value[0] == '\0') {
-        return "serialized";
-    }
-
-    const auto normalized = lowercase_ascii(std::string(value));
-    return (normalized == "worker" || normalized == "worker_local" || normalized == "worker-local" || normalized == "parallel")
-        ? "worker_local"
-        : "serialized";
+    return "serialized";
 }
 
 std::string format_rational(const Rational &value) {
@@ -919,9 +897,7 @@ int assert_subtitle_runtime_visibility(
         return fail("The subtitle runtime summary did not record the expected isolation mode.");
     }
 
-    const std::size_t expected_subtitle_workers = expected_composition_mode == "worker_local"
-        ? summary.streaming_runtime.video_processing_worker_count
-        : 1U;
+    const std::size_t expected_subtitle_workers = 1U;
     if (summary.streaming_runtime.subtitle_processing_worker_count != expected_subtitle_workers) {
         return fail("The subtitle runtime summary reported an unexpected subtitle-worker count.");
     }
