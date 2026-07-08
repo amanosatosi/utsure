@@ -35,6 +35,7 @@ To keep this explicit:
 - CMake requires `UTSURE_LIBASSMOD_ROOT` when subtitle dependency validation is enabled.
 - The dependency audit fails if `pkg-config libass` resolves outside that prefix.
 - The dependency audit also requires `ass_process_mangetsu_colorcoding_line()`, which means the source checkout must include libassmod commit `1d05f0dd78b1a53f45cb7a1e7c87a4a2dc691f7e` or newer.
+- The CI dependency build applies tracked patches from `patches/libassmod/*.patch` by default. These patches are for diagnostics and narrow mangetsu hardening while Utsure is pinned to the `mangetsu` branch.
 - Diagnostic upstream-libass comparison builds may set `UTSURE_ALLOW_UPSTREAM_LIBASS_DIAGNOSTIC=ON`; this keeps the isolated-prefix check but disables only the libassmod-only Mangetsu host metadata feed.
 
 ## Why FFMS2 is handled separately
@@ -85,6 +86,7 @@ The active transcode path does not depend on `libavfilter`.
 - Download and build FFmpeg `7.1.2` from the official release tarball into `.deps/ffmpeg/prefix`.
 - Clone and build FFMS2 from the upstream repository, pinned to commit `25cef14386fcaaa58ee547065deee8f6e82c56a2`, against that FFmpeg prefix.
 - Clone and build `libassmod` from the upstream repository, using the `mangetsu` branch.
+- Apply tracked `patches/libassmod/*.patch` unless `UTSURE_LIBASSMOD_APPLY_PATCHES=OFF` is set for a clean upstream-libass comparison build.
 - Put the FFmpeg, FFMS2, and `libassmod` prefixes ahead of the default pkg-config search path.
 - Run configure-time dependency audit.
 - Fail configure if any required FFmpeg or FFMS2 pkg-config module resolves outside the pinned prefix, if the pinned `ffmpeg` executable reports a release outside the `7.1.x` series, or if the libassmod prefix does not expose the Mangetsu actor-colorcoding host API.

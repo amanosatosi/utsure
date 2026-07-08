@@ -92,11 +92,28 @@ export UTSURE_STRIP_PORTABLE_DEBUG=OFF
 Resolve reported RVAs with the unstripped binaries from the symbols artifact or build tree:
 
 ```bash
+llvm-addr2line -f -C -e libass-9.dll 0x44645
 llvm-addr2line -f -C -e libass-9.dll 0x5A415 0x3F900 0x52182 0x557DF
 llvm-addr2line -f -C -e utsure.exe 0x27B336 0x1DBB2F
 ```
 
 The MinGW equivalent is `addr2line -f -C -e <binary> <rva>` if LLVM tools are unavailable.
+
+The normal CI libassmod build applies `patches/libassmod/*.patch` after checking out the requested `UTSURE_LIBASSMOD_REF`. The mangetsu cache-corruption diagnostic patch aborts before cache ref/unref/key helpers dereference a corrupt `value - CACHE_ITEM_SIZE` header, and prints the cache operation, caller, expected cache descriptor, value pointer, first readable value bytes, and current ASS event text/style/actor/PTS when available.
+
+Mangetsu/libassmod cache isolation build switches:
+
+- `MANGETSU_DISABLE_MULTI_BORDER_CACHE=1`: keep rendering multi-border output, but bypass the composite cache for multi-border composite values.
+- `MANGETSU_DISABLE_CUSTOM_BORDER_LAYERS=1`: collapse mangetsu border rendering to the upstream-style single border layer for comparison.
+- `MANGETSU_DISABLE_DRAWING_CACHE_STRINGVIEWS=1`: deep-copy drawing text before outline-cache lookup so hash/compare/key insertion do not read directly from the event `ASS_StringView`.
+
+Example diagnostic dependency build:
+
+```bash
+export UTSURE_LIBASSMOD_BUILDTYPE=debug
+export MANGETSU_DISABLE_MULTI_BORDER_CACHE=1
+./scripts/ci/windows-msys2-build-libassmod.sh
+```
 
 Subtitle/libass diagnostic switches:
 
@@ -112,6 +129,7 @@ To compare libassmod with clean upstream libass when the ABI remains compatible,
 export UTSURE_LIBASSMOD_SOURCE_URL=https://github.com/libass/libass.git
 export UTSURE_LIBASSMOD_REF=master
 export UTSURE_LIBASSMOD_BUILDTYPE=debug
+export UTSURE_LIBASSMOD_APPLY_PATCHES=OFF
 ./scripts/ci/windows-msys2-build-libassmod.sh
 UTSURE_CMAKE_EXTRA_ARGS="-DUTSURE_ALLOW_UPSTREAM_LIBASS_DIAGNOSTIC=ON" ./scripts/ci/windows-msys2-build.sh
 ```

@@ -51,7 +51,7 @@ What that does:
 
 - builds the pinned FFmpeg 7.1.2 source dependency into `.deps/ffmpeg/prefix`
 - builds the pinned FFMS2 preview dependency into `.deps/ffms2/prefix`
-- builds the `libassmod` source dependency from the `mangetsu` branch into `.deps/libassmod/prefix`
+- builds the `libassmod` source dependency from the `mangetsu` branch into `.deps/libassmod/prefix`, applying tracked `patches/libassmod/*.patch`
 - audits configure-time dependency discovery before the main build
 - configures `build/` with CMake and Ninja
 - builds the core library, desktop app, and core test executables
@@ -83,6 +83,7 @@ The FontCollector bundling step requires a Windows Python on `PATH`; GitHub Acti
 - `.deps/libassmod/src`: pinned `libassmod` checkout
 - `.deps/libassmod/build`: `libassmod` build directory
 - `.deps/libassmod/prefix`: `libassmod` install prefix used by CMake and `pkg-config`
+- `patches/libassmod/*.patch`: diagnostic/hardening patches applied to the `mangetsu` checkout by `windows-msys2-build-libassmod.sh`; set `UTSURE_LIBASSMOD_APPLY_PATCHES=OFF` only for clean upstream-libass comparison builds
 - `.deps/ffmpeg/src`: pinned FFmpeg source tree
 - `.deps/ffmpeg/build`: FFmpeg build directory
 - `.deps/ffmpeg/prefix`: pinned FFmpeg install prefix used by CMake, `pkg-config`, and the sample-media tests
@@ -113,4 +114,5 @@ The FontCollector bundling step requires a Windows Python on `PATH`; GitHub Acti
 - Large jobs can still be rejected during preflight if the bounded-memory streaming pipeline estimate exceeds its safety limit.
 - libassmod `\img` subtitle scripts can use host-side registered PNG, JPEG, or WebP assets resolved next to the `.ass` file or in simple sidecar asset folders; Utsure does not render those tags itself.
 - Mangetsu actor colorcoding in external ASS files is supported on the libassmod subtitle burn-in path when the source-built libassmod prefix exposes `ass_process_mangetsu_colorcoding_line()` from commit `1d05f0dd78b1a53f45cb7a1e7c87a4a2dc691f7e` or newer. Metadata must be the top contiguous `Comment:` block after `[Events] Format:`; late matching comments are ignored and comments are not rendered.
+- Mangetsu cache-corruption diagnostic builds can set `MANGETSU_DISABLE_MULTI_BORDER_CACHE=1`, `MANGETSU_DISABLE_CUSTOM_BORDER_LAYERS=1`, or `MANGETSU_DISABLE_DRAWING_CACHE_STRINGVIEWS=1` before running `windows-msys2-build-libassmod.sh`.
 - Local build verification is still secondary to GitHub Actions for this repository state; the FFMS2 preview backend was integrated for CI-first validation, not for local compile/testing.

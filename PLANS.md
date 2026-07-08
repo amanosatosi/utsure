@@ -50,6 +50,40 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M47 Uncaught C++ encode crash diagnostics implemented; awaiting GitHub Actions validation.
 - [x] M48 Mangetsu actor colorcoding host feed implemented; awaiting GitHub Actions validation.
 - [x] M49 Subtitle/libass crash diagnostics and strict lifetime modes implemented; awaiting GitHub Actions validation.
+- [x] M50 Mangetsu cache-corruption diagnostics and disable switches implemented; awaiting GitHub Actions validation.
+
+### M50 Mangetsu cache-corruption diagnostics and disable switches
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Treat the old pre-FFmpeg `0xE06D7363` startup dump as unrelated handler noise.
+  * Focus on newer repeated subtitle-rendering `0xC0000005` crashes in `libass-9.dll` around the mangetsu cache/refcount path.
+  * Add diagnostics inside libassmod's cache value-to-item conversion before dereferencing possibly corrupt values.
+  * Audit mangetsu multi-border composite cache ownership and add switches to bypass the highest-risk paths.
+  * Keep Utsure GUI, encode, and unrelated media pipeline code unchanged.
+
+Implementation approach:
+  * Build the diagnostic hardening as a tracked patch applied to the CI-built `mangetsu` libassmod checkout.
+  * Validate cache value pointers for alignment, readable cache item headers, known cache descriptors, expected descriptor type, plausible size, and nonzero refcount before ref/unref/key helpers touch the header.
+  * Pass expected cache descriptors at mangetsu cache ownership boundaries, especially composite bitmap refs and outline/font refs.
+  * Record current event text/style/actor/PTS in a thread-local cache diagnostic context during render-event processing.
+  * Add build-time switches to bypass composite caching for multi-border output and disable custom border layers for comparison runs.
+  * Document how to enable the switches and symbolize the resulting diagnostic DLL.
+
+Implemented:
+  * Added a tracked libassmod patch that instruments cache `key`, `inc_ref`, `dec_ref`, `get`, prune, and empty traversal before dereferencing cache item metadata.
+  * Added cache item magic, descriptor validation, readable-header checks on Windows, expected descriptor checks for bitmap/outline/font/composite ownership edges, and diagnostic abort output with the current ASS event context.
+  * Hardened mangetsu composite bitmap grouping by zero-initializing newly appended `CombinedBitmapInfo` slots before field assignment.
+  * Added `MANGETSU_DISABLE_MULTI_BORDER_CACHE=1`, `MANGETSU_DISABLE_CUSTOM_BORDER_LAYERS=1`, and `MANGETSU_DISABLE_DRAWING_CACHE_STRINGVIEWS=1` as libassmod compile-time diagnostic switches.
+  * Wired `windows-msys2-build-libassmod.sh` to apply tracked patches by default and to pass the mangetsu diagnostic switches through as C compiler defines.
+  * Documented cache diagnostics, the repeated `libass-9.dll` RVA `0x44645`, patch application, diagnostic switches, and clean upstream-libass comparison opt-out.
+
+Validation:
+  * Confirmed the exported patch applies cleanly to a fresh `mangetsu` libassmod checkout.
+  * Ran `git diff --check` for repository changes.
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Bash syntax validation could not be run locally because no Bash/MSYS2 shell is available on this machine's PATH.
 
 ### M49 Subtitle/libass crash diagnostics and strict lifetime modes
 

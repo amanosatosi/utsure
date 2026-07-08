@@ -1,0 +1,719 @@
+diff --git a/libass/ass_cache.c b/libass/ass_cache.c
+index decb120..ca319cd 100644
+--- a/libass/ass_cache.c
++++ b/libass/ass_cache.c
+@@ -21,13 +21,23 @@
+ #include "ass_compat.h"
+ 
+ #include <inttypes.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
+ #include <ft2build.h>
+ #include FT_OUTLINE_H
+ #include <assert.h>
++#ifdef _WIN32
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#include <windows.h>
++#endif
+ 
+ #include "ass_utils.h"
+ #include "ass_font.h"
+ #include "ass_outline.h"
++#define ASS_CACHE_INTERNAL 1
+ #include "ass_cache.h"
+ 
+ // Always enable native-endian mode, since we don't care about cross-platform consistency of the hash
+@@ -119,7 +129,7 @@ static bool bitmap_key_move(void *dst, void *src)
+     BitmapHashKey *d = dst, *s = src;
+     if (d) {
+         *d = *s;
+-        ass_cache_inc_ref(d->outline);
++        ass_cache_inc_ref_debug(d->outline, __func__, &outline_cache_desc);
+     }
+     return true;
+ }
+@@ -128,7 +138,7 @@ static void bitmap_destruct(void *key, void *value)
+ {
+     BitmapHashKey *k = key;
+     ass_free_bitmap(value);
+-    ass_cache_dec_ref(k->outline);
++    ass_cache_dec_ref_debug(k->outline, __func__, &outline_cache_desc);
+ }
+ 
+ size_t ass_bitmap_construct(void *key, void *value, void *priv);
+@@ -174,10 +184,13 @@ static bool composite_key_move(void *dst, void *src)
+     if (d) {
+         *d = *s;
+         for (size_t i = 0; i < d->bitmap_count; i++) {
+-            ass_cache_inc_ref(d->bitmaps[i].bm);
+-            ass_cache_inc_ref(d->bitmaps[i].bm_o);
++            ass_cache_inc_ref_debug(d->bitmaps[i].bm, __func__,
++                                    &bitmap_cache_desc);
++            ass_cache_inc_ref_debug(d->bitmaps[i].bm_o, __func__,
++                                    &bitmap_cache_desc);
+             for (int j = 0; j < ASS_BORDER_LAYERS_MAX - 1; j++)
+-                ass_cache_inc_ref(d->bitmaps[i].bm_border[j]);
++                ass_cache_inc_ref_debug(d->bitmaps[i].bm_border[j],
++                                        __func__, &bitmap_cache_desc);
+         }
+         return true;
+     }
+@@ -196,10 +209,13 @@ static void composite_destruct(void *key, void *value)
+     for (int j = 0; j < ASS_BORDER_LAYERS_MAX - 1; j++)
+         ass_free_bitmap(&v->bm_border[j]);
+     for (size_t i = 0; i < k->bitmap_count; i++) {
+-        ass_cache_dec_ref(k->bitmaps[i].bm);
+-        ass_cache_dec_ref(k->bitmaps[i].bm_o);
++        ass_cache_dec_ref_debug(k->bitmaps[i].bm, __func__,
++                                &bitmap_cache_desc);
++        ass_cache_dec_ref_debug(k->bitmaps[i].bm_o, __func__,
++                                &bitmap_cache_desc);
+         for (int j = 0; j < ASS_BORDER_LAYERS_MAX - 1; j++)
+-            ass_cache_dec_ref(k->bitmaps[i].bm_border[j]);
++            ass_cache_dec_ref_debug(k->bitmaps[i].bm_border[j], __func__,
++                                    &bitmap_cache_desc);
+     }
+     free(k->bitmaps);
+ }
+@@ -263,9 +279,11 @@ static bool outline_key_move(void *dst, void *src)
+         return d->u.drawing.text.str;
+     }
+     if (s->type == OUTLINE_BORDER)
+-        ass_cache_inc_ref(s->u.border.outline);
++        ass_cache_inc_ref_debug(s->u.border.outline, __func__,
++                                &outline_cache_desc);
+     else if (s->type == OUTLINE_GLYPH)
+-        ass_cache_inc_ref(s->u.glyph.font);
++        ass_cache_inc_ref_debug(s->u.glyph.font, __func__,
++                                &font_cache_desc);
+     return true;
+ }
+ 
+@@ -277,13 +295,15 @@ static void outline_destruct(void *key, void *value)
+     ass_outline_free(&v->outline[1]);
+     switch (k->type) {
+     case OUTLINE_GLYPH:
+-        ass_cache_dec_ref(k->u.glyph.font);
++        ass_cache_dec_ref_debug(k->u.glyph.font, __func__,
++                                &font_cache_desc);
+         break;
+     case OUTLINE_DRAWING:
+         free((char *) k->u.drawing.text.str);
+         break;
+     case OUTLINE_BORDER:
+-        ass_cache_dec_ref(k->u.border.outline);
++        ass_cache_dec_ref_debug(k->u.border.outline, __func__,
++                                &outline_cache_desc);
+         break;
+     default:  // OUTLINE_BOX
+         break;
+@@ -311,14 +331,14 @@ static bool face_size_metrics_key_move(void *dst, void *src)
+         return true;
+ 
+     *d = *s;
+-    ass_cache_inc_ref(s->font);
++    ass_cache_inc_ref_debug(s->font, __func__, &font_cache_desc);
+     return true;
+ }
+ 
+ static void face_size_metrics_destruct(void *key, void *value)
+ {
+     FaceSizeMetricsHashKey *k = key;
+-    ass_cache_dec_ref(k->font);
++    ass_cache_dec_ref_debug(k->font, __func__, &font_cache_desc);
+ }
+ 
+ size_t ass_face_size_metrics_construct(void *key, void *value, void *priv);
+@@ -342,14 +362,14 @@ static bool glyph_metrics_key_move(void *dst, void *src)
+         return true;
+ 
+     *d = *s;
+-    ass_cache_inc_ref(s->font);
++    ass_cache_inc_ref_debug(s->font, __func__, &font_cache_desc);
+     return true;
+ }
+ 
+ static void glyph_metrics_destruct(void *key, void *value)
+ {
+     GlyphMetricsHashKey *k = key;
+-    ass_cache_dec_ref(k->font);
++    ass_cache_dec_ref_debug(k->font, __func__, &font_cache_desc);
+ }
+ 
+ size_t ass_glyph_metrics_construct(void *key, void *value, void *priv);
+@@ -368,6 +388,7 @@ const CacheDesc glyph_metrics_cache_desc = {
+ 
+ // Cache data
+ typedef struct cache_item {
++    uint64_t magic;
+     Cache *cache;
+     const CacheDesc *desc;
+     struct cache_item *next, **prev;
+@@ -386,6 +407,7 @@ struct cache {
+ };
+ 
+ #define CACHE_ALIGN 8
++#define CACHE_ITEM_MAGIC UINT64_C(0x6d67635343414348)
+ #define CACHE_ITEM_SIZE ((sizeof(CacheItem) + (CACHE_ALIGN - 1)) & ~(CACHE_ALIGN - 1))
+ 
+ static inline size_t align_cache(size_t size)
+@@ -398,6 +420,195 @@ static inline CacheItem *value_to_item(void *value)
+     return (CacheItem *) ((char *) value - CACHE_ITEM_SIZE);
+ }
+ 
++static const char *cache_desc_name(const CacheDesc *desc)
++{
++    if (desc == &font_cache_desc)
++        return "font";
++    if (desc == &bitmap_cache_desc)
++        return "bitmap";
++    if (desc == &composite_cache_desc)
++        return "composite";
++    if (desc == &outline_cache_desc)
++        return "outline";
++    if (desc == &face_size_metrics_cache_desc)
++        return "face_size_metrics";
++    if (desc == &glyph_metrics_cache_desc)
++        return "glyph_metrics";
++    return "unknown";
++}
++
++static bool cache_desc_is_known(const CacheDesc *desc)
++{
++    return desc == &font_cache_desc ||
++           desc == &bitmap_cache_desc ||
++           desc == &composite_cache_desc ||
++           desc == &outline_cache_desc ||
++           desc == &face_size_metrics_cache_desc ||
++           desc == &glyph_metrics_cache_desc;
++}
++
++static bool cache_memory_readable(const void *ptr, size_t size)
++{
++    if (!ptr || !size)
++        return false;
++#ifdef _WIN32
++    MEMORY_BASIC_INFORMATION mbi;
++    if (!VirtualQuery(ptr, &mbi, sizeof(mbi)))
++        return false;
++    if (mbi.State != MEM_COMMIT)
++        return false;
++    if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD))
++        return false;
++    DWORD readable = PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY |
++                     PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
++                     PAGE_EXECUTE_WRITECOPY;
++    if (!(mbi.Protect & readable))
++        return false;
++    uintptr_t start = (uintptr_t) ptr;
++    uintptr_t end = start + size;
++    uintptr_t region_end = (uintptr_t) mbi.BaseAddress + mbi.RegionSize;
++    return end >= start && end <= region_end;
++#else
++    return true;
++#endif
++}
++
++#if defined(_MSC_VER)
++#define ASS_CACHE_THREAD_LOCAL __declspec(thread)
++#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
++#define ASS_CACHE_THREAD_LOCAL _Thread_local
++#else
++#define ASS_CACHE_THREAD_LOCAL __thread
++#endif
++
++static ASS_CACHE_THREAD_LOCAL const char *cache_debug_event_text;
++static ASS_CACHE_THREAD_LOCAL const char *cache_debug_style;
++static ASS_CACHE_THREAD_LOCAL const char *cache_debug_actor;
++static ASS_CACHE_THREAD_LOCAL long long cache_debug_pts;
++
++void ass_cache_set_debug_context(const char *event_text, const char *style,
++                                 const char *actor, long long pts)
++{
++    cache_debug_event_text = event_text;
++    cache_debug_style = style;
++    cache_debug_actor = actor;
++    cache_debug_pts = pts;
++}
++
++static void cache_dump_limited_string(const char *label, const char *text)
++{
++    if (!text)
++        return;
++    fprintf(stderr, "  %s=\"", label);
++    for (int i = 0; i < 160; i++) {
++        if (!cache_memory_readable(text + i, 1))
++            break;
++        unsigned char c = (unsigned char) text[i];
++        if (!c)
++            break;
++        if (c == '\n')
++            fputs("\\n", stderr);
++        else if (c == '\r')
++            fputs("\\r", stderr);
++        else if (c == '\t')
++            fputs("\\t", stderr);
++        else if (c >= 0x20 && c < 0x7f)
++            fputc(c, stderr);
++        else
++            fprintf(stderr, "\\x%02x", c);
++    }
++    fputs("\"\n", stderr);
++}
++
++static void cache_dump_value_bytes(void *value)
++{
++    if (!cache_memory_readable(value, 32)) {
++        fprintf(stderr, "  value_bytes=<unreadable>\n");
++        return;
++    }
++
++    unsigned char *bytes = value;
++    fprintf(stderr, "  value_bytes=");
++    for (int i = 0; i < 32; i++)
++        fprintf(stderr, "%s%02x", i ? " " : "", bytes[i]);
++    fputc('\n', stderr);
++}
++
++static void cache_abort_invalid(const char *op, const char *caller,
++                                void *value, const CacheDesc *expected_desc,
++                                const char *reason)
++{
++    fprintf(stderr,
++            "libass/mangetsu cache pointer corruption: op=%s caller=%s "
++            "value=%p expected=%s reason=%s\n",
++            op, caller ? caller : "unknown", value,
++            expected_desc ? cache_desc_name(expected_desc) : "any", reason);
++    fprintf(stderr, "  pts_ms=%lld\n", cache_debug_pts);
++    cache_dump_limited_string("style", cache_debug_style);
++    cache_dump_limited_string("actor", cache_debug_actor);
++    cache_dump_limited_string("event_text", cache_debug_event_text);
++    cache_dump_value_bytes(value);
++    fflush(stderr);
++    abort();
++}
++
++static CacheItem *cache_validate_value(void *value, const char *op,
++                                       const char *caller,
++                                       const CacheDesc *expected_desc)
++{
++    if (!value)
++        return NULL;
++
++    if (((uintptr_t) value & (CACHE_ALIGN - 1)) != 0)
++        cache_abort_invalid(op, caller, value, expected_desc,
++                            "cache value pointer is not aligned");
++
++    CacheItem *item = value_to_item(value);
++    if (!cache_memory_readable(item, sizeof(*item)))
++        cache_abort_invalid(op, caller, value, expected_desc,
++                            "cache item header is unreadable");
++    if (item->magic != CACHE_ITEM_MAGIC)
++        cache_abort_invalid(op, caller, value, expected_desc,
++                            "cache item magic does not match");
++    if (!cache_desc_is_known(item->desc))
++        cache_abort_invalid(op, caller, value, expected_desc,
++                            "cache item descriptor is unknown");
++    if (expected_desc && item->desc != expected_desc)
++        cache_abort_invalid(op, caller, value, expected_desc,
++                            "cache item descriptor type mismatch");
++    if (!item->size || item->size > SIZE_MAX / 2)
++        cache_abort_invalid(op, caller, value, expected_desc,
++                            "cache item size is implausible");
++    if (!item->ref_count || item->ref_count > SIZE_MAX / 2)
++        cache_abort_invalid(op, caller, value, expected_desc,
++                            "cache item refcount is implausible");
++    if (item->cache) {
++        if (!cache_memory_readable(item->cache, sizeof(*item->cache)))
++            cache_abort_invalid(op, caller, value, expected_desc,
++                                "cache owner pointer is unreadable");
++        if (item->cache->desc != item->desc)
++            cache_abort_invalid(op, caller, value, expected_desc,
++                                "cache owner descriptor mismatch");
++    }
++
++    return item;
++}
++
++static void cache_validate_list_item(CacheItem *item, const CacheDesc *desc)
++{
++    if (!cache_memory_readable(item, sizeof(*item))) {
++        cache_abort_invalid("cache_get", __func__,
++                            item ? (char *) item + CACHE_ITEM_SIZE : NULL,
++                            desc, "cache map item header is unreadable");
++    }
++    if (item->magic != CACHE_ITEM_MAGIC || item->desc != desc ||
++            !item->size || !item->ref_count) {
++        cache_abort_invalid("cache_get", __func__,
++                            (char *) item + CACHE_ITEM_SIZE, desc,
++                            "cache map item header is invalid");
++    }
++}
++
+ 
+ // Create a cache with type-specific hash/compare/destruct/size functions
+ Cache *ass_cache_create(const CacheDesc *desc)
+@@ -423,11 +634,23 @@ Cache *ass_cache_create(const CacheDesc *desc)
+ // to extend its lifetime further, call ass_cache_inc_ref().
+ void *ass_cache_get(Cache *cache, void *key, void *priv)
+ {
++    if (!cache || !cache_memory_readable(cache, sizeof(*cache)) ||
++            !cache_desc_is_known(cache->desc)) {
++        cache_abort_invalid("cache_get", __func__, NULL, NULL,
++                            "cache object is invalid");
++    }
++    if (!cache->buckets || !cache->map ||
++            !cache_memory_readable(cache->map,
++                                   cache->buckets * sizeof(CacheItem *))) {
++        cache_abort_invalid("cache_get", __func__, NULL, cache->desc,
++                            "cache map is invalid");
++    }
+     const CacheDesc *desc = cache->desc;
+     size_t key_offs = CACHE_ITEM_SIZE + align_cache(desc->value_size);
+     unsigned bucket = desc->hash_func(key, ASS_HASH_INIT) % cache->buckets;
+     CacheItem *item = cache->map[bucket];
+     while (item) {
++        cache_validate_list_item(item, desc);
+         if (desc->compare_func(key, (char *) item + key_offs)) {
+             assert(item->size);
+             if (!item->queue_prev || item->queue_next) {
+@@ -453,6 +676,7 @@ void *ass_cache_get(Cache *cache, void *key, void *priv)
+         desc->key_move_func(NULL, key);
+         return NULL;
+     }
++    item->magic = CACHE_ITEM_MAGIC;
+     item->cache = cache;
+     item->desc = desc;
+     void *new_key = (char *) item + key_offs;
+@@ -481,34 +705,56 @@ void *ass_cache_get(Cache *cache, void *key, void *priv)
+     return value;
+ }
+ 
+-void *ass_cache_key(void *value)
++void *ass_cache_key_debug(void *value, const char *caller,
++                          const CacheDesc *expected_desc)
+ {
+-    CacheItem *item = value_to_item(value);
++    CacheItem *item =
++        cache_validate_value(value, "key", caller, expected_desc);
++    if (!item)
++        cache_abort_invalid("key", caller, value, expected_desc,
++                            "cache value is null");
+     return (char *) value + align_cache(item->desc->value_size);
+ }
+ 
++void *ass_cache_key(void *value)
++{
++    return ass_cache_key_debug(value, __func__, NULL);
++}
++
+ static inline void destroy_item(const CacheDesc *desc, CacheItem *item)
+ {
+     assert(item->desc == desc);
+     char *value = (char *) item + CACHE_ITEM_SIZE;
+     desc->destruct_func(value + align_cache(desc->value_size), value);
++    item->magic = 0;
++    item->size = 0;
++    item->ref_count = 0;
+     free(item);
+ }
+ 
+-void ass_cache_inc_ref(void *value)
++void ass_cache_inc_ref_debug(void *value, const char *caller,
++                             const CacheDesc *expected_desc)
+ {
+     if (!value)
+         return;
+-    CacheItem *item = value_to_item(value);
++    CacheItem *item =
++        cache_validate_value(value, "inc_ref", caller, expected_desc);
+     assert(item->size && item->ref_count);
+     item->ref_count++;
+ }
+ 
+-void ass_cache_dec_ref(void *value)
++void ass_cache_inc_ref(void *value)
++{
++    ass_cache_inc_ref_debug(value, __func__, NULL);
++}
++
++void ass_cache_dec_ref_debug(void *value, const char *caller,
++                             const CacheDesc *expected_desc)
+ {
+     if (!value)
+         return;
+-    CacheItem *item = value_to_item(value);
++    CacheItem *item =
++        cache_validate_value(value, "dec_ref", caller, expected_desc);
+     assert(item->size && item->ref_count);
+     if (--item->ref_count)
+         return;
+@@ -524,6 +770,11 @@ void ass_cache_dec_ref(void *value)
+     destroy_item(item->desc, item);
+ }
+ 
++void ass_cache_dec_ref(void *value)
++{
++    ass_cache_dec_ref_debug(value, __func__, NULL);
++}
++
+ void ass_cache_cut(Cache *cache, size_t max_size)
+ {
+     if (cache->cache_size <= max_size)
+@@ -533,6 +784,7 @@ void ass_cache_cut(Cache *cache, size_t max_size)
+         CacheItem *item = cache->queue_first;
+         if (!item)
+             break;
++        cache_validate_list_item(item, cache->desc);
+         assert(item->size);
+ 
+         cache->queue_first = item->queue_next;
+@@ -559,6 +811,7 @@ void ass_cache_empty(Cache *cache)
+     for (int i = 0; i < cache->buckets; i++) {
+         CacheItem *item = cache->map[i];
+         while (item) {
++            cache_validate_list_item(item, cache->desc);
+             assert(item->size);
+             CacheItem *next = item->next;
+             if (item->queue_prev)
+diff --git a/libass/ass_cache.h b/libass/ass_cache.h
+index dd9bc1b..94147ed 100644
+--- a/libass/ass_cache.h
++++ b/libass/ass_cache.h
+@@ -113,11 +113,35 @@ typedef struct
+     size_t value_size;
+ } CacheDesc;
+ 
++extern const CacheDesc font_cache_desc;
++extern const CacheDesc bitmap_cache_desc;
++extern const CacheDesc composite_cache_desc;
++extern const CacheDesc outline_cache_desc;
++extern const CacheDesc face_size_metrics_cache_desc;
++extern const CacheDesc glyph_metrics_cache_desc;
++
+ Cache *ass_cache_create(const CacheDesc *desc);
+ void *ass_cache_get(Cache *cache, void *key, void *priv);
+ void *ass_cache_key(void *value);
+ void ass_cache_inc_ref(void *value);
+ void ass_cache_dec_ref(void *value);
++void *ass_cache_key_debug(void *value, const char *caller,
++                          const CacheDesc *expected_desc);
++void ass_cache_inc_ref_debug(void *value, const char *caller,
++                             const CacheDesc *expected_desc);
++void ass_cache_dec_ref_debug(void *value, const char *caller,
++                             const CacheDesc *expected_desc);
++void ass_cache_set_debug_context(const char *event_text, const char *style,
++                                 const char *actor, long long pts);
++
++#ifndef ASS_CACHE_INTERNAL
++#define ass_cache_key(value) \
++    ass_cache_key_debug((value), __func__, NULL)
++#define ass_cache_inc_ref(value) \
++    ass_cache_inc_ref_debug((value), __func__, NULL)
++#define ass_cache_dec_ref(value) \
++    ass_cache_dec_ref_debug((value), __func__, NULL)
++#endif
+ void ass_cache_cut(Cache *cache, size_t max_size);
+ void ass_cache_empty(Cache *cache);
+ void ass_cache_done(Cache *cache);
+diff --git a/libass/ass_render.c b/libass/ass_render.c
+index 351db1d..3293a3d 100644
+--- a/libass/ass_render.c
++++ b/libass/ass_render.c
+@@ -79,6 +79,24 @@ static ASS_Vector bitmap_ref_border_pos(BitmapRef *ref, int layer);
+ #define ASS_RND_SCALE 0.1
+ #endif
+ 
++#ifndef MANGETSU_DISABLE_MULTI_BORDER_CACHE
++#define MANGETSU_DISABLE_MULTI_BORDER_CACHE 0
++#endif
++
++#ifndef MANGETSU_DISABLE_CUSTOM_BORDER_LAYERS
++#define MANGETSU_DISABLE_CUSTOM_BORDER_LAYERS 0
++#endif
++
++#ifndef MANGETSU_DISABLE_DRAWING_CACHE_STRINGVIEWS
++#define MANGETSU_DISABLE_DRAWING_CACHE_STRINGVIEWS 0
++#endif
++
++#if MANGETSU_DISABLE_CUSTOM_BORDER_LAYERS
++#define MANGETSU_BORDER_LAYER_COUNT 1
++#else
++#define MANGETSU_BORDER_LAYER_COUNT ASS_BORDER_LAYERS_MAX
++#endif
++
+ /* Define ASS_RND_DEBUG to enable verbose rnd* logging for debugging.
+  * Disabled by default to avoid noisy builds. */
+ /* #define ASS_RND_DEBUG */
+@@ -343,7 +361,7 @@ static ASS_Image *my_draw_bitmap(unsigned char *bitmap, int bitmap_w,
+     img->result.dst_y = dst_y;
+ 
+     img->source = source;
+-    ass_cache_inc_ref(source);
++    ass_cache_inc_ref_debug(source, __func__, &composite_cache_desc);
+     img->buffer = source ? NULL : bitmap;
+     img->ref_count = 0;
+ 
+@@ -1756,7 +1774,7 @@ static void blend_vector_clip(RenderContext *state, ASS_Image *head)
+ 
+         ASS_ImagePriv *priv = (ASS_ImagePriv *) cur;
+         priv->buffer = cur->bitmap = nbuffer;
+-        ass_cache_dec_ref(priv->source);
++        ass_cache_dec_ref_debug(priv->source, __func__, &composite_cache_desc);
+         priv->source = NULL;
+     }
+ }
+@@ -3054,8 +3072,18 @@ get_outline_glyph(RenderContext *state, GlyphInfo *info)
+     OutlineHashKey key;
+     if (info->drawing_text.str) {
+         key.type = OUTLINE_DRAWING;
+-        key.u.drawing.text = info->drawing_text;
++        ASS_StringView drawing_text = info->drawing_text;
++#if MANGETSU_DISABLE_DRAWING_CACHE_STRINGVIEWS
++        char *drawing_text_copy = ass_copy_string(drawing_text);
++        if (!drawing_text_copy)
++            return;
++        drawing_text.str = drawing_text_copy;
++#endif
++        key.u.drawing.text = drawing_text;
+         val = ass_cache_get(priv->cache.outline_cache, &key, priv);
++#if MANGETSU_DISABLE_DRAWING_CACHE_STRINGVIEWS
++        free(drawing_text_copy);
++#endif
+         if (!val || !val->valid)
+             return;
+ 
+@@ -3536,7 +3564,7 @@ get_bitmap_glyph(RenderContext *state, GlyphInfo *info,
+     double outer_y = 0;
+     double prev_x = 0;
+     double prev_y = 0;
+-    for (int layer = 0; layer < ASS_BORDER_LAYERS_MAX; layer++) {
++    for (int layer = 0; layer < MANGETSU_BORDER_LAYER_COUNT; layer++) {
+         const BorderLayerState *border = &info->border_layers[layer];
+         double size_x = layer == 0 ? info->border_x :
+             (border->size_x > 0 ? border->size_x : 0);
+@@ -4636,10 +4664,14 @@ static bool border_layers_state_equal(const BorderLayerState *a,
+ 
+ static bool has_multi_border_layers(const BorderLayerState *layers)
+ {
++#if MANGETSU_DISABLE_CUSTOM_BORDER_LAYERS
++    return false;
++#else
+     for (int i = 1; i < ASS_BORDER_LAYERS_MAX; i++)
+         if (border_layer_has_size(&layers[i]))
+             return true;
+     return false;
++#endif
+ }
+ 
+ static void sync_glyph_layer1_border(GlyphInfo *info)
+@@ -4662,7 +4694,7 @@ static void sync_glyph_layer1_border(GlyphInfo *info)
+ static double glyph_border_max_x(const GlyphInfo *info)
+ {
+     double max = info->border_x > 0 ? info->border_x : 0;
+-    for (int i = 1; i < ASS_BORDER_LAYERS_MAX; i++)
++    for (int i = 1; i < MANGETSU_BORDER_LAYER_COUNT; i++)
+         if (border_layer_has_size(&info->border_layers[i]))
+             max += info->border_layers[i].size_x > 0 ?
+                    info->border_layers[i].size_x : 0;
+@@ -4672,7 +4704,7 @@ static double glyph_border_max_x(const GlyphInfo *info)
+ static double glyph_border_max_y(const GlyphInfo *info)
+ {
+     double max = info->border_y > 0 ? info->border_y : 0;
+-    for (int i = 1; i < ASS_BORDER_LAYERS_MAX; i++)
++    for (int i = 1; i < MANGETSU_BORDER_LAYER_COUNT; i++)
+         if (border_layer_has_size(&info->border_layers[i]))
+             max += info->border_layers[i].size_y > 0 ?
+                    info->border_layers[i].size_y : 0;
+@@ -6498,6 +6530,7 @@ static void render_glyph_list_to_bitmaps(RenderContext *state,
+                 }
+                 current_info = &(*combined_info)[*nb_bitmaps];
+ 
++                memset(current_info, 0, sizeof(*current_info));
+                 memcpy(&current_info->c, &info->c, sizeof(info->c));
+                 memcpy(&current_info->base_c, &info->c, sizeof(info->c));
+                 current_info->gradient = info->gradient;
+@@ -6808,8 +6841,13 @@ static void render_and_combine_glyphs(RenderContext *state,
+             }
+         }
+ 
+-        if (info->has_distortion) {
+-            // Distortion depends on per-word bounding boxes, so reuse via the composite cache is unsafe.
++        bool bypass_composite_cache = info->has_distortion;
++#if MANGETSU_DISABLE_MULTI_BORDER_CACHE
++        bypass_composite_cache = bypass_composite_cache ||
++            (info->filter.flags & FILTER_MULTI_BORDER);
++#endif
++        if (bypass_composite_cache) {
++            // Distortion and diagnostic multi-border paths avoid retaining composite cache keys.
+             CompositeHashKey key;
+             key.filter = info->filter;
+             key.bitmap_count = info->bitmap_count;
+@@ -6979,7 +7017,7 @@ size_t ass_composite_construct(void *key, void *value, void *priv)
+             last = ref;
+             n_bm++;
+         }
+-        for (int layer = 0; layer < ASS_BORDER_LAYERS_MAX; layer++) {
++        for (int layer = 0; layer < MANGETSU_BORDER_LAYER_COUNT; layer++) {
+             Bitmap *bm_o = bitmap_ref_border_bitmap(ref, layer);
+             if (!bm_o)
+                 continue;
+@@ -7067,7 +7105,7 @@ size_t ass_composite_construct(void *key, void *value, void *priv)
+                                             src->w, src->h);
+         }
+     } else if (multi_border) {
+-        for (int layer = 0; layer < ASS_BORDER_LAYERS_MAX; layer++) {
++        for (int layer = 0; layer < MANGETSU_BORDER_LAYER_COUNT; layer++) {
+             if (!n_bm_o[layer])
+                 continue;
+             Bitmap *dst = composite_border_bitmap(v, layer);
+@@ -7129,7 +7167,7 @@ size_t ass_composite_construct(void *key, void *value, void *priv)
+             covered.logical_w = rect_o_l.x_max - rect_o_l.x_min + 2 * bord;
+             covered.logical_h = rect_o_l.y_max - rect_o_l.y_min + 2 * bord;
+             bitmap_max_into(&covered, &v->bm);
+-            for (int layer = 0; layer < ASS_BORDER_LAYERS_MAX; layer++)
++            for (int layer = 0; layer < MANGETSU_BORDER_LAYER_COUNT; layer++)
+                 ring_subtract_covered(composite_border_bitmap(v, layer),
+                                       &covered);
+             ass_free_bitmap(&covered);
+@@ -7439,6 +7477,12 @@ ass_render_event(RenderContext *state, ASS_Event *event,
+         return false;
+     }
+ 
++    ASS_Style *event_style = render_priv->track->styles + event->Style;
++    ass_cache_set_debug_context(event->Text,
++                                event_style->Name ? event_style->Name : "",
++                                event->Name ? event->Name : "",
++                                render_priv->time);
++
+     free_render_context(state);
+     init_render_context(state, event);
+ 
+@@ -7761,6 +7805,7 @@ ass_start_frame(ASS_Renderer *render_priv, ASS_Track *track,
+ 
+     render_priv->track = track;
+     render_priv->time = now;
++    ass_cache_set_debug_context(NULL, NULL, NULL, now);
+     render_priv->frame_needs_rgba = false;
+     render_priv->rgba_output_limit_hit = false;
+     render_priv->rgba_output_size = 0;
+@@ -8086,7 +8131,7 @@ static ASS_Image *ass_free_image(ASS_Image *img) {
+     ASS_Image *next = img->next;
+ 
+     ASS_ImagePriv *priv = (ASS_ImagePriv *) img;
+-    ass_cache_dec_ref(priv->source);
++    ass_cache_dec_ref_debug(priv->source, __func__, &composite_cache_desc);
+     ass_aligned_free(priv->buffer);
+     free(priv);
+ 
+@@ -8111,6 +8156,7 @@ ASS_Image *ass_render_frame(ASS_Renderer *priv, ASS_Track *track,
+             *detect_change = 2;
+         return NULL;
+     }
++    ass_cache_set_debug_context(NULL, NULL, NULL, now);
+ 
+     // render events separately
+     int cnt = 0;
