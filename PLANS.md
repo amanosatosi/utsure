@@ -77,11 +77,12 @@ Implemented:
   * Updated Windows CI to build libassmod before the Mangetsu FFmpeg build and to enable `--enable-libass`.
   * Updated portable packaging to include `ffmpeg.exe`, `ffprobe.exe`, and their runtime DLL dependency closure.
   * Added dependency-audit checks for the `ass` and `subtitles` filters and the Mangetsu `ass` filter options.
+  * Updated CMake dependency validation to accept Mangetsu FFmpeg commit-version strings, while preserving upstream release-series validation.
   * Added documentation for enabling, testing, and operating the FFmpeg filter hardsub backend.
 
 Validation:
   * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
-  * Static validation included Git Bash `bash -n` for edited CI shell scripts, targeted source searches, and `git diff --check`.
+  * Static validation included Git Bash `bash -n` for edited CI shell scripts, a CMake parse check for `cmake/UtsureDependencies.cmake`, targeted source searches, and `git diff --check`.
   * `git diff --check` reported only line-ending normalization warnings for touched files.
 
 

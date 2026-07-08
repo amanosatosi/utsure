@@ -3,6 +3,25 @@ include_guard(GLOBAL)
 set(UTSURE_QT_MIN_VERSION "6.5" CACHE STRING "Minimum supported Qt 6 version.")
 set(UTSURE_FFMPEG_REQUIRED_SERIES "7.1" CACHE STRING "Required FFmpeg major.minor series for the active media pipeline.")
 set(UTSURE_FFMPEG_NEXT_UNTESTED_SERIES "7.2" CACHE STRING "First FFmpeg series outside the currently supported range.")
+set(UTSURE_FFMPEG_SOURCE "$ENV{UTSURE_FFMPEG_SOURCE}" CACHE STRING "FFmpeg source mode: upstream or mangetsu.")
+if("${UTSURE_FFMPEG_SOURCE}" STREQUAL "")
+    set(UTSURE_FFMPEG_SOURCE "upstream" CACHE STRING "FFmpeg source mode: upstream or mangetsu." FORCE)
+endif()
+set(
+    UTSURE_FFMPEG_MANGETSU_COMMIT
+    "$ENV{UTSURE_FFMPEG_MANGETSU_COMMIT}"
+    CACHE STRING
+    "Pinned Mangetsu FFmpeg commit used when UTSURE_FFMPEG_SOURCE=mangetsu."
+)
+if("${UTSURE_FFMPEG_MANGETSU_COMMIT}" STREQUAL "")
+    set(
+        UTSURE_FFMPEG_MANGETSU_COMMIT
+        "6282c1941e3611ce43a4dcbe83a679c0323b8b13"
+        CACHE STRING
+        "Pinned Mangetsu FFmpeg commit used when UTSURE_FFMPEG_SOURCE=mangetsu."
+        FORCE
+    )
+endif()
 option(UTSURE_ENABLE_DEPENDENCY_AUDIT "Verify the planned external dependency stack at configure time." ON)
 option(UTSURE_REQUIRE_FFMPEG "Require FFmpeg to be available from an explicit isolated prefix." ON)
 option(UTSURE_REQUIRE_FFMS2 "Require FFMS2 to be available from an explicit isolated prefix." ON)
@@ -83,23 +102,141 @@ function(utsure_require_ffmpeg_release_series ffmpeg_root status_variable)
         )
     endif()
 
-    string(REGEX MATCH "ffmpeg version n?([0-9]+\\.[0-9]+(\\.[0-9]+)?)" _ffmpeg_version_line "${_ffmpeg_version_output}")
-    if(NOT CMAKE_MATCH_1)
-        message(FATAL_ERROR
-            "Could not parse an FFmpeg release version from '${_ffmpeg_executable} -version'."
-        )
-    endif()
+    if("${UTSURE_FFMPEG_SOURCE}" STREQUAL "mangetsu")
+        string(LENGTH "${UTSURE_FFMPEG_MANGETSU_COMMIT}" _ffmpeg_mangetsu_commit_length)
+        if(_ffmpeg_mangetsu_commit_length LESS 10)
+            message(FATAL_ERROR
+                "UTSURE_FFMPEG_MANGETSU_COMMIT must contain at least 10 characters for commit-version validation."
+            )
+        endif()
+        string(SUBSTRING "${UTSURE_FFMPEG_MANGETSU_COMMIT}" 0 10 _ffmpeg_mangetsu_short_commit)
+        if(NOT "${_ffmpeg_version_output}" MATCHES "${_ffmpeg_mangetsu_short_commit}")
+            message(FATAL_ERROR
+                "The pinned Mangetsu FFmpeg executable was expected to report commit "
+                "'${_ffmpeg_mangetsu_short_commit}', but '${_ffmpeg_executable} -version' returned: "
+                "${_ffmpeg_version_output}"
+            )
+        endif()
 
-    set(_ffmpeg_release_version "${CMAKE_MATCH_1}")
-    if(NOT "${_ffmpeg_release_version}" VERSION_GREATER_EQUAL "${UTSURE_FFMPEG_REQUIRED_SERIES}" OR
-       "${_ffmpeg_release_version}" VERSION_GREATER_EQUAL "${UTSURE_FFMPEG_NEXT_UNTESTED_SERIES}")
-        message(FATAL_ERROR
-            "The pinned FFmpeg executable resolved to release '${_ffmpeg_release_version}', but this project is "
-            "pinned to the FFmpeg ${UTSURE_FFMPEG_REQUIRED_SERIES}.x series."
-        )
-    endif()
+        message(STATUS "Mangetsu FFmpeg source selected.")
+        message(STATUS "Accepting ffmpeg version string containing pinned commit ${_ffmpeg_mangetsu_short_commit}.")
 
-    set(${status_variable} "validated from ${ffmpeg_root} (ffmpeg ${_ffmpeg_release_version})" PARENT_SCOPE)
+        execute_process(
+            COMMAND "${_ffmpeg_executable}" -hide_banner -filters
+            RESULT_VARIABLE _ffmpeg_filters_result
+            OUTPUT_VARIABLE _ffmpeg_filters_output
+            ERROR_VARIABLE _ffmpeg_filters_error
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_STRIP_TRAILING_WHITESPACE
+        )
+        if(NOT _ffmpeg_filters_result EQUAL 0)
+            message(FATAL_ERROR
+                "Failed to query Mangetsu FFmpeg filters from '${_ffmpeg_executable}'. "
+                "The executable returned: ${_ffmpeg_filters_error}"
+            )
+        endif()
+        if(NOT "${_ffmpeg_filters_output}" MATCHES "(^|\n)[^\n]*[ \t]ass[ \t]")
+            message(FATAL_ERROR
+                "Expected the Mangetsu FFmpeg build to expose the ass filter, but it was missing from ffmpeg -filters."
+            )
+        endif()
+        if(NOT "${_ffmpeg_filters_output}" MATCHES "(^|\n)[^\n]*[ \t]subtitles[ \t]")
+            message(FATAL_ERROR
+                "Expected the Mangetsu FFmpeg build to expose the subtitles filter, but it was missing from ffmpeg -filters."
+            )
+        endif()
+
+        execute_process(
+            COMMAND "${_ffmpeg_executable}" -hide_banner -buildconf
+            RESULT_VARIABLE _ffmpeg_buildconf_result
+            OUTPUT_VARIABLE _ffmpeg_buildconf_output
+            ERROR_VARIABLE _ffmpeg_buildconf_error
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_STRIP_TRAILING_WHITESPACE
+        )
+        if(NOT _ffmpeg_buildconf_result EQUAL 0)
+            message(FATAL_ERROR
+                "Failed to query Mangetsu FFmpeg build configuration from '${_ffmpeg_executable}'. "
+                "The executable returned: ${_ffmpeg_buildconf_error}"
+            )
+        endif()
+        set(_ffmpeg_buildconf_combined "${_ffmpeg_buildconf_output}\n${_ffmpeg_buildconf_error}")
+        if(NOT "${_ffmpeg_buildconf_combined}" MATCHES "--enable-libass")
+            message(FATAL_ERROR
+                "Expected the Mangetsu FFmpeg build configuration to include --enable-libass."
+            )
+        endif()
+
+        execute_process(
+            COMMAND "${_ffmpeg_executable}" -hide_banner -h filter=ass
+            RESULT_VARIABLE _ffmpeg_ass_help_result
+            OUTPUT_VARIABLE _ffmpeg_ass_help_output
+            ERROR_VARIABLE _ffmpeg_ass_help_error
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_STRIP_TRAILING_WHITESPACE
+        )
+        if(NOT _ffmpeg_ass_help_result EQUAL 0)
+            message(FATAL_ERROR
+                "Failed to query the Mangetsu FFmpeg ass filter from '${_ffmpeg_executable}'. "
+                "The executable returned: ${_ffmpeg_ass_help_error}"
+            )
+        endif()
+        set(_ffmpeg_ass_help_combined "${_ffmpeg_ass_help_output}\n${_ffmpeg_ass_help_error}")
+        if(NOT "${_ffmpeg_ass_help_combined}" MATCHES "mangetsu_rgba" OR
+           NOT "${_ffmpeg_ass_help_combined}" MATCHES "mangetsu_actor_colorcoding")
+            message(FATAL_ERROR
+                "Expected the Mangetsu FFmpeg ass filter to expose mangetsu_rgba and "
+                "mangetsu_actor_colorcoding options."
+            )
+        endif()
+
+        execute_process(
+            COMMAND "${_ffmpeg_executable}" -hide_banner -h filter=subtitles
+            RESULT_VARIABLE _ffmpeg_subtitles_help_result
+            OUTPUT_VARIABLE _ffmpeg_subtitles_help_output
+            ERROR_VARIABLE _ffmpeg_subtitles_help_error
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_STRIP_TRAILING_WHITESPACE
+        )
+        if(NOT _ffmpeg_subtitles_help_result EQUAL 0)
+            message(FATAL_ERROR
+                "Failed to query the Mangetsu FFmpeg subtitles filter from '${_ffmpeg_executable}'. "
+                "The executable returned: ${_ffmpeg_subtitles_help_error}"
+            )
+        endif()
+        set(_ffmpeg_subtitles_help_combined "${_ffmpeg_subtitles_help_output}\n${_ffmpeg_subtitles_help_error}")
+        if(NOT "${_ffmpeg_subtitles_help_combined}" MATCHES "mangetsu_rgba" OR
+           NOT "${_ffmpeg_subtitles_help_combined}" MATCHES "mangetsu_actor_colorcoding")
+            message(FATAL_ERROR
+                "Expected the Mangetsu FFmpeg subtitles filter to expose mangetsu_rgba and "
+                "mangetsu_actor_colorcoding options."
+            )
+        endif()
+
+        set(
+            ${status_variable}
+            "validated from ${ffmpeg_root} (mangetsu ${_ffmpeg_mangetsu_short_commit})"
+            PARENT_SCOPE
+        )
+    else()
+        string(REGEX MATCH "ffmpeg version n?([0-9]+\\.[0-9]+(\\.[0-9]+)?)" _ffmpeg_version_line "${_ffmpeg_version_output}")
+        if(NOT CMAKE_MATCH_1)
+            message(FATAL_ERROR
+                "Could not parse an upstream/release FFmpeg release version from '${_ffmpeg_executable} -version'."
+            )
+        endif()
+
+        set(_ffmpeg_release_version "${CMAKE_MATCH_1}")
+        if(NOT "${_ffmpeg_release_version}" VERSION_GREATER_EQUAL "${UTSURE_FFMPEG_REQUIRED_SERIES}" OR
+           "${_ffmpeg_release_version}" VERSION_GREATER_EQUAL "${UTSURE_FFMPEG_NEXT_UNTESTED_SERIES}")
+            message(FATAL_ERROR
+                "The pinned upstream/release FFmpeg executable resolved to release '${_ffmpeg_release_version}', "
+                "but this project is pinned to the FFmpeg ${UTSURE_FFMPEG_REQUIRED_SERIES}.x series."
+            )
+        endif()
+
+        set(${status_variable} "validated from ${ffmpeg_root} (ffmpeg ${_ffmpeg_release_version})" PARENT_SCOPE)
+    endif()
 endfunction()
 
 macro(utsure_configure_dependencies)
