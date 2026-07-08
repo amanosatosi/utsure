@@ -3,7 +3,6 @@ name: windows-msys2
 on:
   push:
     branches:
-      - main
   pull_request:
 
 env:
