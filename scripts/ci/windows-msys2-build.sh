@@ -61,6 +61,7 @@ cmake --build "${build_dir}" --target utsure_core_media_inspection_tests --paral
 cmake --build "${build_dir}" --target utsure_core_media_decode_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_media_encode_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_encode_job_tests --parallel
+cmake --build "${build_dir}" --target utsure_core_ffmpeg_filter_hardsub_backend_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_encode_job_preflight_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_output_naming_tests --parallel
 cmake --build "${build_dir}" --target utsure_core_resize_tests --parallel

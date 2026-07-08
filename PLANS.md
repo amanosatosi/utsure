@@ -78,6 +78,7 @@ Implemented:
   * Updated portable packaging to include `ffmpeg.exe`, `ffprobe.exe`, and their runtime DLL dependency closure.
   * Added dependency-audit checks for the `ass` and `subtitles` filters and the Mangetsu `ass` filter options.
   * Updated CMake dependency validation to accept Mangetsu FFmpeg commit-version strings, while preserving upstream release-series validation.
+  * Fixed CI follow-up failures by ensuring uncaught C++ exception crash sidecars use terminate-path C++ metadata and by building/registering the FFmpeg filter hardsub test executable with target-file CTest commands.
   * Added documentation for enabling, testing, and operating the FFmpeg filter hardsub backend.
 
 Validation:

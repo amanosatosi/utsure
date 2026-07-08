@@ -1,6 +1,7 @@
 #include "crash_dump_writer.hpp"
 
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -526,7 +527,12 @@ int handled_cxx_exception_child_process() {
         .build_version = "utsure child uncaught cxx",
         .git_commit = "child-test"
     });
-    throw std::runtime_error("controlled uncaught cxx exception");
+    try {
+        throw std::runtime_error("controlled uncaught cxx exception");
+    } catch (...) {
+        std::terminate();
+    }
+    std::_Exit(3);
 }
 
 [[noreturn]] void crash_child_process() {
@@ -670,6 +676,7 @@ int assert_uncaught_cxx_exception_sidecar_metadata(const char *executable_path) 
         !contains_text(sidecar_text, "\"current_stage\": \"controlled_uncaught_cxx_exception\"") ||
         !contains_text(sidecar_text, "\"runner_slot_index\": 4") ||
         !contains_text(sidecar_text, "\"cxx_exception_active\": true") ||
+        contains_text(sidecar_text, "\"cxx_exception_type\": \"\"") ||
         !contains_text(sidecar_text, "\"cxx_exception_message\": \"controlled uncaught cxx exception\"")) {
         return fail("Uncaught C++ exception sidecar did not include active C++ exception metadata.");
     }

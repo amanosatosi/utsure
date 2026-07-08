@@ -716,12 +716,25 @@ bool is_hard_fault_exception_code(const DWORD code) noexcept {
     }
 }
 
+bool is_microsoft_cxx_exception_code(const DWORD code) noexcept {
+    constexpr DWORD kMicrosoftCxxException = 0xE06D7363UL;
+    return code == kMicrosoftCxxException;
+}
+
 bool should_write_vectored_exception_dump(EXCEPTION_POINTERS *exception_pointers) noexcept {
     if (exception_pointers == nullptr || exception_pointers->ExceptionRecord == nullptr) {
         return false;
     }
 
     return is_hard_fault_exception_code(exception_pointers->ExceptionRecord->ExceptionCode);
+}
+
+bool should_write_unhandled_exception_filter_dump(EXCEPTION_POINTERS *exception_pointers) noexcept {
+    if (exception_pointers == nullptr || exception_pointers->ExceptionRecord == nullptr) {
+        return true;
+    }
+
+    return !is_microsoft_cxx_exception_code(exception_pointers->ExceptionRecord->ExceptionCode);
 }
 
 unsigned long exception_code_from_pointers(void *exception_pointers) noexcept {
@@ -798,6 +811,10 @@ MiniDumpAttemptResult write_minidump(const std::filesystem::path &dump_path, voi
 }
 
 LONG WINAPI unhandled_exception_filter(EXCEPTION_POINTERS *exception_pointers) {
+    if (!should_write_unhandled_exception_filter_dump(exception_pointers)) {
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+
     (void)write_crash_dump_for_current_process(exception_pointers);
     return EXCEPTION_EXECUTE_HANDLER;
 }
@@ -810,7 +827,9 @@ LONG CALLBACK vectored_exception_handler(EXCEPTION_POINTERS *exception_pointers)
 }
 
 void terminate_handler() {
-    (void)write_crash_dump_for_current_process(nullptr);
+    CrashDumpSidecarMetadata metadata{};
+    capture_current_cxx_exception_metadata(metadata);
+    (void)write_crash_dump_for_current_process(nullptr, &metadata);
     std::_Exit(3);
 }
 
@@ -1612,7 +1631,10 @@ std::string format_crash_dump_setup_log(const CrashDumpSetupStatus &status) {
     return text.str();
 }
 
-CrashDumpWriteResult write_crash_dump_for_current_process(void *exception_pointers) noexcept {
+CrashDumpWriteResult write_crash_dump_for_current_process(
+    void *exception_pointers,
+    const CrashDumpSidecarMetadata *precaptured_metadata
+) noexcept {
     CrashDumpWriteResult result{};
     result.handler_entered = true;
     if (exception_pointers != nullptr) {
@@ -1649,7 +1671,13 @@ CrashDumpWriteResult write_crash_dump_for_current_process(void *exception_pointe
         metadata.seh_exception_code = exception_code_from_pointers(exception_pointers);
         metadata.exception_address = exception_address_from_pointers(exception_pointers);
 #endif
-        capture_current_cxx_exception_metadata(metadata);
+        if (precaptured_metadata != nullptr && precaptured_metadata->cxx_exception_active) {
+            metadata.cxx_exception_active = precaptured_metadata->cxx_exception_active;
+            metadata.cxx_exception_type = precaptured_metadata->cxx_exception_type;
+            metadata.cxx_exception_message = precaptured_metadata->cxx_exception_message;
+        } else {
+            capture_current_cxx_exception_metadata(metadata);
+        }
         std::string marker_error{};
         result.handler_marker_written = write_handler_entered_marker_for_test(
             paths,

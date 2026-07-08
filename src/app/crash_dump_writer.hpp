@@ -246,7 +246,10 @@ void install_crash_handlers() noexcept;
 void initialize_crash_dump_directory() noexcept;
 [[nodiscard]] CrashDumpSetupStatus crash_dump_setup_status() noexcept;
 [[nodiscard]] std::string format_crash_dump_setup_log(const CrashDumpSetupStatus &status);
-[[nodiscard]] CrashDumpWriteResult write_crash_dump_for_current_process(void *exception_pointers = nullptr) noexcept;
+[[nodiscard]] CrashDumpWriteResult write_crash_dump_for_current_process(
+    void *exception_pointers = nullptr,
+    const CrashDumpSidecarMetadata *precaptured_metadata = nullptr
+) noexcept;
 [[nodiscard]] CrashDumpWriteResult write_diagnostic_dump_now() noexcept;
 
 }  // namespace utsure::app::crash

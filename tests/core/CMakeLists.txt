@@ -818,12 +818,12 @@ utsure_enable_warnings(utsure_core_ffmpeg_filter_hardsub_backend_tests)
 
 add_test(
     NAME utsure.core.job.ffmpeg_filter_hardsub.escape
-    COMMAND utsure_core_ffmpeg_filter_hardsub_backend_tests --escape
+    COMMAND $<TARGET_FILE:utsure_core_ffmpeg_filter_hardsub_backend_tests> --escape
 )
 
 add_test(
     NAME utsure.core.job.ffmpeg_filter_hardsub.command
-    COMMAND utsure_core_ffmpeg_filter_hardsub_backend_tests --command
+    COMMAND $<TARGET_FILE:utsure_core_ffmpeg_filter_hardsub_backend_tests> --command
 )
 
 set_tests_properties(utsure.core.job.ffmpeg_filter_hardsub.command PROPERTIES
