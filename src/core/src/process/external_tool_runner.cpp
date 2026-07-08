@@ -16,6 +16,7 @@
 #include <windows.h>
 #else
 #include <spawn.h>
+#include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -383,6 +384,17 @@ ExternalToolRunResult run_external_tool(const ExternalToolRunRequest &request) n
     std::string combined_output{};
     for (;;) {
         combined_output += read_available_pipe_output(read_pipe.get());
+        if (request.cancellation_requested && request.cancellation_requested()) {
+            TerminateProcess(process_handle.get(), 1);
+            WaitForSingleObject(process_handle.get(), INFINITE);
+            combined_output += read_available_pipe_output(read_pipe.get());
+            return ExternalToolRunResult{
+                .launched = true,
+                .exit_code = -1,
+                .failure_message = "External tool invocation canceled.",
+                .combined_output = std::move(combined_output)
+            };
+        }
         const DWORD wait_result = WaitForSingleObject(process_handle.get(), 20);
         if (wait_result == WAIT_OBJECT_0) {
             break;
@@ -465,6 +477,17 @@ ExternalToolRunResult run_external_tool(const ExternalToolRunRequest &request) n
     std::string combined_output{};
     std::array<char, 4096> output_buffer{};
     for (;;) {
+        if (request.cancellation_requested && request.cancellation_requested()) {
+            kill(child_pid, SIGTERM);
+            waitpid(child_pid, nullptr, 0);
+            close(output_pipe[0]);
+            return ExternalToolRunResult{
+                .launched = true,
+                .exit_code = -1,
+                .failure_message = "External tool invocation canceled.",
+                .combined_output = std::move(combined_output)
+            };
+        }
         const ssize_t bytes_read = read(output_pipe[0], output_buffer.data(), output_buffer.size());
         if (bytes_read > 0) {
             combined_output.append(output_buffer.data(), output_buffer.data() + bytes_read);

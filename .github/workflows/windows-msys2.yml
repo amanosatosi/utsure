@@ -16,12 +16,17 @@ jobs:
       UTSURE_CMAKE_BUILD_TYPE: RelWithDebInfo
       UTSURE_MSYS2_PREFIX: "/ucrt64"
       UTSURE_TOOLCHAIN_ID_PREFIX: "ucrt64-gcc"
+      UTSURE_FFMPEG_SOURCE: "mangetsu"
       UTSURE_FFMPEG_SERIES: "7.1"
       UTSURE_FFMPEG_VERSION: "7.1.2"
+      UTSURE_FFMPEG_MANGETSU_REPO_URL: "https://github.com/amanosatosi/FFmpeg.git"
+      UTSURE_FFMPEG_MANGETSU_REF: "7.1"
+      UTSURE_FFMPEG_MANGETSU_COMMIT: "6282c1941e3611ce43a4dcbe83a679c0323b8b13"
       UTSURE_FFMS2_REF: "25cef14386fcaaa58ee547065deee8f6e82c56a2"
       UTSURE_FFMPEG_CONFIGURE_FLAGS: >-
         --enable-gpl --enable-libx264 --enable-libx265 --enable-shared --disable-static
         --disable-debug --disable-doc --disable-ffplay --disable-programs --enable-ffmpeg --enable-ffprobe
+        --enable-libass
       UTSURE_FONTCOLLECTOR_VERSION: "4.0.2"
       UTSURE_PYINSTALLER_VERSION: "6.19.0"
       UTSURE_LIBASSMOD_REF: "mangetsu"
@@ -79,7 +84,10 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .deps/ffmpeg
-          key: utsure-${{ runner.os }}-${{ env.UTSURE_TOOLCHAIN_ID_PREFIX }}-ffmpeg-${{ env.UTSURE_FFMPEG_VERSION }}-${{ hashFiles('.github/workflows/windows-msys2.yml', 'scripts/ci/windows-msys2-build-ffmpeg.sh') }}
+          key: utsure-${{ runner.os }}-${{ env.UTSURE_TOOLCHAIN_ID_PREFIX }}-ffmpeg-${{ env.UTSURE_FFMPEG_SOURCE }}-${{ env.UTSURE_FFMPEG_MANGETSU_COMMIT }}-${{ hashFiles('.github/workflows/windows-msys2.yml', 'scripts/ci/windows-msys2-build-ffmpeg.sh') }}
+
+      - name: Build libassmod
+        run: ./scripts/ci/windows-msys2-build-libassmod.sh
 
       - name: Build FFmpeg
         run: ./scripts/ci/windows-msys2-build-ffmpeg.sh
@@ -90,9 +98,6 @@ jobs:
         with:
           path: .deps/ffmpeg
           key: ${{ steps.ffmpeg-cache.outputs.cache-primary-key }}
-
-      - name: Build libassmod
-        run: ./scripts/ci/windows-msys2-build-libassmod.sh
 
       - name: Build FFMS2
         run: ./scripts/ci/windows-msys2-build-ffms2.sh

@@ -161,6 +161,19 @@ copy_fontcollector_tool() {
   fi
 }
 
+copy_ffmpeg_cli_tools() {
+  local ffmpeg_bin_dir="${ffmpeg_prefix}/bin"
+  local tool_name=""
+  for tool_name in ffmpeg.exe ffprobe.exe; do
+    if [ ! -f "${ffmpeg_bin_dir}/${tool_name}" ]; then
+      echo "Portable packaging requires ${tool_name} at '${ffmpeg_bin_dir}/${tool_name}'."
+      exit 1
+    fi
+
+    cp "${ffmpeg_bin_dir}/${tool_name}" "${bundle_dir}/${tool_name}"
+  done
+}
+
 windeployqt="$(find_windeployqt)"
 
 if [ ! -f "${app_executable}" ]; then
@@ -204,10 +217,15 @@ fi
 write_qt_runtime_manifest
 
 copy_fontcollector_tool
+copy_ffmpeg_cli_tools
 
 declare -A scanned_binaries=()
 declare -A copied_non_qt_dependencies=()
-declare -a scan_queue=("${app_executable}")
+declare -a scan_queue=(
+  "${app_executable}"
+  "${ffmpeg_prefix}/bin/ffmpeg.exe"
+  "${ffmpeg_prefix}/bin/ffprobe.exe"
+)
 
 while [ "${#scan_queue[@]}" -gt 0 ]; do
   current_binary="${scan_queue[0]}"

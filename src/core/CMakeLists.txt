@@ -6,6 +6,7 @@ add_library(utsure_encoder_core STATIC
     src/job/encode_job.cpp
     src/job/encode_job_preflight.cpp
     src/job/encode_job_report.cpp
+    src/job/ffmpeg_filter_hardsub_backend.cpp
     src/job/output_naming.cpp
     src/job/resize.cpp
     src/process/external_tool_runner.cpp

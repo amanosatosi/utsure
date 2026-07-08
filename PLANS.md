@@ -48,6 +48,42 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M45 Subtitle renderer timestamp epsilon audit implemented; awaiting GitHub Actions validation.
 - [x] M46 Busy indicator yellow circle color implemented; awaiting GitHub Actions validation.
 - [x] M47 Uncaught C++ encode crash diagnostics implemented; awaiting GitHub Actions validation.
+- [x] M48 FFmpeg/libassmod hardsub filter backend implemented; awaiting GitHub Actions validation.
+
+### M48 FFmpeg/libassmod hardsub filter backend
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Add an opt-in `UTSURE_HARDSUB_BACKEND=ffmpeg_filter` backend for production hardsub encodes using the patched FFmpeg `ass`/`subtitles` filters.
+  * Preserve the existing internal subtitle compositor for debugging and default behavior.
+  * Add CI/build-script support for the `amanosatosi/FFmpeg` `7.1` commit `6282c1941e3611ce43a4dcbe83a679c0323b8b13` without removing the upstream FFmpeg mode.
+  * Package `ffmpeg.exe`, `ffprobe.exe`, and their runtime DLLs with the Windows portable bundle.
+
+Implementation approach:
+  * Resolve the hardsub backend from environment/config at the encode-job boundary so GUI code stays thin.
+  * When the FFmpeg filter backend is selected, bypass creation of the internal subtitle renderer and run a single external FFmpeg command that owns decode, scale/filter, subtitle composition, encode, audio handling, and mux.
+  * Use only existing FFmpeg filter names, `ass` for sidecar or extracted ASS paths and `subtitles` only for embedded stream input.
+  * Add robust FFmpeg filter-value escaping tests for Windows paths with spaces, apostrophes, commas, colons, backslashes, brackets, and Unicode.
+  * First-pass limitation: thumbnail pre-roll remains tied to the internal renderer and is rejected clearly when `ffmpeg_filter` is forced.
+
+Implemented:
+  * Created branch `codex/ffmpeg-mangetsu-hardsub-backend` from `main`.
+  * Added `UTSURE_HARDSUB_BACKEND=ffmpeg_filter` handling at the encode-job boundary.
+  * Added a private FFmpeg filter hardsub backend that resolves `ffmpeg.exe`, verifies the Mangetsu `ass` filter options, builds a normal FFmpeg filtergraph with `ass=filename=...:mangetsu_rgba=auto:mangetsu_actor_colorcoding=auto`, runs FFmpeg externally, cleans failed partial output, and preserves cancellation by terminating the child process.
+  * Kept the internal subtitle compositor as the default path and avoided creating the internal subtitle renderer when the FFmpeg filter backend handles subtitle burn-in.
+  * Added robust FFmpeg filter-value path escaping and focused command-generation tests for Windows paths with spaces, apostrophes, commas, colons, backslashes, brackets, and Unicode.
+  * Added `UTSURE_FFMPEG_SOURCE=mangetsu` support to the Windows FFmpeg build script for `amanosatosi/FFmpeg` branch `7.1` commit `6282c1941e3611ce43a4dcbe83a679c0323b8b13`, while preserving upstream mode.
+  * Updated Windows CI to build libassmod before the Mangetsu FFmpeg build and to enable `--enable-libass`.
+  * Updated portable packaging to include `ffmpeg.exe`, `ffprobe.exe`, and their runtime DLL dependency closure.
+  * Added dependency-audit checks for the `ass` and `subtitles` filters and the Mangetsu `ass` filter options.
+  * Added documentation for enabling, testing, and operating the FFmpeg filter hardsub backend.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included Git Bash `bash -n` for edited CI shell scripts, targeted source searches, and `git diff --check`.
+  * `git diff --check` reported only line-ending normalization warnings for touched files.
+
 
 ### M47 Uncaught C++ encode crash diagnostics
 

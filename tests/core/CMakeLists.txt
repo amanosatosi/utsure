@@ -798,6 +798,38 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/job-multi-audio-selected.mp4"
 )
 
+add_executable(utsure_core_ffmpeg_filter_hardsub_backend_tests
+    ffmpeg_filter_hardsub_backend_tests.cpp
+)
+
+target_link_libraries(utsure_core_ffmpeg_filter_hardsub_backend_tests
+    PRIVATE
+        utsure::encoder_core
+)
+
+target_include_directories(utsure_core_ffmpeg_filter_hardsub_backend_tests
+    PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/core/src"
+)
+
+target_compile_features(utsure_core_ffmpeg_filter_hardsub_backend_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_core_ffmpeg_filter_hardsub_backend_tests)
+
+add_test(
+    NAME utsure.core.job.ffmpeg_filter_hardsub.escape
+    COMMAND utsure_core_ffmpeg_filter_hardsub_backend_tests --escape
+)
+
+add_test(
+    NAME utsure.core.job.ffmpeg_filter_hardsub.command
+    COMMAND utsure_core_ffmpeg_filter_hardsub_backend_tests --command
+)
+
+set_tests_properties(utsure.core.job.ffmpeg_filter_hardsub.command PROPERTIES
+    ENVIRONMENT "UTSURE_FFMPEG_PATH=${UTSURE_FFMPEG_EXECUTABLE}"
+)
+
 add_executable(utsure_core_encode_job_preflight_tests
     encode_job_preflight_tests.cpp
 )
@@ -1660,7 +1692,7 @@ add_test(
 )
 utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.sequential_stability.h264)
 
-utsure_label_tests_matching("^utsure\\.core\\.(output_naming|resize|audio_stream_selection|source_import_paths|batch_parallelism|subtitle_auto_selection|thumbnail_preroll|subtitle_renderer|subtitle_bitmap_compositor|libassmod_subtitle_adapter)" unit smoke)
+utsure_label_tests_matching("^utsure\\.core\\.(output_naming|resize|audio_stream_selection|source_import_paths|batch_parallelism|subtitle_auto_selection|thumbnail_preroll|subtitle_renderer|subtitle_bitmap_compositor|libassmod_subtitle_adapter|job\\.ffmpeg_filter_hardsub)" unit smoke)
 utsure_label_tests_matching("^utsure\\.core\\.(media|job\\.encode|job\\.preflight|timeline|subtitles\\.burn_in|subtitles\\.image_assets|subtitles\\.font_recovery)" integration media)
 utsure_label_tests_matching("^utsure\\.core\\.subtitles\\.burn_in\\.(h264|img_asset\\.h264|timeline\\.h264|timeline\\.resize\\.h264|timeline\\.thumbnail_preroll\\.resize\\.h264|sequential_stability\\.h264)$" smoke)
 utsure_label_tests_matching("^utsure\\.core\\.media\\.(inspection|decode|encode)\\." smoke)

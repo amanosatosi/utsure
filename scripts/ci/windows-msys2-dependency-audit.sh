@@ -5,6 +5,7 @@ set -euo pipefail
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 third_party_root="${UTSURE_THIRD_PARTY_ROOT:-${project_root}/.deps}"
 ffmpeg_prefix="${UTSURE_FFMPEG_PREFIX:-${third_party_root}/ffmpeg/prefix}"
+ffmpeg_source_mode="${UTSURE_FFMPEG_SOURCE:-upstream}"
 ffmpeg_pcdir="${ffmpeg_prefix}/lib/pkgconfig"
 ffms2_prefix="${UTSURE_FFMS2_PREFIX:-${third_party_root}/ffms2/prefix}"
 ffms2_pcdir="${ffms2_prefix}/lib/pkgconfig"
@@ -63,5 +64,17 @@ assert_pcdir_under_prefix libswresample "${ffmpeg_prefix}"
 assert_pcdir_under_prefix libswscale "${ffmpeg_prefix}"
 assert_pcdir_under_prefix ffms2 "${ffms2_prefix}"
 assert_pcdir_under_prefix libass "${libassmod_prefix}"
+
+if [[ "${ffmpeg_source_mode}" == "mangetsu" ]]; then
+  ffmpeg_filters="$(ffmpeg -hide_banner -filters)"
+  grep -Ei '(^|[[:space:]])ass[[:space:]]' <<< "${ffmpeg_filters}" >/dev/null
+  grep -Ei '(^|[[:space:]])subtitles[[:space:]]' <<< "${ffmpeg_filters}" >/dev/null
+  ass_filter_help="$(ffmpeg -hide_banner -h filter=ass 2>&1)"
+  if [[ "${ass_filter_help}" != *"mangetsu_rgba"* ||
+        "${ass_filter_help}" != *"mangetsu_actor_colorcoding"* ]]; then
+    echo "Expected the Mangetsu FFmpeg ass filter to expose mangetsu_rgba and mangetsu_actor_colorcoding options."
+    exit 1
+  fi
+fi
 
 echo "Dependency audit passed."

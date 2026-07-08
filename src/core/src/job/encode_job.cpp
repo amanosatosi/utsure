@@ -1,6 +1,7 @@
 #include "utsure/core/job/encode_job.hpp"
 
 #include "encode_job_working_set_guard.hpp"
+#include "ffmpeg_filter_hardsub_backend.hpp"
 #include "../runtime_anomaly_policy.hpp"
 #include "../media/streaming_transcode_pipeline.hpp"
 #include "utsure/core/filesystem/path_format.hpp"
@@ -712,9 +713,21 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
         );
 
         auto effective_job = job;
+        const HardsubBackend hardsub_backend = resolve_hardsub_backend_from_environment();
+        if (effective_job.subtitles.has_value()) {
+            notify_log(
+                telemetry,
+                EncodeJobLogLevel::info,
+                "Selected hardsub backend: " + std::string(to_string(hardsub_backend)) + "."
+            );
+        }
+        const std::optional<EncodeJobSubtitleSettings> internal_subtitle_settings =
+            hardsub_backend == HardsubBackend::internal
+                ? effective_job.subtitles
+                : std::optional<EncodeJobSubtitleSettings>{};
         auto queue_limits = working_set_guard::bound_queue_limits(
             timeline_plan,
-            effective_job.subtitles,
+            internal_subtitle_settings,
             normalization_policy,
             resolve_pipeline_queue_limits(effective_job)
         );
@@ -741,7 +754,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
 
         if (const auto working_set_failure = working_set_guard::check(
                 timeline_plan,
-                effective_job.subtitles,
+                internal_subtitle_settings,
                 normalization_policy,
                 queue_limits
             ); working_set_failure.has_value()) {
@@ -787,16 +800,22 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             notify_progress(
                 telemetry,
                 EncodeJobStage::burning_in_subtitles,
-                "Rendering and compositing subtitles per frame during streaming encode."
+                hardsub_backend == HardsubBackend::ffmpeg_filter
+                    ? "Preparing FFmpeg subtitle filter hardsub backend."
+                    : "Rendering and compositing subtitles per frame during streaming encode."
             );
             notify_log(
                 telemetry,
                 EncodeJobLogLevel::info,
-                "Preparing the subtitle renderer for streaming frame composition."
+                hardsub_backend == HardsubBackend::ffmpeg_filter
+                    ? "Preparing FFmpeg subtitle filter backend; internal subtitle renderer will not be created."
+                    : "Preparing the subtitle renderer for streaming frame composition."
             );
 
-            if (auto renderer_error = ensure_subtitle_renderer(); renderer_error.has_value()) {
-                return *renderer_error;
+            if (hardsub_backend == HardsubBackend::internal) {
+                if (auto renderer_error = ensure_subtitle_renderer(); renderer_error.has_value()) {
+                    return *renderer_error;
+                }
             }
             throw_if_cancellation_requested(options);
         }
@@ -812,6 +831,15 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                 EncodeJobLogLevel::info,
                 "Preparing the thumbnail pre-roll image and same-stem ASS overlay."
             );
+
+            if (hardsub_backend == HardsubBackend::ffmpeg_filter && effective_job.subtitles.has_value()) {
+                return make_error(
+                    job,
+                    "FFmpeg filter backend does not support thumbnail pre-roll yet.",
+                    "Disable thumbnail pre-roll or use the internal subtitle compositor for this job.",
+                    &telemetry
+                );
+            }
 
             if (auto renderer_error = ensure_subtitle_renderer(); renderer_error.has_value()) {
                 return *renderer_error;
@@ -845,6 +873,108 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
             EncodeJobStage::encoding_output,
             "Encoding and muxing the final output file incrementally."
         );
+
+        if (hardsub_backend == HardsubBackend::ffmpeg_filter && effective_job.subtitles.has_value()) {
+            const auto ffmpeg_filter_result = run_ffmpeg_filter_hardsub_backend(FfmpegFilterHardsubRunRequest{
+                .job = effective_job,
+                .timeline_plan = timeline_plan,
+                .normalization_policy = normalization_policy,
+                .log_callback = [&telemetry](const std::string &message) {
+                    notify_log(telemetry, EncodeJobLogLevel::info, message);
+                },
+                .warning_callback = [&telemetry](const std::string &message) {
+                    notify_log(telemetry, EncodeJobLogLevel::warning, message);
+                },
+                .cancellation_requested = options.cancellation_requested
+            });
+            if (!ffmpeg_filter_result.succeeded()) {
+                return make_error(
+                    job,
+                    ffmpeg_filter_result.error->message,
+                    ffmpeg_filter_result.error->actionable_hint,
+                    &telemetry,
+                    ffmpeg_filter_result.error->canceled
+                );
+            }
+
+            auto completed_summary = *ffmpeg_filter_result.summary;
+            auto completed_job = effective_job;
+            std::vector<std::string> completion_warnings{};
+            if (effective_job.output.append_crc32_suffix) {
+                const Crc32FinalizeResult crc_result = finalize_crc32_suffix(
+                    telemetry,
+                    completed_summary.encoded_media_summary.output_path
+                );
+                completed_summary.encoded_media_summary.output_path = crc_result.output_path;
+                if (crc_result.warning.has_value()) {
+                    completion_warnings.push_back(*crc_result.warning);
+                }
+                completed_job.output.output_path = completed_summary.encoded_media_summary.output_path;
+            }
+
+            notify_log(
+                telemetry,
+                EncodeJobLogLevel::info,
+                "Encode job completed successfully. Output written to '" +
+                    filesystem::path_to_utf8_string(completed_summary.encoded_media_summary.output_path) + "'."
+            );
+            notify_log(
+                telemetry,
+                EncodeJobLogLevel::info,
+                format_completion_metrics_log(
+                    completed_summary.encoded_media_summary.encoded_video_frame_count,
+                    completed_summary.timeline_summary.output_duration_microseconds,
+                    completed_summary.encoded_elapsed_microseconds
+                )
+            );
+            notify_final_progress(
+                telemetry,
+                "Encode completed successfully.",
+                completed_summary.encoded_media_summary.encoded_video_frame_count,
+                completed_summary.timeline_summary.output_duration_microseconds,
+                completed_summary.encoded_elapsed_microseconds
+            );
+
+            const auto runtime_behavior = resolve_runtime_behavior(effective_job, queue_limits);
+            return EncodeJobResult{
+                .encode_job_summary = EncodeJobSummary{
+                    .job = completed_job,
+                    .inspected_input_info = timeline_plan.segments[timeline_plan.main_segment_index].inspected_source_info,
+                    .timeline_summary = completed_summary.timeline_summary,
+                    .decode_normalization_policy = normalization_policy,
+                    .decoded_video_frame_count = completed_summary.encoded_media_summary.encoded_video_frame_count,
+                    .decoded_audio_block_count = 0,
+                    .subtitled_video_frame_count = completed_summary.encoded_media_summary.encoded_video_frame_count,
+                    .streaming_runtime = EncodeJobStreamingRuntimeSummary{
+                        .detected_logical_core_count = runtime_behavior.detected_logical_core_count,
+                        .effective_logical_core_count = runtime_behavior.effective_logical_core_count,
+                        .cpu_usage_mode = runtime_behavior.cpu_usage_mode,
+                        .selected_video_decoder_thread_count = 0,
+                        .selected_video_decoder_thread_type = 0,
+                        .selected_video_encoder_thread_count = 0,
+                        .selected_video_encoder_thread_type = 0,
+                        .video_processing_worker_count = 0,
+                        .subtitle_processing_worker_count = 0,
+                        .video_frame_queue_depth = 0,
+                        .decoded_audio_block_queue_depth = 0,
+                        .subtitle_bitmap_mode = "ffmpeg_filter",
+                        .subtitle_composition_mode = "ffmpeg_filter",
+                        .subtitle_diagnostics_mode = "off",
+                        .video_decode_microseconds = 0,
+                        .video_process_microseconds = 0,
+                        .subtitle_compose_microseconds = 0,
+                        .video_encode_microseconds = static_cast<std::uint64_t>(
+                            std::max<std::int64_t>(completed_summary.encoded_elapsed_microseconds, 0)
+                        ),
+                        .total_elapsed_microseconds = completed_summary.encoded_elapsed_microseconds,
+                        .average_output_fps = 0.0
+                    },
+                    .encoded_media_summary = completed_summary.encoded_media_summary,
+                    .warnings = std::move(completion_warnings)
+                },
+                .error = std::nullopt
+            };
+        }
 
         const auto streaming_result = media::streaming::StreamingTranscoder::transcode(
             media::streaming::StreamingTranscodeRequest{

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -10,6 +11,7 @@ namespace utsure::core::process {
 struct ExternalToolRunRequest final {
     std::filesystem::path executable{};
     std::vector<std::string> arguments{};
+    std::function<bool()> cancellation_requested{};
 };
 
 struct ExternalToolRunResult final {
