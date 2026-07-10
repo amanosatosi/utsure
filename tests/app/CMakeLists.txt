@@ -110,6 +110,30 @@ add_test(
 )
 set_tests_properties(utsure.app.crash_dump_writer PROPERTIES TIMEOUT 45)
 
+add_executable(utsure_app_windows_taskbar_progress_tests
+    windows_taskbar_progress_tests.cpp
+    "${CMAKE_SOURCE_DIR}/src/app/windows_taskbar_progress.cpp"
+    "${CMAKE_SOURCE_DIR}/src/app/windows_taskbar_progress.hpp"
+)
+
+target_include_directories(utsure_app_windows_taskbar_progress_tests
+    PRIVATE
+        "${CMAKE_SOURCE_DIR}/src/app"
+)
+
+if(WIN32)
+    target_link_libraries(utsure_app_windows_taskbar_progress_tests PRIVATE Qt6::Widgets ole32)
+endif()
+
+target_compile_features(utsure_app_windows_taskbar_progress_tests PRIVATE cxx_std_20)
+
+utsure_enable_warnings(utsure_app_windows_taskbar_progress_tests)
+
+add_test(
+    NAME utsure.app.windows_taskbar_progress
+    COMMAND utsure_app_windows_taskbar_progress_tests
+)
+
 find_program(UTSURE_APP_FFMPEG_EXECUTABLE NAMES ffmpeg)
 if(NOT UTSURE_APP_FFMPEG_EXECUTABLE AND DEFINED ENV{CI})
     message(FATAL_ERROR "ffmpeg is required in CI for the app encode-runner real cancel/destroy lifecycle smoke.")
@@ -474,6 +498,7 @@ utsure_label_tests_matching("^utsure\\.app\\.settings\\." unit smoke)
 utsure_label_tests_matching("^utsure\\.app\\.batch_import_planner$" unit smoke)
 utsure_label_tests_matching("^utsure\\.app\\.ui_font$" integration smoke)
 utsure_label_tests_matching("^utsure\\.app\\.crash_dump_writer$" unit smoke)
+utsure_label_tests_matching("^utsure\\.app\\.windows_taskbar_progress$" unit smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.lifecycle$" integration smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.real_cancel_destroy$" integration media smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.parallel_smokes$" integration media smoke)

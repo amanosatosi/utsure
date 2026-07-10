@@ -8,6 +8,7 @@
 #include "preview_surface_widget.hpp"
 #include "trim_timeline_widget.hpp"
 #include "ui_font.hpp"
+#include "windows_taskbar_progress.hpp"
 #include "utsure/core/build_info.hpp"
 #include "utsure/core/job/batch_parallelism.hpp"
 #include "utsure/core/job/encode_job_preflight.hpp"
@@ -2667,6 +2668,43 @@ double MainWindow::current_busy_spinner_progress_fraction() const {
     }
 
     return clamp_progress_fraction(total_fraction / static_cast<double>(active_count));
+}
+
+std::optional<double> MainWindow::current_taskbar_progress_fraction() const {
+    const auto active_fraction_for_slot = [this](const RunnerSlot &slot) -> std::optional<double> {
+        if (slot.controller == nullptr || !slot.controller->is_running() || !is_valid_job_index(slot.active_job_index)) {
+            return std::nullopt;
+        }
+
+        const auto &job = jobs_[static_cast<std::size_t>(slot.active_job_index)];
+        if (job.state != UiJobState::starting &&
+            job.state != UiJobState::running &&
+            job.state != UiJobState::cancel_requested &&
+            job.state != UiJobState::finishing) {
+            return std::nullopt;
+        }
+
+        return clamp_progress_fraction(job.encode_progress_fraction.value_or(0.0));
+    };
+
+    // Windows exposes one taskbar progress indicator per window. Prefer an
+    // actively encoding selected job, then use the first runner slot so
+    // parallel runs remain stable instead of averaging unrelated videos.
+    for (const auto &slot : runner_slots_) {
+        if (slot.active_job_index == selected_job_index_) {
+            if (const auto fraction = active_fraction_for_slot(slot); fraction.has_value()) {
+                return fraction;
+            }
+        }
+    }
+
+    for (const auto &slot : runner_slots_) {
+        if (const auto fraction = active_fraction_for_slot(slot); fraction.has_value()) {
+            return fraction;
+        }
+    }
+
+    return std::nullopt;
 }
 
 QString MainWindow::format_parallel_tooltip() const {
@@ -5654,6 +5692,7 @@ void MainWindow::refresh_all_views() {
     refresh_task_log_view();
     refresh_session_log_view();
     refresh_toolbar_state();
+    refresh_taskbar_progress();
 }
 
 void MainWindow::refresh_queue_table() {
@@ -5990,6 +6029,30 @@ void MainWindow::update_start_button_visuals() {
     apply_icon_or_text(start_button_, ":/icons/play.svg", "Start", QSize(16, 16), 30, 30, true);
 }
 
+void MainWindow::refresh_taskbar_progress() {
+    if (queue_start_planning_active_) {
+        taskbar_progress_.update(this, utsure::app::TaskbarProgressState::indeterminate);
+        taskbar_progress_visible_ = true;
+        return;
+    }
+
+    const auto fraction = current_taskbar_progress_fraction();
+    if (!fraction.has_value()) {
+        if (taskbar_progress_visible_) {
+            taskbar_progress_.update(this, utsure::app::TaskbarProgressState::none);
+            taskbar_progress_visible_ = false;
+        }
+        return;
+    }
+
+    taskbar_progress_.update(
+        this,
+        stop_requested_ ? utsure::app::TaskbarProgressState::paused : utsure::app::TaskbarProgressState::normal,
+        fraction
+    );
+    taskbar_progress_visible_ = true;
+}
+
 void MainWindow::advance_busy_spinner() {
     if (!queue_run_active_ && !queue_start_planning_active_) {
         return;
@@ -6322,6 +6385,7 @@ void MainWindow::stop_encode_queue() {
     }
 
     refresh_toolbar_state();
+    refresh_taskbar_progress();
 
     if (active_runner_count() == 0) {
         append_session_log("[warning] Queue stopped.");

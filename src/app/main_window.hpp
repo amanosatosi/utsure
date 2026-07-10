@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app_settings.hpp"
+#include "windows_taskbar_progress.hpp"
 #include "utsure/core/job/batch_parallelism.hpp"
 #include "utsure/core/job/encode_job.hpp"
 #include "utsure/core/job/encode_job_preflight.hpp"
@@ -178,6 +179,7 @@ private:
     [[nodiscard]] QString normalized_output_path_key(const QString &path_text) const;
     [[nodiscard]] qint64 selected_job_frame_step_us() const;
     [[nodiscard]] double current_busy_spinner_progress_fraction() const;
+    [[nodiscard]] std::optional<double> current_taskbar_progress_fraction() const;
 
     void add_source_jobs();
     void add_source_jobs_from_paths(const QStringList &paths);
@@ -289,6 +291,7 @@ private:
     void refresh_audio_track_combo();
     void refresh_profile_combo();
     void update_start_button_visuals();
+    void refresh_taskbar_progress();
     void advance_busy_spinner();
     void set_source_drop_overlay_visible(bool visible);
     void update_source_drop_overlay_geometry();
@@ -333,6 +336,7 @@ private:
     bool stop_requested_{false};
     bool loading_selected_job_{false};
     bool suppress_queue_table_changes_{false};
+    bool taskbar_progress_visible_{false};
     int busy_spinner_phase_{0};
     bool preview_playing_{false};
     QStringList session_log_lines_{};
@@ -431,4 +435,5 @@ private:
     utsure::core::job::ParallelBatchSummary parallel_batch_summary_{};
     AppSettings app_settings_{};
     QString app_settings_path_{};
+    utsure::app::WindowsTaskbarProgress taskbar_progress_{};
 };

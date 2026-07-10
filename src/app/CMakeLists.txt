@@ -37,6 +37,8 @@ qt_add_executable(utsure_encoder_app WIN32
     trim_timeline_widget.hpp
     ui_font.cpp
     ui_font.hpp
+    windows_taskbar_progress.cpp
+    windows_taskbar_progress.hpp
 )
 
 set_target_properties(utsure_encoder_app PROPERTIES AUTORCC ON)
@@ -91,7 +93,7 @@ if(WIN32)
             OBJECT_DEPENDS "${utsure_windows_icon_ico}"
     )
 
-    target_link_libraries(utsure_encoder_app PRIVATE dbghelp dwmapi psapi)
+    target_link_libraries(utsure_encoder_app PRIVATE dbghelp dwmapi ole32 psapi)
     utsure_enable_warnings(utsure_svg_to_ico)
 endif()
 

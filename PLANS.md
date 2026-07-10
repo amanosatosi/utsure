@@ -1492,6 +1492,31 @@ Follow-up completed:
 
 ## Immediate next milestone
 
+### M49 Windows per-job taskbar progress
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Show Windows taskbar progress for the currently represented encoding job, rather than aggregate progress for the batch queue.
+  * Reset the taskbar progress when the next queued video starts and clear it when the queue finishes.
+  * Keep parallel-mode behavior deterministic because one application window has only one Windows taskbar progress indicator.
+  * Keep non-Windows behavior as a no-op and avoid changing the encode pipeline.
+
+Implementation approach:
+  * Add a small Windows-shell adapter around `ITaskbarList3`, isolated from `MainWindow` and safely inert on other platforms.
+  * Let the window choose its selected active job when applicable, otherwise the first active runner slot, and send that job's own fraction to the shell.
+  * Represent preflight as indeterminate and a stopping queue as paused; do not average concurrent jobs or use total queue completion.
+
+Implemented:
+  * Added a `WindowsTaskbarProgress` adapter that initializes `ITaskbarList3` on the UI thread, reports normal/indeterminate/paused states, clamps progress values to Windows' 0--10000 range, and is a no-op outside Windows.
+  * Wired `MainWindow` refreshes to show the selected active job's individual encode fraction, falling back to the first active runner slot during parallel work instead of averaging videos.
+  * Taskbar progress begins indeterminate while jobs are preflighted, resets to zero for each newly dispatched job, pauses during cancellation, and clears after the queue finishes.
+  * Added focused conversion coverage and explicitly build the new test target in Windows CI.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included `git diff --check` and targeted searches confirming taskbar progress does not use the toolbar's active-job average.
+
 ### M37 Windows crash dump support
 
 Status: Implemented; awaiting GitHub Actions validation
