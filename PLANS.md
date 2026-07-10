@@ -1492,6 +1492,30 @@ Follow-up completed:
 
 ## Immediate next milestone
 
+### M50 Encode editor control placement
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Move the existing custom output-name text field into the Output row between the Output label and output-path field.
+  * Place Resolution under Codec in the Video section.
+  * Place the existing Profiles selector at the top-right of the Main/Encode/Special/Logs tab bar.
+  * Preserve all control behavior, data binding, and signal wiring.
+
+Implementation approach:
+  * Reuse the existing widgets and only change their parent layouts, stretch factors, and visual labels/tooltips as needed for the new placement.
+  * Keep the output-path field responsive but give it less horizontal stretch than before.
+
+Implemented:
+  * Moved the existing custom output-name field into the Output row, between its `Output` label and the output-path field; the path now uses three-fifths of the shared flexible width.
+  * Removed the duplicate Encode-tab Output Naming container while retaining the custom-text placeholder, clear affordance, tooltip, data binding, and existing generated-name behavior.
+  * Moved the existing Resolution selector directly below Codec in the Video form.
+  * Moved the existing Profiles selector into a top-right corner widget on the editor tab bar, beside Main, Encode, Special, and Logs.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included `git diff --check` and a constructor-only diff review confirming no signal connections, handlers, or data synchronization code changed.
+
 ### M49 Windows per-job taskbar progress
 
 Status: Implemented; awaiting GitHub Actions validation

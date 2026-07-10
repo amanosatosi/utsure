@@ -1639,6 +1639,12 @@ QLabel#PreviewTimeBadge {
 
     auto *output_label = new QLabel("Output", output_frame);
     output_label->setMinimumWidth(52);
+    output_name_text_edit_ = new QLineEdit(output_frame);
+    output_name_text_edit_->setPlaceholderText("Custom text, no brackets");
+    output_name_text_edit_->setClearButtonEnabled(true);
+    output_name_text_edit_->setToolTip(
+        "Used only for the generated default file name. Leave empty to omit the bracketed prefix."
+    );
     output_path_edit_ = new QLineEdit(output_frame);
     output_path_edit_->setPlaceholderText("Output path");
     output_auto_button_ = new QPushButton("Auto", output_frame);
@@ -1651,7 +1657,8 @@ QLabel#PreviewTimeBadge {
     same_as_input_check_->setCursor(Qt::PointingHandCursor);
 
     output_row->addWidget(output_label);
-    output_row->addWidget(output_path_edit_, 1);
+    output_row->addWidget(output_name_text_edit_, 2);
+    output_row->addWidget(output_path_edit_, 3);
     output_row->addWidget(output_auto_button_);
     output_row->addWidget(output_browse_button_);
     output_row->addWidget(same_as_input_check_);
@@ -1663,6 +1670,19 @@ QLabel#PreviewTimeBadge {
     content_splitter->setChildrenCollapsible(false);
     editor_tabs_ = new QTabWidget(content_splitter);
     editor_tabs_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    auto *profile_corner = new QWidget(editor_tabs_);
+    auto *profile_corner_layout = new QHBoxLayout(profile_corner);
+    profile_corner_layout->setContentsMargins(0, 0, 0, 0);
+    profile_corner_layout->setSpacing(6);
+    auto *profile_label = new QLabel("Profiles", profile_corner);
+    profile_combo_ = new QComboBox(profile_corner);
+    profile_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    profile_combo_->setMinimumContentsLength(18);
+    profile_combo_->setContextMenuPolicy(Qt::CustomContextMenu);
+    profile_combo_->setToolTip("Select a saved profile, or right-click an active saved profile to update, rename, or remove it.");
+    profile_corner_layout->addWidget(profile_label);
+    profile_corner_layout->addWidget(profile_combo_);
+    editor_tabs_->setCornerWidget(profile_corner, Qt::TopRightCorner);
 
     auto *main_tab_content = new QWidget(editor_tabs_);
     auto *main_tab_layout = new QVBoxLayout(main_tab_content);
@@ -1759,33 +1779,6 @@ QLabel#PreviewTimeBadge {
     auto *encode_tab_layout = new QVBoxLayout(encode_tab_content);
     encode_tab_layout->setContentsMargins(8, 8, 8, 8);
     encode_tab_layout->setSpacing(8);
-    auto *encode_top_row = new QHBoxLayout();
-    encode_top_row->setContentsMargins(0, 0, 0, 0);
-    encode_top_row->setSpacing(8);
-
-    auto *profile_group = new QGroupBox("Profiles", encode_tab_content);
-    auto *profile_layout = new QVBoxLayout(profile_group);
-    profile_combo_ = new QComboBox(profile_group);
-    profile_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    profile_combo_->setMinimumContentsLength(18);
-    profile_combo_->setContextMenuPolicy(Qt::CustomContextMenu);
-    profile_combo_->setToolTip("Select a saved profile, or right-click an active saved profile to update, rename, or remove it.");
-    profile_layout->addWidget(profile_combo_);
-    encode_top_row->addWidget(profile_group, 1);
-
-    auto *resolution_group = new QGroupBox("Resolution", encode_tab_content);
-    auto *resolution_layout = new QVBoxLayout(resolution_group);
-    resize_preset_combo_ = new QComboBox(resolution_group);
-    resize_preset_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    resize_preset_combo_->setMinimumContentsLength(18);
-    resize_preset_combo_->addItem("Source", 0);
-    resize_preset_combo_->addItem("1080p", 1080);
-    resize_preset_combo_->addItem("720p", 720);
-    resize_preset_combo_->addItem("540p", 540);
-    resize_preset_combo_->addItem("480p", 480);
-    resolution_layout->addWidget(resize_preset_combo_);
-    encode_top_row->addWidget(resolution_group, 1);
-    encode_tab_layout->addLayout(encode_top_row);
 
     auto *encode_settings_row = new QHBoxLayout();
     encode_settings_row->setContentsMargins(0, 0, 0, 0);
@@ -1798,6 +1791,14 @@ QLabel#PreviewTimeBadge {
     video_codec_combo_->setMinimumContentsLength(18);
     video_codec_combo_->addItem("H.265", static_cast<int>(utsure::core::media::OutputVideoCodec::h265));
     video_codec_combo_->addItem("H.264", static_cast<int>(utsure::core::media::OutputVideoCodec::h264));
+    resize_preset_combo_ = new QComboBox(video_group);
+    resize_preset_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    resize_preset_combo_->setMinimumContentsLength(18);
+    resize_preset_combo_->addItem("Source", 0);
+    resize_preset_combo_->addItem("1080p", 1080);
+    resize_preset_combo_->addItem("720p", 720);
+    resize_preset_combo_->addItem("540p", 540);
+    resize_preset_combo_->addItem("480p", 480);
     preset_combo_ = new QComboBox(video_group);
     preset_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     preset_combo_->setMinimumContentsLength(18);
@@ -1815,6 +1816,7 @@ QLabel#PreviewTimeBadge {
     crf_spin_box_ = new QSpinBox(video_group);
     crf_spin_box_->setRange(0, 51);
     video_layout->addRow("Codec", video_codec_combo_);
+    video_layout->addRow("Resolution", resize_preset_combo_);
     video_layout->addRow("CRF", crf_spin_box_);
     video_layout->addRow("Preset", preset_combo_);
 
@@ -1845,24 +1847,9 @@ QLabel#PreviewTimeBadge {
     audio_layout->addRow("Quality", audio_quality_combo_);
     audio_layout->addRow("Track", audio_track_combo_);
 
-    auto *output_naming_group = new QGroupBox("Output Naming", encode_tab_content);
-    auto *output_naming_layout = new QFormLayout(output_naming_group);
-    output_name_text_edit_ = new QLineEdit(output_naming_group);
-    output_name_text_edit_->setPlaceholderText("Custom text, no brackets");
-    output_name_text_edit_->setClearButtonEnabled(true);
-    auto *output_naming_note = new QLabel(
-        "Used only for the generated default file name. Leave empty to omit the bracketed prefix.",
-        output_naming_group
-    );
-    output_naming_note->setObjectName("MutedNote");
-    output_naming_note->setWordWrap(true);
-    output_naming_layout->addRow("Custom text", output_name_text_edit_);
-    output_naming_layout->addRow(output_naming_note);
-
     encode_settings_row->addWidget(video_group, 1);
     encode_settings_row->addWidget(audio_group, 1);
     encode_tab_layout->addLayout(encode_settings_row);
-    encode_tab_layout->addWidget(output_naming_group);
     encode_tab_layout->addStretch(1);
     editor_tabs_->addTab(wrap_in_scroll_area(encode_tab_content, editor_tabs_), "Encode");
 
