@@ -20,6 +20,7 @@ public:
 
     [[nodiscard]] bool is_running() const noexcept;
     [[nodiscard]] bool start_job(const utsure::core::job::EncodeJob &job);
+    void set_process_priority(utsure::core::job::EncodeJobProcessPriority priority) noexcept;
     void cancel_job() noexcept;
     [[nodiscard]] static std::size_t quarantined_worker_count() noexcept;
     [[nodiscard]] static std::size_t quarantined_worker_count_for_tests() noexcept;

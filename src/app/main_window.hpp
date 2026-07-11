@@ -162,6 +162,7 @@ private:
     ) const;
     [[nodiscard]] utsure::core::job::OutputNamingRequest build_output_naming_request(const UiEncodeJob &job) const;
     [[nodiscard]] utsure::core::job::EncodeJobProcessPriority current_worker_priority() const;
+    void handle_worker_priority_changed(int index);
     [[nodiscard]] QString selected_job_name() const;
     [[nodiscard]] QString format_job_state_text(const UiEncodeJob &job) const;
     [[nodiscard]] QString format_job_state_display_text(const UiEncodeJob &job) const;

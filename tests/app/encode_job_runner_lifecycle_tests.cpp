@@ -341,6 +341,12 @@ int run_cancel_while_active_assertion() {
         return fail("Controller did not report running while fake job was active.");
     }
 
+    controller.set_process_priority(utsure::core::job::EncodeJobProcessPriority::high);
+    controller.set_process_priority(utsure::core::job::EncodeJobProcessPriority::low);
+    if (!controller.is_running()) {
+        return fail("Changing priority disrupted the active fake job.");
+    }
+
     controller.cancel_job();
     if (!wait_until([&]() { return job_finished_count == 1; }, 2000)) {
         return fail("Canceling an active fake job did not finish before timeout.");

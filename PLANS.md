@@ -1492,6 +1492,30 @@ Follow-up completed:
 
 ## Immediate next milestone
 
+### M51 Live encode worker priority changes
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Keep the global priority selector available while the queue is preparing or encoding.
+  * Apply a changed priority immediately to all active encode worker threads.
+  * Use the current priority when each subsequent queued job starts.
+  * Do not change FFmpeg codec settings, thread-count planning, or queue scheduling behavior.
+
+Implementation approach:
+  * Extend the existing app-side runner controller with a small live-priority setter that reuses its current Qt priority mapping.
+  * Route selector changes from `MainWindow` to active runner slots and refresh queued dispatches from the current selector value.
+
+Implemented:
+  * Left the global priority selector enabled during preflight and encoding, with a tooltip that makes its live effect clear.
+  * Added a controller priority setter that reuses the existing Qt worker-thread priority mapping; changes apply to every active runner slot immediately.
+  * Refresh each planned job's execution priority from the selector immediately before dispatch, so waiting jobs use the latest choice.
+  * Added lifecycle coverage that changes priority from High to Low while a fake encode is running and verifies that the job remains active.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included `git diff --check` and targeted searches over live priority dispatch, active runner updates, and the lifecycle regression case.
+
 ### M50 Encode editor control placement
 
 Status: Implemented; awaiting GitHub Actions validation

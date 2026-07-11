@@ -1489,6 +1489,7 @@ QLabel#PreviewTimeBadge {
         static_cast<int>(utsure::core::job::EncodeJobProcessPriority::below_normal)
     ));
     priority_combo_->setMinimumWidth(148);
+    priority_combo_->setToolTip("Change the active and next encode workers' priority.");
 
     parallel_button_ = new QToolButton(toolbar_frame);
     parallel_button_->setProperty("toolbarButton", true);
@@ -2105,6 +2106,12 @@ QLabel#PreviewTimeBadge {
     connect(settings_button_, &QToolButton::clicked, this, &MainWindow::show_settings_dialog);
     connect(info_button_, &QToolButton::clicked, this, &MainWindow::show_info_dialog);
     connect(parallel_button_, &QToolButton::clicked, this, &MainWindow::show_parallel_settings_dialog);
+    connect(
+        priority_combo_,
+        qOverload<int>(&QComboBox::currentIndexChanged),
+        this,
+        &MainWindow::handle_worker_priority_changed
+    );
     connect(profile_combo_, qOverload<int>(&QComboBox::activated), this, &MainWindow::handle_profile_combo_activated);
     connect(profile_combo_, &QComboBox::customContextMenuRequested, this, &MainWindow::show_profile_context_menu);
     connect(start_button_, &QToolButton::clicked, this, &MainWindow::start_encode_queue);
@@ -2520,6 +2527,27 @@ utsure::core::job::EncodeJobProcessPriority MainWindow::current_worker_priority(
     case utsure::core::job::EncodeJobProcessPriority::low:
     default:
         return utsure::core::job::EncodeJobProcessPriority::low;
+    }
+}
+
+void MainWindow::handle_worker_priority_changed(const int /*index*/) {
+    const auto priority = current_worker_priority();
+    int updated_runner_count = 0;
+    for (const auto &slot : runner_slots_) {
+        if (slot.controller == nullptr || !slot.controller->is_running()) {
+            continue;
+        }
+
+        slot.controller->set_process_priority(priority);
+        ++updated_runner_count;
+    }
+
+    if (updated_runner_count > 0) {
+        append_session_log(
+            QString("[info] Updated priority to %1 for %2 active encode worker(s); newly dispatched jobs will use it too.")
+                .arg(QString::fromUtf8(utsure::core::job::to_display_string(priority)))
+                .arg(updated_runner_count)
+        );
     }
 }
 
@@ -5962,7 +5990,7 @@ void MainWindow::refresh_toolbar_state() {
         parallel_button_->setChecked(parallel_batch_summary_.enabled);
         parallel_button_->setToolTip(format_parallel_tooltip());
     }
-    priority_combo_->setEnabled(!queue_busy);
+    priority_combo_->setEnabled(true);
     start_button_->setEnabled(!jobs_.empty() && !queue_busy);
     stop_button_->setEnabled(queue_run_active_);
     update_start_button_visuals();
@@ -6285,10 +6313,12 @@ void MainWindow::start_available_queued_jobs() {
         }
 
         auto &slot = runner_slots_[static_cast<std::size_t>(slot_index)];
-        const auto &planned_job = planned_queue_jobs_[static_cast<std::size_t>(queue_cursor_++)];
+        auto &planned_job = planned_queue_jobs_[static_cast<std::size_t>(queue_cursor_++)];
         if (!is_valid_job_index(planned_job.job_index) || slot.controller == nullptr) {
             continue;
         }
+
+        planned_job.job.execution.process_priority = current_worker_priority();
 
         auto &job = jobs_[static_cast<std::size_t>(planned_job.job_index)];
         job.state = UiJobState::starting;

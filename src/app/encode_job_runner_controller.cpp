@@ -185,6 +185,14 @@ bool EncodeJobRunnerController::is_running() const noexcept {
         state_ == RunnerState::finishing;
 }
 
+void EncodeJobRunnerController::set_process_priority(
+    const utsure::core::job::EncodeJobProcessPriority priority
+) noexcept {
+    if (worker_thread_ != nullptr && worker_thread_->isRunning()) {
+        worker_thread_->setPriority(map_thread_priority(priority));
+    }
+}
+
 std::size_t EncodeJobRunnerController::quarantined_worker_count() noexcept {
     const std::lock_guard lock(quarantined_encode_workers_mutex());
     return quarantined_encode_workers().size();
@@ -204,7 +212,7 @@ bool EncodeJobRunnerController::start_job(const utsure::core::job::EncodeJob &jo
     }
 
     worker_->clear_cancel_request();
-    worker_thread_->setPriority(map_thread_priority(job.execution.process_priority));
+    set_process_priority(job.execution.process_priority);
     state_ = RunnerState::running;
     update_crash_context_safely(utsure::app::crash::CrashContextUpdate{
         .runner_slot_index = runner_slot_index_,
