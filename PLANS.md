@@ -1492,6 +1492,31 @@ Follow-up completed:
 
 ## Immediate next milestone
 
+### M52 Full-FFmpeg strict same-thread diagnostics
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Port only the `UTSURE_SUBTITLE_STRICT_SAME_THREAD` ownership intent from the older branch into the current full-FFmpeg hardsub backend.
+  * Keep the current synchronous external FFmpeg pipeline, command construction, and queue architecture unchanged.
+  * Report and enforce that setup, FFmpeg capability probes, subprocess launch/wait, result collection, and output inspection remain on the backend-owner thread.
+  * Clearly distinguish host-side subprocess ownership from the external FFmpeg process's internal libassmod lifetime.
+
+Implementation approach:
+  * Reintroduce the existing strict-mode environment resolution, including safe-mode activation, in the shared subtitle runtime options.
+  * Add a small RAII owner guard only inside `ffmpeg_filter_hardsub_backend.cpp`; it records lifecycle diagnostics and rejects a cross-thread backend transition if one is ever introduced.
+  * Add command-plan coverage proving the strict environment setting is observed by the current full-FFmpeg backend without executing an old backend or queue path.
+
+Implemented:
+  * Added `UTSURE_SUBTITLE_STRICT_SAME_THREAD` runtime resolution, with `UTSURE_SUBTITLE_SAFE_MODE` preserving its prior strict-mode implication.
+  * Added a full-FFmpeg-only owner guard that captures the backend thread, emits creation/destruction diagnostics, and checks ownership around backend setup, capability probes, FFmpeg launch/wait, result handling, and output inspection.
+  * Diagnostics explicitly record that the app owns a synchronous subprocess lifecycle, has no app-side libass session for this backend, and passes the environment through to the child FFmpeg process.
+  * Added a focused CTest case that enables `UTSURE_SUBTITLE_STRICT_SAME_THREAD=1` and asserts that the current FFmpeg command plan enables the diagnostic.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included `git diff --check`, current-branch confirmation, read-only `git show`/`git grep` review of the older branch, and targeted searches confirming no old FFmpeg backend or queue code was introduced.
+
 ### M51 Live encode worker priority changes
 
 Status: Implemented; awaiting GitHub Actions validation

@@ -830,6 +830,15 @@ set_tests_properties(utsure.core.job.ffmpeg_filter_hardsub.command PROPERTIES
     ENVIRONMENT "UTSURE_FFMPEG_PATH=${UTSURE_FFMPEG_EXECUTABLE}"
 )
 
+add_test(
+    NAME utsure.core.job.ffmpeg_filter_hardsub.strict_same_thread
+    COMMAND $<TARGET_FILE:utsure_core_ffmpeg_filter_hardsub_backend_tests> --strict-same-thread
+)
+
+set_tests_properties(utsure.core.job.ffmpeg_filter_hardsub.strict_same_thread PROPERTIES
+    ENVIRONMENT "UTSURE_FFMPEG_PATH=${UTSURE_FFMPEG_EXECUTABLE};UTSURE_SUBTITLE_STRICT_SAME_THREAD=1"
+)
+
 add_executable(utsure_core_encode_job_preflight_tests
     encode_job_preflight_tests.cpp
 )

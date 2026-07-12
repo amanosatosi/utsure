@@ -1,20 +1,24 @@
 #include "ffmpeg_filter_hardsub_backend.hpp"
 
 #include "../process/external_tool_runner.hpp"
+#include "../subtitles/subtitle_runtime_options.hpp"
 #include "utsure/core/filesystem/path_format.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 #if defined(_WIN32)
@@ -36,6 +40,71 @@ constexpr std::string_view kMangetsuActorColorcodingOption = "mangetsu_actor_col
 struct ResolvedFfmpegExecutable final {
     std::filesystem::path path{};
     std::string source{"unknown"};
+};
+
+// Full-FFmpeg mode has no app-side libassmod session. This guard instead keeps
+// the synchronous child-process lifecycle owned by the thread that started it.
+class FfmpegFilterStrictSameThreadOwner final {
+public:
+    FfmpegFilterStrictSameThreadOwner(
+        const bool enabled,
+        const std::function<void(const std::string &)> &log_callback
+    )
+        : enabled_(enabled),
+          owner_thread_id_(std::this_thread::get_id()),
+          log_callback_(log_callback) {
+        log_lifecycle("owner-created");
+    }
+
+    ~FfmpegFilterStrictSameThreadOwner() {
+        if (!enabled_) {
+            return;
+        }
+
+        const auto destroyed_thread_id = std::this_thread::get_id();
+        assert(destroyed_thread_id == owner_thread_id_);
+        if (destroyed_thread_id == owner_thread_id_) {
+            log_lifecycle("owner-destroyed");
+        }
+    }
+
+    FfmpegFilterStrictSameThreadOwner(const FfmpegFilterStrictSameThreadOwner &) = delete;
+    FfmpegFilterStrictSameThreadOwner &operator=(const FfmpegFilterStrictSameThreadOwner &) = delete;
+
+    void enforce_owner_thread(const std::string_view operation) const {
+        if (!enabled_ || std::this_thread::get_id() == owner_thread_id_) {
+            return;
+        }
+
+        throw std::runtime_error(
+            "Strict FFmpeg filter same-thread mode blocked " + std::string(operation) +
+            " on a different thread than backend creation."
+        );
+    }
+
+private:
+    void log_lifecycle(const std::string_view phase) const noexcept {
+        if (!enabled_ || !log_callback_) {
+            return;
+        }
+
+        try {
+            std::ostringstream message;
+            message << "FFmpeg filter strict same-thread diagnostic: phase=" << phase
+                    << ", backend_owner_thread_id=" << owner_thread_id_
+                    << ", current_thread_id=" << std::this_thread::get_id()
+                    << ", strict_same_thread=1"
+                    << ", subprocess_lifecycle=created_waited_collected_on_owner_thread"
+                    << ", app_side_libass_session=none"
+                    << ", child_environment=inherited";
+            log_callback_(message.str());
+        } catch (...) {
+        }
+    }
+
+    bool enabled_{false};
+    std::thread::id owner_thread_id_{};
+    const std::function<void(const std::string &)> &log_callback_;
 };
 
 [[nodiscard]] std::string lower_ascii(std::string value) {
@@ -631,6 +700,7 @@ FfmpegFilterCommandPlan build_ffmpeg_filter_hardsub_command(
         .subtitle_stream_index = std::nullopt,
         .mangetsu_rgba_mode = "auto",
         .mangetsu_actor_colorcoding_mode = "auto",
+        .strict_same_thread_diagnostic_enabled = runtime::strict_same_thread_lifetime_enabled(),
         .arguments = std::move(arguments)
     };
 }
@@ -649,11 +719,21 @@ FfmpegFilterHardsubResult run_ffmpeg_filter_hardsub_backend(
             );
         }
 
+        const FfmpegFilterStrictSameThreadOwner strict_same_thread_owner(
+            runtime::strict_same_thread_lifetime_enabled(),
+            request.log_callback
+        );
+        strict_same_thread_owner.enforce_owner_thread("FFmpeg filter backend setup");
         const auto command_plan = build_ffmpeg_filter_hardsub_command(request.job, request.timeline_plan);
+        strict_same_thread_owner.enforce_owner_thread("FFmpeg capability validation");
         if (request.log_callback) {
             request.log_callback("Selected hardsub backend: ffmpeg_filter");
             request.log_callback("FFmpeg binary path: " + path_to_argument(command_plan.ffmpeg_executable));
             request.log_callback("FFmpeg source: " + command_plan.ffmpeg_source);
+            request.log_callback(
+                "FFmpeg filter strict same-thread diagnostic enabled: " +
+                std::string(command_plan.strict_same_thread_diagnostic_enabled ? "yes" : "no")
+            );
         }
         if (request.warning_callback) {
             const auto audio_output_plan = resolve_audio_plan(request.job, request.timeline_plan);
@@ -691,6 +771,7 @@ FfmpegFilterHardsubResult run_ffmpeg_filter_hardsub_backend(
             }
         }
 
+        strict_same_thread_owner.enforce_owner_thread("FFmpeg subprocess launch and wait");
         const auto encode_started = std::chrono::steady_clock::now();
         const auto ffmpeg_result = process::run_external_tool(process::ExternalToolRunRequest{
             .executable = command_plan.ffmpeg_executable,
@@ -703,6 +784,7 @@ FfmpegFilterHardsubResult run_ffmpeg_filter_hardsub_backend(
             ).count()
         );
 
+        strict_same_thread_owner.enforce_owner_thread("FFmpeg subprocess result handling");
         if (!ffmpeg_result.succeeded()) {
             remove_partial_output(request.job.output.output_path);
             if (ffmpeg_result.failure_message == "External tool invocation canceled.") {
@@ -724,6 +806,7 @@ FfmpegFilterHardsubResult run_ffmpeg_filter_hardsub_backend(
             request.log_callback("FFmpeg output:\n" + ffmpeg_result.combined_output);
         }
 
+        strict_same_thread_owner.enforce_owner_thread("FFmpeg output inspection");
         const auto inspection_result = media::MediaInspector::inspect(request.job.output.output_path);
         if (!inspection_result.succeeded()) {
             remove_partial_output(request.job.output.output_path);

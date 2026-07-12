@@ -75,6 +75,11 @@ inline bool global_libass_lock_enabled() noexcept {
         environment_flag_enabled("UTSURE_LIBASS_GLOBAL_LOCK");
 }
 
+inline bool strict_same_thread_lifetime_enabled() noexcept {
+    return environment_flag_enabled("UTSURE_SUBTITLE_STRICT_SAME_THREAD") ||
+        environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE");
+}
+
 inline SubtitleBitmapTransferMode resolve_bitmap_transfer_mode() noexcept {
     if (copied_bitmap_mode_forced()) {
         return SubtitleBitmapTransferMode::copied;

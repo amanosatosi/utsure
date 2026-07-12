@@ -25,6 +25,7 @@ struct FfmpegFilterCommandPlan final {
     std::optional<int> subtitle_stream_index{};
     std::string mangetsu_rgba_mode{"auto"};
     std::string mangetsu_actor_colorcoding_mode{"auto"};
+    bool strict_same_thread_diagnostic_enabled{false};
     std::vector<std::string> arguments{};
 };
 

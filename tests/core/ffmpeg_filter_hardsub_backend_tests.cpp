@@ -172,11 +172,20 @@ int assert_command_generation() {
     return 0;
 }
 
+int assert_strict_same_thread_diagnostic() {
+    const auto plan = utsure::core::job::build_ffmpeg_filter_hardsub_command(make_job(), make_plan());
+    if (!plan.strict_same_thread_diagnostic_enabled) {
+        return fail("UTSURE_SUBTITLE_STRICT_SAME_THREAD did not enable the FFmpeg filter diagnostic plan.");
+    }
+
+    return 0;
+}
+
 }  // namespace
 
 int main(const int argc, char **argv) {
     if (argc != 2) {
-        return fail("Usage: utsure_core_ffmpeg_filter_hardsub_backend_tests [--escape|--command]");
+        return fail("Usage: utsure_core_ffmpeg_filter_hardsub_backend_tests [--escape|--command|--strict-same-thread]");
     }
 
     const std::string mode = argv[1];
@@ -185,6 +194,9 @@ int main(const int argc, char **argv) {
     }
     if (mode == "--command") {
         return assert_command_generation();
+    }
+    if (mode == "--strict-same-thread") {
+        return assert_strict_same_thread_diagnostic();
     }
 
     return fail("Unknown test mode: " + mode);
