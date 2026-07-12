@@ -1714,6 +1714,52 @@ Validation:
 
 ## Immediate next milestone
 
+### M55 Legacy Bitmap ownership diagnosis and decoration-rnd lifetime repair
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Continue the native `libass-9.dll` stability investigation from the diagnostic
+    aligned-free capture rather than treating RGBA cleanup as the active failure.
+  * Make aligned-allocation diagnostics correlate an invalid legacy `Bitmap`
+    free with the most recent live or released allocation for the same
+    `Bitmap` owner.
+  * Repair two concrete stale-owner paths: shaped glyph-chain nodes freed
+    without detaching their roots, and custom-decoration plus `\\rnd*`
+    temporary legacy bitmap owners that outlive stack storage.
+  * Add a focused repeat-render regression that exercises custom underline or
+    strike decoration with randomized bitmap generation.
+
+Implementation approach:
+  * Keep the renderer diagnostic opt-in and fail-fast, but extend its report
+    with owner-level allocation provenance so a future dump distinguishes a
+    stale `Bitmap` object from a buffer-field overwrite.
+  * Detach and release shaped glyph-chain nodes before renderer cleanup can
+    walk them, and transfer decoration-local randomized bitmaps into
+    explicitly owned combined-render storage until composition completes.
+  * Preserve the normal Mangetsu `\\rnd*` rendering behavior and its legacy
+    bitmap API; do not bypass either path as a workaround.
+
+Validation:
+  * Local compilation and test execution will not be run, per repository
+    instructions; GitHub Actions will build and run the added regression.
+  * Static validation will include `git diff --check`, lifecycle-path review,
+    and targeted searches for all temporary legacy bitmap ownership releases.
+
+Implemented:
+  * Found the direct stale-object path behind the diagnostic: shaped glyph
+    chains were freed while their root `next` pointers remained live; the
+    immediately following renderer cleanup walked those freed nodes and could
+    pass their reused `Bitmap::buffer` fields to `ass_free_bitmap()`.
+  * Made shaper cleanup detach each root before releasing its chain and release
+    chain-owned distorted bitmaps/outlines exactly once; renderer cleanup now
+    only visits live root glyphs.
+  * Moved temporary custom-decoration `\\rnd*` bitmaps out of stack-local
+    glyph storage into combined-render ownership until composition finishes.
+  * Added focused chain-detach and custom-decoration randomized-render
+    regression coverage, plus owner-level live/released allocation provenance
+    in the opt-in aligned-allocation diagnostic.
+
 ### M41 Subtitle renderer lifetime crash hardening
 
 Status: Implemented; awaiting GitHub Actions validation
