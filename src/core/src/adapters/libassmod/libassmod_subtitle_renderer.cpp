@@ -80,18 +80,20 @@ struct AutoRenderResultDeleter final {
 
     void operator()(ASS_RenderResult *result) const noexcept {
         if (result != nullptr) {
-            if (result->imgs_rgba != nullptr) {
+            /* `imgs_rgba` is caller-owned only when the auto API selected
+             * RGBA output. Keep host cleanup aligned with libassmod's public
+             * result contract instead of inferring ownership from a pointer. */
+            if (result->use_rgba) {
                 if (strict_same_thread_lifetime && std::this_thread::get_id() != subtitle_owner_thread_id) {
                     assert(false && "libassmod RGBA image cleanup ran outside its subtitle-owner thread");
                     std::terminate();
                 }
                 if (should_serialize_all_libassmod_calls()) {
                     const std::lock_guard lock(libassmod_global_mutex());
-                    ass_free_images_rgba(result->imgs_rgba);
+                    ass_render_result_free(result);
                 } else {
-                    ass_free_images_rgba(result->imgs_rgba);
+                    ass_render_result_free(result);
                 }
-                result->imgs_rgba = nullptr;
             }
             delete result;
         }

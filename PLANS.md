@@ -1492,6 +1492,30 @@ Follow-up completed:
 
 ## Immediate next milestone
 
+### M54 libassmod aligned-allocation diagnostics and cleanup stability
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Continue the active native-crash investigation without changing subtitle features or bypassing the RGBA API.
+  * Finish stale-pointer cleanup hardening in libassmod and make aligned-allocation diagnostics observable in the Windows shared-DLL build.
+  * Exercise the same `ass_render_frame_auto()` result-cleanup contract that Utsure uses, not only the direct RGBA renderer API.
+
+Implementation approach:
+  * Make renderer-owned rasterizer cleanup idempotent for every owned buffer.
+  * Treat a tracked aligned allocation's non-null owner as a free-time ownership invariant and emit the complete diagnostic through both stderr and the Windows debug-output channel.
+  * Add an opt-in Utsure CI switch that builds the real shared libassmod DLL with allocation tracking and a repeated auto-render integration reproducer that asserts the DLL reports the feature.
+
+Implemented:
+  * Fixed `ass_rasterizer_done()` so it clears both line-buffer pointers and their associated counters before freeing, making repeated teardown safe; added a focused regression that exercises the complete second cleanup.
+  * Strengthened aligned-allocation diagnostics with free-time owner matching, exported a query that confirms whether a loaded DLL has the tracker enabled, and forwards invalid-free provenance to the Windows debug-output channel for GUI-host visibility.
+  * Corrected the Utsure adapter to free RGBA results only through the public `ASS_RenderResult.use_rgba` ownership contract.
+  * Added an opt-in `UTSURE_LIBASSMOD_ALIGNED_ALLOCATION_DEBUG` Windows build switch, enabled it in the Windows workflow, and added a 200-iteration `ass_render_frame_auto()` regression against the actual dynamically linked libassmod DLL.
+
+Validation:
+  * Local compilation and CTest execution were not run, per repository instructions.
+  * Static validation passed: both working-tree `git diff --check` runs, Git Bash syntax validation for the modified Windows build script, and an export/ownership call-site audit covering the new DLL query and every tagged aligned free.
+
 ### M53 Internal libassmod strict owner-thread diagnostics
 
 Status: Implemented; awaiting GitHub Actions validation

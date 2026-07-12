@@ -1349,6 +1349,20 @@ add_test(
             180
             1
             1
+        1138596000
+)
+
+add_test(
+    NAME utsure.core.subtitles.libassmod.auto_reproducer.repeat.reported_timestamp
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_REQUIRE_LIBASSMOD_ALIGNED_ALLOCATION_DEBUG=1
+        UTSURE_LIBASSMOD_REPRO_REPEAT=200
+        utsure_core_libassmod_rgba_reproducer --auto
+            "${UTSURE_SUBTITLE_BS4_FORCED_RGBA_SAMPLE_FILE}"
+            320
+            180
+            1
+            1
             1138596000
 )
 

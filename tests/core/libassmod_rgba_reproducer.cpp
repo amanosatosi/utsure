@@ -22,6 +22,11 @@ extern "C" {
 
 namespace {
 
+enum class RenderApi {
+    rgba,
+    auto_select
+};
+
 struct LibraryDeleter final {
     void operator()(ASS_Library *library) const noexcept {
         if (library != nullptr) {
@@ -105,6 +110,16 @@ int repeat_count_from_environment() {
     return std::max(1, parse_int(value, "UTSURE_LIBASSMOD_REPRO_REPEAT"));
 }
 
+bool environment_flag_enabled(const char *name) {
+    const char *value = std::getenv(name);
+    if (value == nullptr || value[0] == '\0') {
+        return false;
+    }
+
+    const std::string_view normalized(value);
+    return normalized == "1" || normalized == "true" || normalized == "on" || normalized == "yes";
+}
+
 std::optional<std::uint64_t> estimate_rgba_bytes(const ASS_ImageRGBA &image) noexcept {
     if (image.w <= 0 || image.h <= 0 || image.stride <= 0) {
         return std::nullopt;
@@ -173,7 +188,8 @@ void log_rgba_node(const ASS_ImageRGBA &image, const std::size_t index) {
     std::cout << '\n';
 }
 
-int run_rgba_reproducer(
+int run_renderer_reproducer(
+    const RenderApi render_api,
     const std::filesystem::path &subtitle_path,
     const int frame_width,
     const int frame_height,
@@ -221,7 +237,15 @@ int run_rgba_reproducer(
         return fail("ass_read_file failed for subtitle input.");
     }
 
+    const int aligned_allocation_debug_enabled = ass_aligned_alloc_debug_enabled();
+    if (environment_flag_enabled("UTSURE_REQUIRE_LIBASSMOD_ALIGNED_ALLOCATION_DEBUG") &&
+        !aligned_allocation_debug_enabled) {
+        return fail("The loaded libassmod DLL did not enable aligned-allocation diagnostics.");
+    }
+
     std::cout << "libassmod.ref=" << UTSURE_LIBASSMOD_REF << '\n';
+    std::cout << "libassmod.aligned_allocation_debug=" << aligned_allocation_debug_enabled << '\n';
+    std::cout << "render.api=" << (render_api == RenderApi::auto_select ? "auto" : "rgba") << '\n';
     std::cout << "input.subtitle=" << subtitle_path.lexically_normal().string() << '\n';
     std::cout << "setup.frame_size=" << frame_width << 'x' << frame_height << '\n';
     std::cout << "setup.storage_size=" << frame_width << 'x' << frame_height << '\n';
@@ -242,24 +266,45 @@ int run_rgba_reproducer(
     int last_detect_change = 0;
     for (int iteration = 0; iteration < repeat_count; ++iteration) {
         int detect_change = 0;
-        ASS_ImageRGBA *images = ass_render_frame_rgba(
-            renderer.get(),
-            track.get(),
-            timestamp_milliseconds,
-            &detect_change
-        );
-
         std::size_t node_count = 0;
-        for (ASS_ImageRGBA *image = images; image != nullptr; image = image->next) {
-            if (iteration == 0 || iteration + 1 == repeat_count) {
-                log_rgba_node(*image, node_count);
+        if (render_api == RenderApi::auto_select) {
+            ASS_RenderResult result = ass_render_frame_auto(
+                renderer.get(),
+                track.get(),
+                timestamp_milliseconds,
+                &detect_change
+            );
+            if (result.use_rgba) {
+                for (ASS_ImageRGBA *image = result.imgs_rgba; image != nullptr; image = image->next) {
+                    if (iteration == 0 || iteration + 1 == repeat_count) {
+                        log_rgba_node(*image, node_count);
+                    }
+                    ++node_count;
+                }
+            } else {
+                for (ASS_Image *image = result.imgs; image != nullptr; image = image->next) {
+                    ++node_count;
+                }
             }
-            ++node_count;
+            ass_render_result_free(&result);
+        } else {
+            ASS_ImageRGBA *images = ass_render_frame_rgba(
+                renderer.get(),
+                track.get(),
+                timestamp_milliseconds,
+                &detect_change
+            );
+            for (ASS_ImageRGBA *image = images; image != nullptr; image = image->next) {
+                if (iteration == 0 || iteration + 1 == repeat_count) {
+                    log_rgba_node(*image, node_count);
+                }
+                ++node_count;
+            }
+            ass_free_images_rgba(images);
         }
 
         last_node_count = node_count;
         last_detect_change = detect_change;
-        ass_free_images_rgba(images);
     }
 
     std::cout << "render.timestamp_us=" << timestamp_microseconds << '\n';
@@ -277,17 +322,23 @@ int main(int argc, char *argv[]) {
     if (argc != 8 && argc != 9) {
         return fail(
             "Usage: utsure_core_libassmod_rgba_reproducer "
-            "--rgba <subtitle> <frame-width> <frame-height> <sar-num> <sar-den> <timestamp-us> [font-dir]"
+            "--rgba|--auto <subtitle> <frame-width> <frame-height> <sar-num> <sar-den> <timestamp-us> [font-dir]"
         );
     }
 
     try {
         const std::string_view mode(argv[1]);
-        if (mode != "--rgba") {
+        RenderApi render_api;
+        if (mode == "--rgba") {
+            render_api = RenderApi::rgba;
+        } else if (mode == "--auto") {
+            render_api = RenderApi::auto_select;
+        } else {
             return fail("Unknown mode for utsure_core_libassmod_rgba_reproducer.");
         }
 
-        return run_rgba_reproducer(
+        return run_renderer_reproducer(
+            render_api,
             std::filesystem::path(argv[2]),
             parse_int(argv[3], "frame-width"),
             parse_int(argv[4], "frame-height"),

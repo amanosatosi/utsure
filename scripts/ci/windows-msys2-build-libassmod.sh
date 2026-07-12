@@ -10,10 +10,26 @@ libassmod_ref="${UTSURE_LIBASSMOD_REF:-mangetsu}"
 libassmod_source_dir="${UTSURE_LIBASSMOD_SOURCE_DIR:-${libassmod_root}/src}"
 libassmod_build_dir="${UTSURE_LIBASSMOD_BUILD_DIR:-${libassmod_root}/build}"
 libassmod_prefix="${UTSURE_LIBASSMOD_PREFIX:-${libassmod_root}/prefix}"
+libassmod_aligned_allocation_debug="${UTSURE_LIBASSMOD_ALIGNED_ALLOCATION_DEBUG:-0}"
 
 mkdir -p "${libassmod_root}"
 
 echo "Using libassmod ref: ${libassmod_ref}"
+
+case "${libassmod_aligned_allocation_debug,,}" in
+  1|true|yes|on)
+    libassmod_aligned_allocation_debug=true
+    ;;
+  0|false|no|off|"")
+    libassmod_aligned_allocation_debug=false
+    ;;
+  *)
+    echo "UTSURE_LIBASSMOD_ALIGNED_ALLOCATION_DEBUG must be a boolean value."
+    exit 2
+    ;;
+esac
+
+echo "libassmod aligned-allocation diagnostics: ${libassmod_aligned_allocation_debug}"
 
 if [ ! -d "${libassmod_source_dir}/.git" ]; then
   if ! git clone "${libassmod_repo_url}" "${libassmod_source_dir}"; then
@@ -36,12 +52,19 @@ if ! git -C "${libassmod_source_dir}" checkout --force "${libassmod_checkout_ref
   exit 1
 fi
 
+libassmod_meson_args=(
+  --buildtype release
+  --default-library shared
+  --prefix "${libassmod_prefix}"
+  -Dfontconfig=disabled
+  -Dlibunibreak=disabled
+)
+if [[ "${libassmod_aligned_allocation_debug}" == "true" ]]; then
+  libassmod_meson_args+=( -Daligned-allocation-debug=true )
+fi
+
 meson setup "${libassmod_build_dir}" "${libassmod_source_dir}" \
-  --buildtype release \
-  --default-library shared \
-  --prefix "${libassmod_prefix}" \
-  -Dfontconfig=disabled \
-  -Dlibunibreak=disabled \
+  "${libassmod_meson_args[@]}" \
   --wipe
 
 meson compile -C "${libassmod_build_dir}"
