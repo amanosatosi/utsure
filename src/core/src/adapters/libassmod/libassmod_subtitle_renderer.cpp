@@ -824,6 +824,7 @@ public:
         assert(renderer_ != nullptr);
         assert(track_ != nullptr);
         for (const auto &asset : image_assets_) {
+            (void) asset;
             assert(!asset.name.empty());
             assert(asset.width > 0);
             assert(asset.height > 0);

@@ -700,7 +700,7 @@ FfmpegFilterCommandPlan build_ffmpeg_filter_hardsub_command(
         .subtitle_stream_index = std::nullopt,
         .mangetsu_rgba_mode = "auto",
         .mangetsu_actor_colorcoding_mode = "auto",
-        .strict_same_thread_diagnostic_enabled = runtime::strict_same_thread_lifetime_enabled(),
+        .strict_same_thread_diagnostic_enabled = subtitles::runtime::strict_same_thread_lifetime_enabled(),
         .arguments = std::move(arguments)
     };
 }
@@ -720,7 +720,7 @@ FfmpegFilterHardsubResult run_ffmpeg_filter_hardsub_backend(
         }
 
         const FfmpegFilterStrictSameThreadOwner strict_same_thread_owner(
-            runtime::strict_same_thread_lifetime_enabled(),
+            subtitles::runtime::strict_same_thread_lifetime_enabled(),
             request.log_callback
         );
         strict_same_thread_owner.enforce_owner_thread("FFmpeg filter backend setup");
