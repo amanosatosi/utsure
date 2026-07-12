@@ -2,6 +2,7 @@
 
 #include "encode_job_working_set_guard.hpp"
 #include "../runtime_anomaly_policy.hpp"
+#include "../subtitles/subtitle_runtime_options.hpp"
 #include "utsure/core/media/media_inspector.hpp"
 #include "utsure/core/subtitles/subtitle_font_recovery.hpp"
 #include "utsure/core/subtitles/subtitle_renderer.hpp"
@@ -389,6 +390,12 @@ void validate_subtitle_session(
             prepared_session_request.font_recovery_report.message,
             prepared_session_request.font_recovery_report.actionable_hint
         );
+        return;
+    }
+
+    if (subtitles::runtime::strict_same_thread_lifetime_enabled()) {
+        // The active internal compositor will create, render with, and destroy this session on its
+        // dedicated subtitle-owner worker. Preflight intentionally avoids creating a second libassmod session.
         return;
     }
 

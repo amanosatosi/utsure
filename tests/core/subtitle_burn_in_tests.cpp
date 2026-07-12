@@ -438,6 +438,20 @@ std::string lowercase_ascii(std::string value) {
     return value;
 }
 
+bool current_subtitle_strict_same_thread_mode() {
+    const auto flag_enabled = [](const char *name) {
+        const char *raw = std::getenv(name);
+        if (raw == nullptr || raw[0] == '\0') {
+            return false;
+        }
+
+        const auto normalized = lowercase_ascii(std::string(raw));
+        return normalized == "1" || normalized == "true" || normalized == "on" || normalized == "yes";
+    };
+    return flag_enabled("UTSURE_SUBTITLE_STRICT_SAME_THREAD") ||
+        flag_enabled("UTSURE_SUBTITLE_SAFE_MODE");
+}
+
 std::string current_subtitle_bitmap_mode() {
     const auto forced_flag_enabled = [](const char *name) {
         const char *raw = std::getenv(name);
@@ -756,7 +770,9 @@ int assert_subtitle_runtime_visibility(
         return fail("The subtitle runtime summary did not record the expected isolation mode.");
     }
 
-    const std::size_t expected_subtitle_workers = expected_composition_mode == "worker_local"
+    const std::size_t expected_subtitle_workers = summary.streaming_runtime.subtitle_strict_same_thread
+        ? 1U
+        : expected_composition_mode == "worker_local"
         ? summary.streaming_runtime.video_processing_worker_count
         : 1U;
     if (summary.streaming_runtime.subtitle_processing_worker_count != expected_subtitle_workers) {
@@ -767,7 +783,9 @@ int assert_subtitle_runtime_visibility(
     if (!observer_logs_contain_text(observer, std::string("subtitle bitmap mode ") + std::string(expected_bitmap_mode)) ||
         !observer_logs_contain_text(observer, std::string("composition mode ") + std::string(expected_composition_mode)) ||
         report.find("streaming.subtitle.bitmap_mode=" + std::string(expected_bitmap_mode)) == std::string::npos ||
-        report.find("streaming.subtitle.composition_mode=" + std::string(expected_composition_mode)) == std::string::npos) {
+        report.find("streaming.subtitle.composition_mode=" + std::string(expected_composition_mode)) == std::string::npos ||
+        report.find("streaming.subtitle.strict_same_thread=" +
+                    std::string(summary.streaming_runtime.subtitle_strict_same_thread ? "1" : "0")) == std::string::npos) {
         return fail("The subtitle runtime logs/report did not expose the active isolation mode.");
     }
 
@@ -1210,6 +1228,22 @@ int run_subtitle_render_lifecycle_trace_assertion(
         return fail("Full subtitle render trace should log every rendered frame only when explicitly enabled.");
     }
 
+    if (current_subtitle_strict_same_thread_mode()) {
+        session_result.session.reset();
+        if (!string_messages_contain_text(lifecycle_updates, "subtitle session destroyed: operation=teardown") ||
+            !string_messages_contain_text(lifecycle_updates, "subtitle_strict_same_thread=1") ||
+            !string_messages_contain_text(lifecycle_updates, "subtitle_owner_thread_id=") ||
+            !string_messages_contain_text(lifecycle_updates, "subtitle_library_created_thread_id=") ||
+            !string_messages_contain_text(lifecycle_updates, "subtitle_renderer_created_thread_id=") ||
+            !string_messages_contain_text(lifecycle_updates, "subtitle_track_created_thread_id=") ||
+            !string_messages_contain_text(lifecycle_updates, "subtitle_render_thread_id=") ||
+            !string_messages_contain_text(lifecycle_updates, "subtitle_track_destroyed_thread_id=") ||
+            !string_messages_contain_text(lifecycle_updates, "subtitle_renderer_destroyed_thread_id=") ||
+            !string_messages_contain_text(lifecycle_updates, "subtitle_library_destroyed_thread_id=")) {
+            return fail("Strict subtitle lifecycle diagnostics omitted owner or libassmod teardown thread ids.");
+        }
+    }
+
     std::cout << "render_lifecycle.trace_mode=" << trace_mode << '\n';
     std::cout << "render_lifecycle.visible_start_count=" << visible_start_count << '\n';
     std::cout << "render_lifecycle.visible_end_count=" << visible_end_count << '\n';
@@ -1349,6 +1383,23 @@ int run_burn_in_assertion(
     );
     if (runtime_result != 0) {
         return runtime_result;
+    }
+
+    if (current_subtitle_strict_same_thread_mode()) {
+        if (!burned_job_result.encode_job_summary->streaming_runtime.subtitle_strict_same_thread ||
+            !observer_logs_contain_text(
+                observer,
+                "Subtitle strict same-thread mode: main libassmod session creation is deferred to the subtitle-owner worker."
+            ) ||
+            !observer_logs_contain_text(observer, "subtitle render start: operation=compose") ||
+            !observer_logs_contain_text(observer, "subtitle_strict_same_thread=1") ||
+            !observer_logs_contain_text(observer, "subtitle_owner_thread_id=") ||
+            !observer_logs_contain_text(observer, "subtitle_library_created_thread_id=") ||
+            !observer_logs_contain_text(observer, "subtitle_renderer_created_thread_id=") ||
+            !observer_logs_contain_text(observer, "subtitle_track_created_thread_id=") ||
+            !observer_logs_contain_text(observer, "subtitle_render_thread_id=")) {
+            return fail("Strict burn-in mode did not report the subtitle-owner session lifetime diagnostics.");
+        }
     }
 
     std::cout << build_validation_report(

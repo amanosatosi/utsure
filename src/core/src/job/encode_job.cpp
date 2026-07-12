@@ -535,6 +535,7 @@ std::string format_encode_runtime_log_message(
         ", video workers " + std::to_string(runtime_behavior.video_processing_worker_count) +
         ", subtitle workers " + std::to_string(runtime_behavior.subtitle_processing_worker_count) +
         ", video queue " + std::to_string(runtime_behavior.video_frame_queue_depth) + " frames" +
+        ", subtitle strict same-thread " + std::to_string(runtime_behavior.subtitle_strict_same_thread ? 1 : 0) +
         ", subtitle bitmap mode " + runtime_behavior.subtitle_bitmap_mode +
         ", subtitle composition mode " + runtime_behavior.subtitle_composition_mode +
         ", subtitle diagnostics " + runtime_behavior.subtitle_diagnostics_mode +
@@ -957,6 +958,7 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                         .subtitle_processing_worker_count = 0,
                         .video_frame_queue_depth = 0,
                         .decoded_audio_block_queue_depth = 0,
+                        .subtitle_strict_same_thread = false,
                         .subtitle_bitmap_mode = "ffmpeg_filter",
                         .subtitle_composition_mode = "ffmpeg_filter",
                         .subtitle_diagnostics_mode = "off",
@@ -1077,6 +1079,8 @@ EncodeJobResult EncodeJobRunner::run(const EncodeJob &job, const EncodeJobRunOpt
                         completed_summary.runtime_behavior.video_frame_queue_depth,
                     .decoded_audio_block_queue_depth =
                         completed_summary.runtime_behavior.decoded_audio_block_queue_depth,
+                    .subtitle_strict_same_thread =
+                        completed_summary.runtime_behavior.subtitle_strict_same_thread,
                     .subtitle_bitmap_mode =
                         completed_summary.runtime_behavior.subtitle_bitmap_mode,
                     .subtitle_composition_mode =

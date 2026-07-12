@@ -702,6 +702,7 @@ int assert_runtime_visibility(
         !contains_text(report, "streaming.subtitle_workers=1") ||
         !contains_text(report, "streaming.video_queue_frames=70") ||
         !contains_text(report, "streaming.audio_queue_blocks=8") ||
+        !contains_text(report, "streaming.subtitle.strict_same_thread=0") ||
         !contains_text(report, "streaming.subtitle.bitmap_mode=copied") ||
         !contains_text(report, "streaming.subtitle.composition_mode=serialized") ||
         !contains_text(report, "streaming.subtitle.diagnostics_mode=off") ||
@@ -716,6 +717,7 @@ int assert_runtime_visibility(
         observer_logs_contain_text(observer, "encoder threads FFmpeg auto threads") ||
         !observer_logs_contain_text(observer, "subtitle workers 1") ||
         !observer_logs_contain_text(observer, "video queue 70 frames") ||
+        !observer_logs_contain_text(observer, "subtitle strict same-thread 0") ||
         !observer_logs_contain_text(observer, "subtitle bitmap mode copied") ||
         !observer_logs_contain_text(observer, "subtitle composition mode serialized") ||
         !observer_logs_contain_text(observer, "subtitle diagnostics off") ||
@@ -779,6 +781,7 @@ int run_threading_mode_selection_assertion() {
     const auto clear_runtime_env = []() {
         unset_env_var("UTSURE_VIDEO_WORKERS");
         unset_env_var("UTSURE_SUBTITLE_SAFE_MODE");
+        unset_env_var("UTSURE_SUBTITLE_STRICT_SAME_THREAD");
         unset_env_var("UTSURE_SUBTITLE_SYNC");
         unset_env_var("UTSURE_SUBTITLE_BITMAP_COPY");
         unset_env_var("UTSURE_DISABLE_DIRECT_SUBTITLE_BITMAPS");
@@ -906,6 +909,22 @@ int run_threading_mode_selection_assertion() {
             sync_runtime.subtitle_composition_mode != "serialized" ||
             sync_runtime.subtitle_processing_worker_count != 1U) {
             return fail("Subtitle sync mode did not force copied serialized subtitle runtime planning.");
+        }
+    }
+
+    {
+        ScopedEnvVar worker_local("UTSURE_SUBTITLE_COMPOSITION_MODE", "worker_local");
+        ScopedEnvVar strict_same_thread("UTSURE_SUBTITLE_STRICT_SAME_THREAD", "1");
+        const auto strict_runtime = utsure::core::media::streaming::resolve_streaming_runtime_behavior(
+            utsure::core::media::TranscodeThreadingSettings{
+                .cpu_usage_mode = CpuUsageMode::auto_select,
+                .logical_core_count_override = 8U
+            }
+        );
+        if (!strict_runtime.subtitle_strict_same_thread ||
+            strict_runtime.subtitle_processing_worker_count != 1U ||
+            strict_runtime.subtitle_composition_mode != "worker_local") {
+            return fail("Strict libassmod same-thread mode did not reserve one subtitle-owner worker.");
         }
     }
     clear_runtime_env();

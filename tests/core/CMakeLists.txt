@@ -1475,6 +1475,13 @@ add_test(
 )
 
 add_test(
+    NAME utsure.core.subtitles.libassmod.render.lifecycle_trace_strict_same_thread
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_STRICT_SAME_THREAD=1
+        utsure_core_subtitle_burn_in_tests --render-lifecycle-trace-off "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+)
+
+add_test(
     NAME utsure.core.subtitles.burn_in.h264
     COMMAND utsure_core_subtitle_burn_in_tests --h264
         "${UTSURE_SAMPLE_MEDIA_FILE}"
@@ -1483,6 +1490,20 @@ add_test(
         "${UTSURE_TEST_MEDIA_DIR}/subtitle-burn-h264.mp4"
 )
 utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.h264)
+
+add_test(
+    NAME utsure.core.subtitles.burn_in.strict_same_thread.h264
+    COMMAND "${CMAKE_COMMAND}" -E env
+        UTSURE_SUBTITLE_STRICT_SAME_THREAD=1
+        UTSURE_SUBTITLE_COMPOSITION_MODE=worker_local
+        UTSURE_SUBTITLE_RENDER_TRACE=1
+        utsure_core_subtitle_burn_in_tests --h264
+            "${UTSURE_SAMPLE_MEDIA_FILE}"
+            "${UTSURE_SUBTITLE_SAMPLE_FILE}"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-strict-same-thread-plain-h264.mp4"
+            "${UTSURE_TEST_MEDIA_DIR}/subtitle-strict-same-thread-burn-h264.mp4"
+)
+utsure_enable_fontcollector_stub_for_test(utsure.core.subtitles.burn_in.strict_same_thread.h264)
 
 add_test(
     NAME utsure.core.subtitles.burn_in.gradient.h264

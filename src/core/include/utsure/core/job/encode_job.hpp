@@ -131,6 +131,7 @@ struct EncodeJobStreamingRuntimeSummary final {
     std::size_t subtitle_processing_worker_count{1};
     std::size_t video_frame_queue_depth{0};
     std::size_t decoded_audio_block_queue_depth{0};
+    bool subtitle_strict_same_thread{false};
     std::string subtitle_bitmap_mode{"copied"};
     std::string subtitle_composition_mode{"serialized"};
     std::string subtitle_diagnostics_mode{"off"};

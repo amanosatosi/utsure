@@ -19,6 +19,7 @@ extern "C" {
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -74,9 +75,16 @@ struct TrackDeleter final {
 using TrackHandle = std::unique_ptr<ASS_Track, TrackDeleter>;
 
 struct AutoRenderResultDeleter final {
+    bool strict_same_thread_lifetime{false};
+    std::thread::id subtitle_owner_thread_id{};
+
     void operator()(ASS_RenderResult *result) const noexcept {
         if (result != nullptr) {
             if (result->imgs_rgba != nullptr) {
+                if (strict_same_thread_lifetime && std::this_thread::get_id() != subtitle_owner_thread_id) {
+                    assert(false && "libassmod RGBA image cleanup ran outside its subtitle-owner thread");
+                    std::terminate();
+                }
                 if (should_serialize_all_libassmod_calls()) {
                     const std::lock_guard lock(libassmod_global_mutex());
                     ass_free_images_rgba(result->imgs_rgba);
@@ -805,7 +813,11 @@ public:
           track_(std::move(track)),
           runtime_options_(runtime::resolve_subtitle_runtime_options()),
           session_instance_id_(next_session_instance_id()),
-          created_thread_id_(std::this_thread::get_id()) {
+          strict_same_thread_lifetime_(runtime::strict_same_thread_lifetime_enabled()),
+          subtitle_owner_thread_id_(std::this_thread::get_id()),
+          subtitle_library_created_thread_id_(std::this_thread::get_id()),
+          subtitle_renderer_created_thread_id_(std::this_thread::get_id()),
+          subtitle_track_created_thread_id_(std::this_thread::get_id()) {
         assert(library_ != nullptr);
         assert(renderer_ != nullptr);
         assert(track_ != nullptr);
@@ -821,7 +833,11 @@ public:
                 << ", renderer=" << pointer_to_string(renderer_.get())
                 << ", track=" << pointer_to_string(track_.get())
                 << ", library=" << pointer_to_string(library_.get())
-                << ", subtitle_renderer_created_thread_id=" << created_thread_id_
+                << ", subtitle_strict_same_thread=" << (strict_same_thread_lifetime_ ? 1 : 0)
+                << ", subtitle_owner_thread_id=" << subtitle_owner_thread_id_
+                << ", subtitle_library_created_thread_id=" << subtitle_library_created_thread_id_
+                << ", subtitle_renderer_created_thread_id=" << subtitle_renderer_created_thread_id_
+                << ", subtitle_track_created_thread_id=" << subtitle_track_created_thread_id_
                 << ", last_subtitle_event_count=" << track_->n_events
                 << ", registered_image_asset_count=" << image_assets_.size()
                 << ", safe_mode=" << (runtime::environment_flag_enabled("UTSURE_SUBTITLE_SAFE_MODE") ? 1 : 0)
@@ -839,6 +855,7 @@ public:
     ~LibassmodSubtitleRenderSession() override {
         {
             std::unique_lock lock(access_mutex_);
+            enforce_owner_thread_for_teardown_or_terminate("begin teardown");
             cleanup_started_.store(true, std::memory_order_release);
             access_available_.wait(lock, [this]() {
                 return active_render_count_ == 0;
@@ -846,20 +863,24 @@ public:
             assert(active_render_count_ == 0);
         }
 
-        destroyed_thread_id_ = std::this_thread::get_id();
         with_optional_global_libassmod_lock([this]() {
             if (renderer_) {
                 ass_clear_tag_images(renderer_.get());
             }
+            subtitle_track_destroyed_thread_id_ = std::this_thread::get_id();
             track_.reset();
+            subtitle_renderer_destroyed_thread_id_ = std::this_thread::get_id();
             renderer_.reset();
+            subtitle_library_destroyed_thread_id_ = std::this_thread::get_id();
             library_.reset();
         });
         image_assets_.clear();
+        emit_teardown_lifecycle_diagnostic();
     }
 
     [[nodiscard]] SubtitleImageAssetRegistrationResult register_session_image_assets() {
         std::unique_lock lock(access_mutex_);
+        enforce_owner_thread_locked("register image assets");
         if (!renderer_) {
             return SubtitleImageAssetRegistrationResult{
                 .diagnostics = {},
@@ -1155,6 +1176,85 @@ private:
         quirk_diagnostics_logged_ = true;
     }
 
+    void remember_lifecycle_callback(const SubtitleRenderRequest &request) {
+        if (strict_same_thread_lifetime_ && request.debug_context != nullptr && request.debug_context->lifecycle_callback) {
+            lifecycle_callback_ = request.debug_context->lifecycle_callback;
+        }
+    }
+
+    [[nodiscard]] std::string format_thread_lifetime_diagnostic(
+        const std::string_view event,
+        const std::string_view operation,
+        const std::thread::id actual_thread_id
+    ) const {
+        std::ostringstream message;
+        message << event
+                << ": operation=" << operation
+                << ", session_instance_id=" << session_instance_id_
+                << ", thread_id=" << actual_thread_id
+                << ", subtitle_strict_same_thread=" << (strict_same_thread_lifetime_ ? 1 : 0)
+                << ", subtitle_owner_thread_id=" << subtitle_owner_thread_id_
+                << ", subtitle_library_created_thread_id=" << subtitle_library_created_thread_id_
+                << ", subtitle_renderer_created_thread_id=" << subtitle_renderer_created_thread_id_
+                << ", subtitle_track_created_thread_id=" << subtitle_track_created_thread_id_
+                << ", subtitle_render_thread_id=" << subtitle_render_thread_id_
+                << ", subtitle_track_destroyed_thread_id=" << subtitle_track_destroyed_thread_id_
+                << ", subtitle_renderer_destroyed_thread_id=" << subtitle_renderer_destroyed_thread_id_
+                << ", subtitle_library_destroyed_thread_id=" << subtitle_library_destroyed_thread_id_;
+        return message.str();
+    }
+
+    void enforce_owner_thread_locked(const std::string_view operation) const {
+        if (!strict_same_thread_lifetime_ || std::this_thread::get_id() == subtitle_owner_thread_id_) {
+            return;
+        }
+
+        const auto diagnostic = format_thread_lifetime_diagnostic(
+            "subtitle strict same-thread violation",
+            operation,
+            std::this_thread::get_id()
+        );
+        if (lifecycle_callback_) {
+            lifecycle_callback_(diagnostic);
+        }
+        throw std::runtime_error(diagnostic);
+    }
+
+    void enforce_owner_thread_for_teardown_or_terminate(const std::string_view operation) const noexcept {
+        if (!strict_same_thread_lifetime_ || std::this_thread::get_id() == subtitle_owner_thread_id_) {
+            return;
+        }
+
+        try {
+            const auto diagnostic = format_thread_lifetime_diagnostic(
+                "subtitle strict same-thread violation",
+                operation,
+                std::this_thread::get_id()
+            );
+            if (lifecycle_callback_) {
+                lifecycle_callback_(diagnostic);
+            }
+        } catch (...) {
+        }
+        assert(false && "libassmod teardown ran outside its subtitle-owner thread");
+        std::terminate();
+    }
+
+    void emit_teardown_lifecycle_diagnostic() const noexcept {
+        if (!strict_same_thread_lifetime_ || !lifecycle_callback_) {
+            return;
+        }
+
+        try {
+            lifecycle_callback_(format_thread_lifetime_diagnostic(
+                "subtitle session destroyed",
+                "teardown",
+                std::this_thread::get_id()
+            ));
+        } catch (...) {
+        }
+    }
+
     void log_render_lifecycle(
         const SubtitleRenderRequest &request,
         const std::string_view event,
@@ -1178,7 +1278,15 @@ private:
                 << ", track=" << pointer_to_string(track_.get())
                 << ", library=" << pointer_to_string(library_.get())
                 << ", active_subtitle_render_count=" << active_count
-                << ", subtitle_renderer_created_thread_id=" << created_thread_id_
+                << ", subtitle_strict_same_thread=" << (strict_same_thread_lifetime_ ? 1 : 0)
+                << ", subtitle_owner_thread_id=" << subtitle_owner_thread_id_
+                << ", subtitle_library_created_thread_id=" << subtitle_library_created_thread_id_
+                << ", subtitle_renderer_created_thread_id=" << subtitle_renderer_created_thread_id_
+                << ", subtitle_track_created_thread_id=" << subtitle_track_created_thread_id_
+                << ", subtitle_render_thread_id=" << subtitle_render_thread_id_
+                << ", subtitle_track_destroyed_thread_id=" << subtitle_track_destroyed_thread_id_
+                << ", subtitle_renderer_destroyed_thread_id=" << subtitle_renderer_destroyed_thread_id_
+                << ", subtitle_library_destroyed_thread_id=" << subtitle_library_destroyed_thread_id_
                 << ", last_subtitle_event_count=" << (track_ != nullptr ? track_->n_events : 0)
                 << ", registered_image_asset_count=" << image_assets_.size();
         message << ", subtitle_cleanup_started=" << (cleanup_started_.load(std::memory_order_acquire) ? 1 : 0)
@@ -1299,12 +1407,15 @@ private:
         const SubtitleRenderRequest &request
     ) {
         std::unique_lock lock(access_mutex_);
+        remember_lifecycle_callback(request);
         if (cleanup_started_.load(std::memory_order_acquire)) {
             throw std::runtime_error(
                 "Attempted to " + std::string(operation) + " while cleanup had begun for libassmod subtitle session " +
                 std::to_string(session_instance_id_) + '.'
             );
         }
+
+        enforce_owner_thread_locked(operation);
 
         if (render_in_progress_) {
             throw std::runtime_error(
@@ -1341,17 +1452,24 @@ private:
         const SubtitleRenderRequest &request,
         const SessionAccessGuard &access_guard
     ) const {
+        enforce_owner_thread_locked("ass_render_frame_auto");
         int detect_change = 0;
         const auto timestamp_milliseconds =
             subtitle_timestamp_microseconds_to_renderer_milliseconds(request.timestamp_microseconds);
-        return AutoRenderResultHandle(new ASS_RenderResult(with_optional_global_libassmod_lock([&]() {
-            return ass_render_frame_auto(
-                access_guard.renderer(),
-                access_guard.track(),
-                static_cast<long long>(timestamp_milliseconds),
-                &detect_change
-            );
-        })));
+        return AutoRenderResultHandle(
+            new ASS_RenderResult(with_optional_global_libassmod_lock([&]() {
+                return ass_render_frame_auto(
+                    access_guard.renderer(),
+                    access_guard.track(),
+                    static_cast<long long>(timestamp_milliseconds),
+                    &detect_change
+                );
+            })),
+            AutoRenderResultDeleter{
+                .strict_same_thread_lifetime = strict_same_thread_lifetime_,
+                .subtitle_owner_thread_id = subtitle_owner_thread_id_
+            }
+        );
     }
 
     SubtitleRenderSessionCreateRequest create_request_{};
@@ -1363,9 +1481,15 @@ private:
     TrackHandle track_{};
     runtime::SubtitleRuntimeOptions runtime_options_{};
     int session_instance_id_{0};
-    std::thread::id created_thread_id_{};
+    bool strict_same_thread_lifetime_{false};
+    std::thread::id subtitle_owner_thread_id_{};
+    std::thread::id subtitle_library_created_thread_id_{};
+    std::thread::id subtitle_renderer_created_thread_id_{};
+    std::thread::id subtitle_track_created_thread_id_{};
     std::thread::id subtitle_render_thread_id_{};
-    std::thread::id destroyed_thread_id_{};
+    std::thread::id subtitle_track_destroyed_thread_id_{};
+    std::thread::id subtitle_renderer_destroyed_thread_id_{};
+    std::thread::id subtitle_library_destroyed_thread_id_{};
     mutable std::mutex access_mutex_{};
     std::condition_variable access_available_{};
     int active_render_count_{0};
@@ -1374,6 +1498,7 @@ private:
     std::atomic<std::int64_t> last_subtitle_render_start_pts_{0};
     std::atomic<std::int64_t> last_subtitle_render_end_pts_{0};
     std::atomic<bool> cleanup_started_{false};
+    std::function<void(const std::string &)> lifecycle_callback_{};
     bool renderer_setup_diagnostics_logged_{false};
     bool quirk_diagnostics_logged_{false};
     bool off_frame_bitmap_warning_logged_{false};

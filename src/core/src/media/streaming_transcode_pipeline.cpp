@@ -951,10 +951,12 @@ StreamingRuntimeBehavior resolve_streaming_runtime_behavior(
     const auto video_worker_count = requested_video_worker_count.value_or(
         detail::choose_video_processing_worker_count(threading, effective_core_count)
     );
-    const auto subtitle_worker_count =
-        subtitle_runtime_options.composition_mode == subtitles::runtime::SubtitleCompositionMode::worker_local
+    const bool subtitle_strict_same_thread = subtitles::runtime::strict_same_thread_lifetime_enabled();
+    const auto subtitle_worker_count = subtitle_strict_same_thread
+        ? 1U
+        : (subtitle_runtime_options.composition_mode == subtitles::runtime::SubtitleCompositionMode::worker_local
             ? video_worker_count
-            : 1U;
+            : 1U);
     return StreamingRuntimeBehavior{
         .detected_logical_core_count = detected_logical_core_count,
         .effective_logical_core_count = effective_core_count,
@@ -967,6 +969,7 @@ StreamingRuntimeBehavior resolve_streaming_runtime_behavior(
         .subtitle_processing_worker_count = subtitle_worker_count,
         .video_frame_queue_depth = queue_limits.video_frame_queue_depth,
         .decoded_audio_block_queue_depth = queue_limits.decoded_audio_block_queue_depth,
+        .subtitle_strict_same_thread = subtitle_strict_same_thread,
         .subtitle_bitmap_mode = subtitles::runtime::to_string(subtitle_runtime_options.bitmap_transfer_mode),
         .subtitle_composition_mode = subtitles::runtime::to_string(subtitle_runtime_options.composition_mode),
         .subtitle_diagnostics_mode = subtitles::runtime::to_string(subtitle_runtime_options.diagnostics_mode)
@@ -2226,10 +2229,12 @@ public:
         const std::size_t max_in_flight,
         std::optional<SubtitleWorkerSessionTemplate> subtitle_worker_session_template = std::nullopt,
         std::optional<SubtitleDiagnosticSettings> subtitle_diagnostics = std::nullopt,
+        const bool strict_same_thread_lifetime = false,
         std::function<bool()> cancellation_requested = {}
     )
         : max_in_flight_(max_in_flight),
           subtitle_diagnostics_(std::move(subtitle_diagnostics)),
+          strict_same_thread_lifetime_(strict_same_thread_lifetime),
           cancellation_requested_(std::move(cancellation_requested)) {
         if (worker_count == 0U) {
             throw std::runtime_error("The streaming video processor requires at least one worker.");
@@ -2239,8 +2244,16 @@ public:
             throw std::runtime_error("The streaming video processor requires bounded in-flight capacity.");
         }
 
+        if (strict_same_thread_lifetime_ && worker_count != 1U) {
+            throw std::runtime_error(
+                "Strict libassmod same-thread mode requires exactly one subtitle-owner worker."
+            );
+        }
+
         std::vector<WorkerSubtitleSession> worker_subtitle_sessions{};
-        if (subtitle_worker_session_template.has_value()) {
+        if (subtitle_worker_session_template.has_value() && strict_same_thread_lifetime_) {
+            strict_subtitle_session_template_ = std::move(subtitle_worker_session_template);
+        } else if (subtitle_worker_session_template.has_value()) {
             worker_subtitle_sessions.reserve(worker_count);
             for (std::size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
                 worker_subtitle_sessions.push_back(
@@ -2369,6 +2382,15 @@ private:
         int scale_width = 0;
         int scale_height = 0;
         AVPixelFormat scale_source_pixel_format = AV_PIX_FMT_NONE;
+
+        if (strict_subtitle_session_template_.has_value()) {
+            try {
+                subtitle_session = create_worker_subtitle_session(*strict_subtitle_session_template_);
+            } catch (...) {
+                record_failure(std::current_exception());
+                return;
+            }
+        }
 
         while (true) {
             VideoProcessTask task{};
@@ -2524,18 +2546,22 @@ private:
                 }
                 ready_available_.notify_all();
             } catch (...) {
-                {
-                    std::lock_guard<std::mutex> lock(mutex_);
-                    if (failure_ == nullptr) {
-                        failure_ = std::current_exception();
-                    }
-                    closing_ = true;
-                }
-                work_available_.notify_all();
-                ready_available_.notify_all();
+                record_failure(std::current_exception());
                 return;
             }
         }
+    }
+
+    void record_failure(std::exception_ptr failure) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (failure_ == nullptr) {
+                failure_ = std::move(failure);
+            }
+            closing_ = true;
+        }
+        work_available_.notify_all();
+        ready_available_.notify_all();
     }
 
     void rethrow_if_failed_locked() const {
@@ -2555,6 +2581,8 @@ private:
     std::size_t outstanding_count_{0};
     std::uint64_t next_ready_order_index_{0};
     std::optional<SubtitleDiagnosticSettings> subtitle_diagnostics_{};
+    std::optional<SubtitleWorkerSessionTemplate> strict_subtitle_session_template_{};
+    bool strict_same_thread_lifetime_{false};
     std::function<bool()> cancellation_requested_{};
     bool closing_{false};
 };
@@ -4461,6 +4489,7 @@ SegmentProcessResult process_segment(
                 .bitmap_mode = runtime_behavior.subtitle_bitmap_mode,
                 .composition_mode = runtime_behavior.subtitle_composition_mode
             },
+            runtime_behavior.subtitle_strict_same_thread,
             cancellation_requested
         );
     }
@@ -5527,6 +5556,7 @@ SegmentProcessResult process_segment(
 struct PreparedSubtitleSession final {
     subtitles::PreparedSubtitleRenderSessionRequest prepared_request{};
     subtitles::SubtitleRenderSessionResult session_result{};
+    bool creation_deferred_to_subtitle_owner_thread{false};
 };
 
 class ScopedTemporaryFile final {
@@ -5600,10 +5630,19 @@ PreparedSubtitleSession create_subtitle_session(
         };
     }
 
+    if (subtitles::runtime::strict_same_thread_lifetime_enabled()) {
+        return PreparedSubtitleSession{
+            .prepared_request = std::move(prepared_request),
+            .session_result = {},
+            .creation_deferred_to_subtitle_owner_thread = true
+        };
+    }
+
     auto session_result = subtitle_renderer.create_session(prepared_request.session_request);
     return PreparedSubtitleSession{
         .prepared_request = std::move(prepared_request),
-        .session_result = std::move(session_result)
+        .session_result = std::move(session_result),
+        .creation_deferred_to_subtitle_owner_thread = false
     };
 }
 
@@ -6015,7 +6054,8 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
                 request.subtitle_settings->value(),
                 request.log_callback
             );
-            if (!prepared_subtitle_session->session_result.succeeded()) {
+            if (!prepared_subtitle_session->creation_deferred_to_subtitle_owner_thread &&
+                !prepared_subtitle_session->session_result.succeeded()) {
                 return make_error(
                     prepared_subtitle_session->session_result.error->message,
                     prepared_subtitle_session->session_result.error->actionable_hint,
@@ -6024,7 +6064,14 @@ StreamingTranscodeResult transcode_impl(const StreamingTranscodeRequest &request
                 );
             }
 
-            prepared_subtitle_session->session_result.session.reset();
+            if (prepared_subtitle_session->creation_deferred_to_subtitle_owner_thread) {
+                emit_runtime_log(
+                    request.log_callback,
+                    "Subtitle strict same-thread mode: main libassmod session creation is deferred to the subtitle-owner worker."
+                );
+            } else {
+                prepared_subtitle_session->session_result.session.reset();
+            }
             throw_if_cancellation_requested(request.cancellation_requested);
             emit_runtime_log(request.log_callback, "Subtitle stage end: prepared session template for worker-local creation.");
         }

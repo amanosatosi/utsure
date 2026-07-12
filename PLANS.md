@@ -1492,9 +1492,39 @@ Follow-up completed:
 
 ## Immediate next milestone
 
+### M53 Internal libassmod strict owner-thread diagnostics
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Preserve M52's external-FFmpeg subprocess diagnostic, but do not treat it as a libassmod ownership fix.
+  * Make `UTSURE_SUBTITLE_STRICT_SAME_THREAD=1` own the internal `operation=compose` libassmod session on one dedicated subtitle worker thread.
+  * Add hard, app-side thread-affinity checks and lifecycle diagnostics for the library, renderer, track, image registration, render, and teardown operations.
+  * Keep the current full-FFmpeg pipeline and its queue architecture; do not port the old encoder backend or queue model.
+
+Implementation approach:
+  * In strict mode, defer main subtitle session construction until the single subtitle worker has started; that worker then creates, configures, renders with, and destroys its session.
+  * Defer strict-mode preflight renderer probing as well, so it does not create a second app-side libassmod session outside that owner worker.
+  * Leave normal-mode worker-local session behavior unchanged.
+  * Capture strict-mode owner and per-object create/destroy thread ids in the existing libassmod lifecycle diagnostics, and reject any libassmod-facing session operation from another thread.
+
+Implemented:
+  * Forced one subtitle worker in strict mode, deferred the main session template to that worker, and kept its complete main-path libassmod session lifetime inside the worker.
+  * Kept strict preflight to file/font validation and deferred app-side renderer/track probing to the same worker-owned session.
+  * Added strict checks around image registration, render access, `ass_render_frame_auto`, RGBA-image cleanup, and teardown; cross-thread render/mutation fails with a lifecycle diagnostic and cross-thread teardown terminates immediately after reporting the violation.
+  * Added lifecycle fields for strict mode, owner, library/renderer/track creation, render, and library/renderer/track destruction thread ids; destruction is sent through the crash-context lifecycle callback.
+  * Added strict-mode runtime/report visibility, a runtime-planning regression check, a strict lifecycle teardown CTest, and a strict internal H.264 burn-in CTest that requests worker-local composition.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation included `git diff --check`, current-branch confirmation, focused searches over the internal `operation=compose` session, and review that no old backend or queue architecture was introduced.
+
 ### M52 Full-FFmpeg strict same-thread diagnostics
 
 Status: Implemented; awaiting GitHub Actions validation
+
+Note: This is intentionally limited to host-side external-FFmpeg subprocess ownership. It does not enforce
+the app-side libassmod session that emits `subtitle render start: operation=compose`; M53 owns that diagnostic.
 
 Scope:
   * Port only the `UTSURE_SUBTITLE_STRICT_SAME_THREAD` ownership intent from the older branch into the current full-FFmpeg hardsub backend.

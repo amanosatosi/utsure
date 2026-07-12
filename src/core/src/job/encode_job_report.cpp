@@ -85,6 +85,7 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
         .subtitle_processing_worker_count = runtime.subtitle_processing_worker_count,
         .video_frame_queue_depth = runtime.video_frame_queue_depth,
         .decoded_audio_block_queue_depth = runtime.decoded_audio_block_queue_depth,
+        .subtitle_strict_same_thread = runtime.subtitle_strict_same_thread,
         .subtitle_bitmap_mode = runtime.subtitle_bitmap_mode,
         .subtitle_composition_mode = runtime.subtitle_composition_mode,
         .subtitle_diagnostics_mode = runtime.subtitle_diagnostics_mode
@@ -171,6 +172,7 @@ std::string format_encode_job_report(const EncodeJobSummary &encode_job_summary)
     report << "streaming.subtitle_workers=" << runtime.subtitle_processing_worker_count << '\n';
     report << "streaming.video_queue_frames=" << runtime.video_frame_queue_depth << '\n';
     report << "streaming.audio_queue_blocks=" << runtime.decoded_audio_block_queue_depth << '\n';
+    report << "streaming.subtitle.strict_same_thread=" << (runtime.subtitle_strict_same_thread ? "1" : "0") << '\n';
     report << "streaming.subtitle.bitmap_mode=" << runtime.subtitle_bitmap_mode << '\n';
     report << "streaming.subtitle.composition_mode=" << runtime.subtitle_composition_mode << '\n';
     report << "streaming.subtitle.diagnostics_mode=" << runtime.subtitle_diagnostics_mode << '\n';
