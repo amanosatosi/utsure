@@ -1734,10 +1734,12 @@ Implemented:
   * Made Windows presentation independent of the main window's foreground/minimized state and non-activating through `WindowDoesNotAcceptFocus`, `WA_ShowWithoutActivating`, `WS_EX_NOACTIVATE`, `WM_MOUSEACTIVATE`, and `SetWindowPos(... SWP_NOACTIVATE)` while retaining global topmost behavior.
   * Positioned the popup against the preferred monitor's available geometry, kept it visible until explicit dismissal, stopped/deleted it during shutdown, and kept all construction, updates, actions, and one-shot Qt Multimedia playback on the GUI layer.
   * Registered both MP3s and both mascot PNGs under Qt resource prefixes, added resource/lifecycle coverage, and registered the new test target in the Windows CI build script.
+  * Windows CI follow-up kept the required Japanese runtime resource aliases but changed the four repository-side source filenames to ASCII after Ninja replaced their Japanese dependency paths with `?` and failed to find them.
 
 Validation:
   * Local compilation and CTest execution were not run because repository instructions reserve them for GitHub Actions; the available local caches also have `CMAKE_CXX_COMPILER-NOTFOUND` and no Qt 6 installation.
   * Static validation passed: `git diff --check`, Windows CI shell syntax, XML/resource existence checks for every `.qrc` entry, Unicode runtime-path searches, and audits confirming sound is triggered only by a new run id and no developer/source/executable-relative notification paths remain.
+  * The first GitHub Actions build reached resource generation and exposed the non-ASCII Ninja dependency-path failure; the follow-up manifest now has ASCII-only physical paths while preserving the original `:/audio/...` and `:/images/...` API verified by the resource test.
 
 ### M55 Legacy Bitmap ownership diagnosis and decoration-rnd lifetime repair
 

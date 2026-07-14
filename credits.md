@@ -16,10 +16,12 @@ The following illustrations are created by すだちみのり and distributed th
 すだちみのり工房:
 
 - `ずんだもんー猫だっこ1.png`
+  - Bundled as `notification-success-zundamon.png` for Windows build-tool compatibility.
   - Used for successful queue completion notifications.
   - Source: 「猫とずんだもん」
 
 - `ずんだもんー落ち込む12.png`
+  - Bundled as `notification-failure-zundamon.png` for Windows build-tool compatibility.
   - Used for failed queue notifications.
   - Source: 「膝を抱えて落ち込むずんだもん」
 
@@ -49,9 +51,11 @@ https://soundeffect-lab.info/
 Assets used:
 
 - `決定ボタンを押す41.mp3`
+  - Bundled as `notification-success.mp3` for Windows build-tool compatibility.
   - Used for successful queue completion notifications.
 
 - `ビープ音4.mp3`
+  - Bundled as `notification-failure.mp3` for Windows build-tool compatibility.
   - Used for failed queue notifications.
 
 The sound effects remain subject to the 効果音ラボ usage terms.
