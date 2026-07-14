@@ -1714,6 +1714,30 @@ Validation:
 
 ## Immediate next milestone
 
+### M58 Per-job forced-notification lifecycle
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Preserve M57's compact UI, WAV sounds, actions, and fixed fade lifetime while changing only the notification trigger and copy from whole-queue to individual job results.
+  * Notify once when each dispatched job attempt reaches the runner controller's authoritative final success or failure result; do not notify for cancellation or queue completion.
+  * Give every job attempt a unique run identity so the same source can notify again when deliberately re-encoded while repeated terminal observations cannot duplicate a result.
+
+Implementation approach:
+  * Assign a notification run id when a runner slot dispatches a job, claim it once at `handle_runner_finished()` or a definitive start refusal, and clear it with the slot.
+  * Build job-specific GUI presentation data from the actual source display name, final output path, and short terminal status already held by `MainWindow`.
+  * Remove the forced-notification call from `finish_queue_run()` and replace queue-oriented component copy/actions with single-job wording and paths.
+
+Implemented:
+  * Replaced queue-run aggregation with a per-dispatch job-run identity and one-time terminal claim; repeated observations of a run cannot present twice, while a deliberate re-encode receives a fresh identity.
+  * Present success/failure only from the runner controller's final job callback or a definitive runner start refusal; canceled jobs are consumed without notification and `finish_queue_run()` no longer presents anything.
+  * Changed notification copy and actions to use the completed job's actual display name/output path while preserving the existing compact SVG-inspired UI, WAV mapping, and three-second plus five-second lifetime.
+
+Validation:
+  * Updated the notification tracker/resource test for unique job-run identities, duplicate terminal rejection, later reruns, and retained WAV/mascot/logo resources.
+  * Static validation confirmed that `ForcedQueueNotification::present()` is called only by the per-job terminal helper and no queue-finished presentation remains.
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+
 ### M57 Compact forced notification, WAV playback, and fixed lifetime
 
 Status: Implemented; awaiting GitHub Actions validation

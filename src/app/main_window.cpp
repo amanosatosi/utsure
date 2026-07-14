@@ -2343,7 +2343,6 @@ void MainWindow::dropEvent(QDropEvent *event) {
 
 void MainWindow::closeEvent(QCloseEvent *event) {
     shutting_down_ = true;
-    queue_notification_tracker_.abandon();
     if (forced_queue_notification_ != nullptr) {
         delete forced_queue_notification_;
         forced_queue_notification_ = nullptr;
@@ -6286,12 +6285,6 @@ void MainWindow::handle_preflighted_queue_jobs(std::vector<MainWindow::Preflight
 
     queue_quarantine_baseline_ = EncodeJobRunnerController::quarantined_worker_count();
     queue_run_active_ = true;
-    std::vector<int> planned_job_indices{};
-    planned_job_indices.reserve(planned_queue_jobs_.size());
-    for (const auto &planned_job : planned_queue_jobs_) {
-        planned_job_indices.push_back(planned_job.job_index);
-    }
-    queue_notification_tracker_.begin(++queue_run_sequence_, planned_job_indices);
     ensure_runner_slot_count(configured_parallel_job_count());
     QString memory_suffix = " | RSS unavailable | Peak RSS unavailable";
     if (const auto memory = sample_process_memory(); memory.has_value()) {
@@ -6327,7 +6320,6 @@ void MainWindow::start_available_queued_jobs() {
     const std::size_t quarantine_count = EncodeJobRunnerController::quarantined_worker_count();
     if (quarantine_count > queue_quarantine_baseline_) {
         queue_stop_due_to_failure_ = true;
-        queue_notification_tracker_.mark_run_failure("Encode worker failure stopped the queue");
         append_session_log(
             QString("[error] Encode worker quarantine increased during queue run; stopping further dispatch. Quarantine count: %1 (baseline %2).")
                 .arg(static_cast<qulonglong>(quarantine_count))
@@ -6347,7 +6339,6 @@ void MainWindow::start_available_queued_jobs() {
         auto &slot = runner_slots_[static_cast<std::size_t>(slot_index)];
         auto &planned_job = planned_queue_jobs_[static_cast<std::size_t>(queue_cursor_++)];
         if (!is_valid_job_index(planned_job.job_index) || slot.controller == nullptr) {
-            queue_notification_tracker_.mark_run_failure("The encode runner could not start a queued job");
             continue;
         }
 
@@ -6363,6 +6354,7 @@ void MainWindow::start_available_queued_jobs() {
         job.speed_display.clear();
 
         slot.active_job_index = planned_job.job_index;
+        slot.notification_run_id = job_notification_tracker_.begin_job_run();
         slot.elapsed_timer.restart();
         slot.elapsed_valid = true;
 
@@ -6396,13 +6388,15 @@ void MainWindow::start_available_queued_jobs() {
             job.last_status_message = "Encode failed to start.";
             job.last_details_summary = "The encode runner refused to accept the selected job.";
             append_job_log(planned_job.job_index, "[error] Encode runner refused to start the queued job.");
-            queue_notification_tracker_.record_job_result(
+            present_job_terminal_notification(
                 planned_job.job_index,
+                slot.notification_run_id,
                 false,
-                false,
+                job.last_status_message,
                 job.output_path
             );
             slot.active_job_index = -1;
+            slot.notification_run_id = 0;
             slot.elapsed_valid = false;
             continue;
         }
@@ -6459,8 +6453,6 @@ void MainWindow::stop_encode_queue() {
 }
 
 void MainWindow::finish_queue_run() {
-    const bool stopped = stop_requested_;
-    const auto terminal_notification = queue_notification_tracker_.finish(stopped);
     queue_run_active_ = false;
     stop_requested_ = false;
     queue_stop_due_to_failure_ = false;
@@ -6469,12 +6461,39 @@ void MainWindow::finish_queue_run() {
     queue_quarantine_baseline_ = EncodeJobRunnerController::quarantined_worker_count();
     for (auto &slot : runner_slots_) {
         slot.active_job_index = -1;
+        slot.notification_run_id = 0;
         slot.elapsed_valid = false;
     }
     refresh_all_views();
-    if (!shutting_down_ && terminal_notification.has_value() && forced_queue_notification_ != nullptr) {
-        forced_queue_notification_->present(*terminal_notification);
+}
+
+void MainWindow::present_job_terminal_notification(
+    const int job_index,
+    const quint64 job_run_id,
+    const bool succeeded,
+    const QString &status_text,
+    const QString &output_path
+) {
+    if (!job_notification_tracker_.claim_terminal(job_run_id) || shutting_down_ ||
+        forced_queue_notification_ == nullptr || !is_valid_job_index(job_index)) {
+        return;
     }
+
+    const auto &job = jobs_[static_cast<std::size_t>(job_index)];
+    QString failure_summary = status_text.simplified();
+    constexpr qsizetype kMaximumFailureSummaryLength = 160;
+    if (failure_summary.size() > kMaximumFailureSummaryLength) {
+        failure_summary = failure_summary.left(kMaximumFailureSummaryLength - 1) + QStringLiteral("\u2026");
+    }
+
+    forced_queue_notification_->present(utsure::app::JobTerminalNotificationData{
+        .run_id = job_run_id,
+        .outcome = succeeded ? utsure::app::JobTerminalNotificationOutcome::succeeded
+                             : utsure::app::JobTerminalNotificationOutcome::failed,
+        .job_display_name = queue_source_display_name(job),
+        .output_path = QDir::toNativeSeparators(output_path.trimmed()),
+        .failure_summary = succeeded ? QString{} : failure_summary
+    });
 }
 
 void MainWindow::append_session_log(const QString &line) {
@@ -6620,7 +6639,9 @@ void MainWindow::handle_runner_finished(
     auto &slot = runner_slots_[static_cast<std::size_t>(slot_index)];
     const int job_index = slot.active_job_index;
     if (job_index < 0 || job_index >= static_cast<int>(jobs_.size())) {
+        static_cast<void>(job_notification_tracker_.claim_terminal(slot.notification_run_id));
         slot.active_job_index = -1;
+        slot.notification_run_id = 0;
         slot.elapsed_valid = false;
         if (stop_requested_ && active_runner_count() == 0) {
             append_session_log("[warning] Queue stopped.");
@@ -6665,15 +6686,29 @@ void MainWindow::handle_runner_finished(
         append_job_log(job_index, "[error] Encode failed.");
     }
 
-    queue_notification_tracker_.record_job_result(
-        job_index,
-        succeeded,
-        canceled,
-        job.output_path
-    );
+    if (succeeded) {
+        present_job_terminal_notification(
+            job_index,
+            slot.notification_run_id,
+            true,
+            status_text,
+            job.output_path
+        );
+    } else if (canceled) {
+        static_cast<void>(job_notification_tracker_.claim_terminal(slot.notification_run_id));
+    } else {
+        present_job_terminal_notification(
+            job_index,
+            slot.notification_run_id,
+            false,
+            status_text,
+            job.output_path
+        );
+    }
 
     append_job_log(job_index, details_text, false);
     slot.active_job_index = -1;
+    slot.notification_run_id = 0;
     slot.elapsed_valid = false;
 
     if (stop_requested_) {

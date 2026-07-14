@@ -47,8 +47,8 @@ constexpr int kFadeDurationMs = 5000;
 static_assert(kPanelWidth >= 500 && kPanelWidth <= 560);
 static_assert(kPanelHeight >= 250 && kPanelHeight <= 290);
 
-bool is_success(const QueueTerminalNotificationData &data) {
-    return data.outcome == QueueTerminalNotificationOutcome::succeeded;
+bool is_success(const JobTerminalNotificationData &data) {
+    return data.outcome == JobTerminalNotificationOutcome::succeeded;
 }
 
 QString sound_status_name(const QSoundEffect::Status status) {
@@ -287,7 +287,7 @@ void ForcedQueueNotification::set_log_handler(std::function<void(const QString &
     log_handler_ = std::move(handler);
 }
 
-void ForcedQueueNotification::present(const QueueTerminalNotificationData &data) {
+void ForcedQueueNotification::present(const JobTerminalNotificationData &data) {
 #ifndef _WIN32
     Q_UNUSED(data);
     return;
@@ -422,55 +422,45 @@ void ForcedQueueNotification::update_content() {
             : QStringLiteral("\u30C0\u30E1\u3060\u3063\u305F\u306E\u3060")
     );
     if (success) {
-        const QString job_word = data.successful_job_count == 1 ? "job" : "jobs";
         result_label_->setText(
-            QString("Queue finished<br><span style='color:#C9D8CC'>%1 %2 completed successfully</span>")
-                .arg(data.successful_job_count)
-                .arg(job_word)
+            QStringLiteral("Encode finished<br><span style='color:#C9D8CC'>Job completed successfully</span>")
         );
         update_mascot(QStringLiteral(":/images/\u305A\u3093\u3060\u3082\u3093\u30FC\u732B\u3060\u3063\u30531.png"));
     } else {
-        const QString summary = data.failure_summary.trimmed().isEmpty()
-            ? QString("One or more encode jobs failed")
-            : data.failure_summary.trimmed();
-        result_label_->setText(QString("Queue failed<br><span style='color:#DDC6C8'>%1</span>").arg(summary.toHtmlEscaped()));
+        result_label_->setText(
+            QStringLiteral("Encode failed<br><span style='color:#DDC6C8'>Job could not be completed</span>")
+        );
         update_mascot(QStringLiteral(":/images/\u305A\u3093\u3060\u3082\u3093\u30FC\u843D\u3061\u8FBC\u308012.png"));
     }
     result_label_->setTextFormat(Qt::RichText);
 
-    const QString shared_directory = shared_output_directory();
-    if (success && data.successful_job_count == 1 && data.completed_output_paths.size() == 1) {
-        const QString output_path = data.completed_output_paths.front();
+    const QString directory = output_directory();
+    if (success && !data.output_path.trimmed().isEmpty()) {
         information_label_->setText(
             QString("<b style='color:#F4EEF0'>Output:</b>&nbsp;&nbsp;%1<br><b style='color:#F4EEF0'>Saved to:</b>&nbsp;&nbsp;%2")
-                .arg(QFileInfo(output_path).fileName().toHtmlEscaped(), QDir::toNativeSeparators(shared_directory).toHtmlEscaped())
+                .arg(
+                    QFileInfo(data.output_path).fileName().toHtmlEscaped(),
+                    QDir::toNativeSeparators(directory).toHtmlEscaped()
+                )
         );
         primary_button_->setText("Open File");
         primary_button_->setVisible(true);
         secondary_button_->setText("Open Folder");
-        secondary_button_->setVisible(!shared_directory.isEmpty());
+        secondary_button_->setVisible(!directory.isEmpty());
     } else if (success) {
-        const QString output_word = data.successful_job_count == 1 ? "output" : "outputs";
-        const bool all_output_locations_known =
-            data.completed_output_paths.size() == data.successful_job_count;
-        const QString location = !all_output_locations_known
-            ? QString("Output locations unavailable")
-            : shared_directory.isEmpty()
-                ? QString("Outputs saved to multiple folders")
-                : QString("Saved to: %1").arg(QDir::toNativeSeparators(shared_directory));
         information_label_->setText(
-            QString("<b style='color:#F4EEF0'>Queue:</b>&nbsp;&nbsp;%1 %2 completed<br><b style='color:#F4EEF0'>Location:</b>&nbsp;&nbsp;%3")
-                .arg(data.successful_job_count)
-                .arg(output_word, location.toHtmlEscaped())
+            QString("<b style='color:#F4EEF0'>Job:</b>&nbsp;&nbsp;%1<br><b style='color:#F4EEF0'>Output:</b>&nbsp;&nbsp;Output path unavailable")
+                .arg(data.job_display_name.toHtmlEscaped())
         );
-        primary_button_->setText("Open Folder");
-        primary_button_->setVisible(!shared_directory.isEmpty());
+        primary_button_->setVisible(false);
         secondary_button_->setVisible(false);
     } else {
+        const QString failure_summary = data.failure_summary.trimmed().isEmpty()
+            ? QStringLiteral("See logs for failure details")
+            : data.failure_summary.trimmed();
         information_label_->setText(
-            QString("<b style='color:#F4EEF0'>Completed successfully:</b>&nbsp;&nbsp;%1 of %2<br><b style='color:#F4EEF0'>Details:</b>&nbsp;&nbsp;See logs for failure details")
-                .arg(data.successful_job_count)
-                .arg(data.total_job_count)
+            QString("<b style='color:#F4EEF0'>Job:</b>&nbsp;&nbsp;%1<br><b style='color:#F4EEF0'>Details:</b>&nbsp;&nbsp;%2")
+                .arg(data.job_display_name.toHtmlEscaped(), failure_summary.toHtmlEscaped())
         );
         primary_button_->setText("Open Logs");
         primary_button_->setVisible(true);
@@ -649,9 +639,7 @@ void ForcedQueueNotification::handle_primary_action() {
         return;
     }
 
-    const QString target = data.completed_output_paths.size() == 1
-        ? data.completed_output_paths.front()
-        : shared_output_directory();
+    const QString target = data.output_path.trimmed();
     if (!target.isEmpty() && !QDesktopServices::openUrl(QUrl::fromLocalFile(target))) {
         log_message(QString("[warning] Forced notification action could not open: %1").arg(target));
     }
@@ -660,7 +648,7 @@ void ForcedQueueNotification::handle_primary_action() {
 
 void ForcedQueueNotification::handle_secondary_action() {
     stop_lifetime();
-    const QString target = shared_output_directory();
+    const QString target = output_directory();
     if (!target.isEmpty() && !QDesktopServices::openUrl(QUrl::fromLocalFile(target))) {
         log_message(QString("[warning] Forced notification action could not open folder: %1").arg(target));
     }
@@ -673,25 +661,11 @@ void ForcedQueueNotification::log_message(const QString &message) const {
     }
 }
 
-QString ForcedQueueNotification::shared_output_directory() const {
-    if (!current_data_.has_value() || current_data_->completed_output_paths.isEmpty()) {
+QString ForcedQueueNotification::output_directory() const {
+    if (!current_data_.has_value() || current_data_->output_path.trimmed().isEmpty()) {
         return {};
     }
-    if (is_success(*current_data_) &&
-        current_data_->completed_output_paths.size() != current_data_->successful_job_count) {
-        return {};
-    }
-
-    const QString first_directory = normalized_parent_directory(current_data_->completed_output_paths.front());
-    if (first_directory.isEmpty()) {
-        return {};
-    }
-    for (const QString &path : current_data_->completed_output_paths) {
-        if (normalized_parent_directory(path).compare(first_directory, Qt::CaseInsensitive) != 0) {
-            return {};
-        }
-    }
-    return first_directory;
+    return normalized_parent_directory(current_data_->output_path);
 }
 
 }  // namespace utsure::app

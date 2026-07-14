@@ -27,7 +27,7 @@ public:
 
     void set_open_logs_handler(std::function<void()> handler);
     void set_log_handler(std::function<void(const QString &)> handler);
-    void present(const QueueTerminalNotificationData &data);
+    void present(const JobTerminalNotificationData &data);
     void dismiss();
 
 protected:
@@ -51,9 +51,9 @@ private:
     void handle_primary_action();
     void handle_secondary_action();
     void log_message(const QString &message) const;
-    [[nodiscard]] QString shared_output_directory() const;
+    [[nodiscard]] QString output_directory() const;
 
-    std::optional<QueueTerminalNotificationData> current_data_{};
+    std::optional<JobTerminalNotificationData> current_data_{};
     QPointer<QWidget> owner_window_{};
     quint64 last_presented_run_id_{0};
     quint64 audio_failure_logged_run_id_{0};

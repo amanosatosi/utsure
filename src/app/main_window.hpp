@@ -157,6 +157,7 @@ private:
     struct RunnerSlot final {
         EncodeJobRunnerController *controller{nullptr};
         int active_job_index{-1};
+        quint64 notification_run_id{0};
         QElapsedTimer elapsed_timer{};
         bool elapsed_valid{false};
     };
@@ -308,6 +309,13 @@ private:
     void start_available_queued_jobs();
     void stop_encode_queue();
     void finish_queue_run();
+    void present_job_terminal_notification(
+        int job_index,
+        quint64 job_run_id,
+        bool succeeded,
+        const QString &status_text,
+        const QString &output_path
+    );
     void append_session_log(const QString &line);
     void append_job_log(int job_index, const QString &line, bool mirror_to_session = true);
     void update_job_progress(
@@ -343,8 +351,7 @@ private:
     bool stop_requested_{false};
     bool queue_stop_due_to_failure_{false};
     bool shutting_down_{false};
-    quint64 queue_run_sequence_{0};
-    utsure::app::QueueTerminalNotificationTracker queue_notification_tracker_{};
+    utsure::app::JobTerminalNotificationTracker job_notification_tracker_{};
     bool loading_selected_job_{false};
     bool suppress_queue_table_changes_{false};
     bool taskbar_progress_visible_{false};
