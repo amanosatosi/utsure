@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.26)
 
-project(utsure VERSION 0.1.0 LANGUAGES CXX)
+project(utsure VERSION 1.0 LANGUAGES CXX)
 
 option(UTSURE_BUILD_APP "Build the Qt 6 Widgets desktop application." ON)
 option(UTSURE_ENABLE_ADDRESS_SANITIZER "Enable AddressSanitizer for supported compiler toolchains." OFF)

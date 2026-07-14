@@ -1,70 +1,75 @@
-# utsure
+# Utsure v1.0
 
-`utsure` is a new desktop video encoder repository built around a reusable C++ core and a thin Qt 6 Widgets GUI.
+Utsure is a Windows-first desktop video encoder for batch encoding and ASS/SSA hardsub workflows. Version 1.0 is the first release-ready milestone of the Qt 6 application and its reusable C++ media core.
 
-## Current scope
+## Highlights
 
-The repository currently contains the initial project skeleton plus the first usable desktop GUI, the media inspection and decode path, minimal software video encode backends, a core encode-job model, a subtitle renderer abstraction, and `libassmod` subtitle burn-in:
+- Drag files or folders into a naturally ordered encode queue and edit multiple queued jobs.
+- Run jobs sequentially or with configurable parallel encoding.
+- Encode H.264 with `libx264` or H.265 with `libx265`, with CRF, preset, resize, and reusable profile controls.
+- Change the active encode process priority while work is running.
+- Use a bounded-memory FFmpeg streaming pipeline for decode, conversion, audio processing, video encode, and muxing.
+- Encode AAC audio, copy compatible source audio, disable audio, or select a specific source track.
+- Burn ASS/SSA subtitles through `libassmod`, including bundled-font preparation and supported `\img` sidecar assets.
+- Automatically match subtitles or select them manually per job.
+- Preview video and audio, step through frames, jump to a timestamp, and set trim boundaries.
+- Compose intro, main, and end-card/outro media while retaining the main video's output frame rate.
+- Generate output names from configurable tokens and avoid collisions across a batch.
+- Follow each active job through the Windows taskbar progress indicator and receive compact per-job success/failure notifications.
+- Inspect per-job and session logs; Windows crash dumps include build and runtime diagnostics.
 
-- `utsure_encoder_core`: reusable C++ target for media inspection, source decode normalization, bounded-memory streaming transcode, minimal software video encode backends, and future media, timeline, subtitle, and broader encode logic.
-- `utsure_encoder_app`: Qt 6 Widgets desktop app that builds and runs the supported encode job flow against the core.
-- Windows GitHub Actions build validation and portable artifact packaging using MSYS2 UCRT64, CMake, Ninja, Qt 6 Widgets, a pinned source build of FFmpeg 7.1.2, `libx264`, `libx265`, and a pinned source build of `libassmod`.
+## Windows release
 
-Implemented so far:
+The supported v1.0 release format is a portable Windows x64 `.zip` bundle. It includes `utsure.exe`, the Qt runtime, required media/subtitle libraries, the ASS font-collection helper, licenses, and dependency manifests.
 
-- FFmpeg-based primary stream inspection into structured core metadata.
-- Main-source decode into normalized internal video frame and audio sample objects with explicit timestamps.
-- Main-source software video encode backends for `libx264` and `libx265` with minimal codec, preset, and CRF settings.
-- A core job/config layer that drives inspect -> bounded-memory streaming transcode -> muxed audio/video encode without introducing GUI-bound settings types.
-- A technology-agnostic subtitle renderer/session boundary with timestamped RGBA-oriented overlay contracts.
-- A `libassmod`-backed subtitle burn-in path that renders ASS subtitles onto decoded RGBA frames before final encode without relying on FFmpeg `libavfilter`.
-- Host-side `\img` asset resolution, decode, and registration for libassmod scripts that reference external image assets, while libassmod remains responsible for rendering the tag.
-- A core timeline layer that assembles intro/main/outro segments, preserves the main clip cadence, stitches aligned normalized audio, and feeds the existing encode-job path.
-- A bounded-memory streaming encode path centered on FFmpeg 7.1 `libavformat`, `libavcodec`, `libswscale`, and `libswresample`, with incremental demux/decode/subtitle-composite/encode/mux instead of full decoded-clip buffering.
-- A first usable Qt 6 Widgets window for selecting source/subtitle/intro/outro assets, choosing H.264 or H.265 with preset and CRF, setting an output path, starting the encode, and viewing progress, logs, and errors.
+To use it:
 
-These milestones are currently covered by the Windows GitHub Actions build and test workflow.
+1. Extract the complete portable archive to a writable folder.
+2. Keep the bundled files and directories together.
+3. Run `utsure.exe`.
+4. Add source videos or folders, configure the selected jobs, choose output paths, and start the queue.
 
-Not implemented yet:
+Utsure v1.0 is portable rather than installed. It does not currently include an installer, code signing, automatic updates, or file associations.
 
-- Hardware-accelerated decode/encode paths.
-- Linux/macOS validation beyond the documented Windows-first workflow.
+## Version identity
 
-## Developer handoff
+The application identifies itself as version `1.0` in its window title, Qt application metadata, information dialog, startup/build diagnostics, and crash reports. CMake's top-level project version is the authoritative source for normal builds.
 
-Start here when picking up the repository:
+## Supported pipeline
 
-- `docs/setup/windows-msys2.md`: supported local setup, build, test, and packaging commands
-- `docs/release/windows-portable.md`: current packaging and release expectations for the Windows bundle
-- `docs/roadmap.md`: near-term versus later work
-- `docs/architecture/streaming-transcode-pipeline.md`: active streaming-pipeline data flow, queue limits, and lifetime rules
+Utsure v1.0 uses:
 
-## Layout
+- C++20 and Qt 6 Widgets for the desktop application.
+- A pinned Mangetsu FFmpeg 7.1-based build for the media pipeline.
+- FFMS2 for preview indexing and frame access.
+- `libx264` and `libx265` for software video encoding.
+- Mangetsu `libassmod` for subtitle rendering.
+- FontCollector for preparing fonts used by ASS subtitle scripts.
 
-- `src/core/`: reusable core target and public headers.
-- `src/app/`: Qt 6 Widgets desktop application.
-- `cmake/`: small CMake helpers shared by repository targets.
-- `docs/architecture/`: architecture notes for the current skeleton.
-- `docs/setup/`: Windows-first setup notes for developers and CI.
-- `scripts/ci/`: CI entry points.
+The application is Windows-first. Linux and macOS builds are not release-validated yet, and hardware-accelerated encode/decode is not part of v1.0.
 
-## Build validation
+## Building and validation
 
-The repository is set up to build in GitHub Actions on Windows. The workflow:
+GitHub Actions is the authoritative build and test environment. The Windows workflow builds the pinned dependencies, configures with CMake and Ninja under MSYS2 UCRT64, builds the app and test targets, runs the automated validation set, packages the portable bundle, extracts it, and smoke-tests the packaged application outside the build tree.
 
-1. Installs the MSYS2 UCRT64 toolchain and binary dependencies.
-2. Builds pinned FFmpeg 7.1.2 and `libassmod` source dependencies into isolated prefixes.
-3. Audits configure-time dependency discovery, including explicit prefix validation and FFmpeg 7.1.x series checks for the active core-library set.
-4. Configures the project with CMake.
-5. Builds `utsure_encoder_core`, `utsure_encoder_app`, and the core media inspection, decode, encode, timeline, job-level encode, subtitle-renderer abstraction, and subtitle burn-in test executables.
-6. Generates deterministic sample media and subtitle files and runs the core inspection, decode, encode, timeline, job-level encode, subtitle-renderer abstraction, and subtitle burn-in tests, including audio-bearing streaming outputs and RGBA-capable libassmod subtitle coverage.
-7. Launches the Qt app in offscreen smoke-test mode and prints the window structure summary.
-8. Packages a portable Windows bundle with `windeployqt`, bundled non-Qt DLLs, a downloadable `.zip` artifact, and a post-package extract-and-launch validation pass.
+Developer and release documentation:
 
-See:
+- [`docs/setup/windows-msys2.md`](docs/setup/windows-msys2.md) — supported development setup and commands.
+- [`docs/release/windows-portable.md`](docs/release/windows-portable.md) — portable packaging process and release checklist.
+- [`docs/architecture/streaming-transcode-pipeline.md`](docs/architecture/streaming-transcode-pipeline.md) — streaming media-pipeline design.
+- [`docs/architecture/dependencies.md`](docs/architecture/dependencies.md) — dependency discovery and pinning.
+- [`docs/dev/crash-dumps.md`](docs/dev/crash-dumps.md) — Windows crash-dump behavior.
+- [`docs/roadmap.md`](docs/roadmap.md) — deferred and future work.
 
-- `docs/architecture/dependencies.md`
-- `docs/architecture/adapters.md`
-- `docs/setup/windows-msys2.md`
-- `docs/release/windows-portable.md`
-- `docs/roadmap.md`
+## Repository layout
+
+- `src/core/` — reusable media, job, timeline, subtitle, and encode logic.
+- `src/app/` — Qt 6 Widgets desktop application and Windows integration.
+- `tests/` — core and application tests, including real-media CI smoke coverage.
+- `cmake/` — dependency and compiler configuration.
+- `scripts/ci/` — Windows dependency builds, validation, and portable packaging.
+- `docs/` — architecture, setup, release, and diagnostic documentation.
+
+## Credits and license
+
+Utsure's source code is available under the [MIT License](LICENSE). Bundled third-party libraries and media assets retain their own licenses and usage terms. See [CREDITS.md](CREDITS.md) and the manifests included in the portable bundle for attribution and dependency details.

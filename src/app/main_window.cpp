@@ -3712,7 +3712,7 @@ void MainWindow::show_info_dialog() {
     QMessageBox::information(
         this,
         "utsure",
-        QString("%1 %2\n\nQueue-based desktop shell over encoder-core.\n\nThis slice updates the UI around queue editing, preview/task logs, and placeholder surfaces for unfinished features.")
+        QString("%1 %2\n\nWindows desktop video encoder with batch queues, FFmpeg media processing, and libassmod subtitle burn-in.")
             .arg(to_qstring(utsure::core::BuildInfo::project_name()))
             .arg(to_qstring(utsure::core::BuildInfo::project_version()))
     );

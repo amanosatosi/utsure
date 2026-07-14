@@ -1714,6 +1714,28 @@ Validation:
 
 ## Immediate next milestone
 
+### M60 Utsure v1.0 release identity and README
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Promote the application/build identity from the original `0.1.0` skeleton version to the first user-facing `1.0` release.
+  * Replace the branch README's obsolete skeleton/unfinished-feature description with an accurate Windows v1.0 product, usage, distribution, development, and limitations overview.
+
+Implementation approach:
+  * Update CMake's authoritative project version and the core fallback so Qt application metadata, the window title, info dialog, and crash/build diagnostics agree on `1.0`.
+  * Refresh stale build-state/about copy and rewrite `README.md` from the current implemented application and documented portable-release workflow without changing packaging architecture.
+
+Implemented:
+  * Promoted the top-level CMake project and standalone core fallback to version `1.0`, which feeds the Qt application version, main-window title, and build/crash diagnostic paths.
+  * Replaced the obsolete skeleton build-state and information-dialog copy with the v1.0 Windows encoder identity.
+  * Rewrote `README.md` as a v1.0 release overview covering implemented workflows, portable Windows use, version identity, supported dependencies, development validation, known platform limits, repository layout, licensing, and credits.
+
+Validation:
+  * Static searches found no active `0.1.0`, project-skeleton, placeholder-surface, or unfinished-feature wording outside this historical milestone note.
+  * Verified all repository-relative links in the new README resolve to existing files and `git diff --check` passes.
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+
 ### M59 Compact 480 x 230 forced-notification layout
 
 Status: Implemented; awaiting GitHub Actions validation
