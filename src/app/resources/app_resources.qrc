@@ -23,4 +23,12 @@
     <file alias="Pyidaungsu-2.5.3_Regular.ttf">fonts/Pyidaungsu-2.5.3_Regular.ttf</file>
     <file alias="Pyidaungsu-2.5.3_Bold.ttf">fonts/Pyidaungsu-2.5.3_Bold.ttf</file>
   </qresource>
+  <qresource prefix="/audio">
+    <file alias="決定ボタンを押す41.mp3">audio/決定ボタンを押す41.mp3</file>
+    <file alias="ビープ音4.mp3">audio/ビープ音4.mp3</file>
+  </qresource>
+  <qresource prefix="/images">
+    <file alias="ずんだもんー猫だっこ1.png">images/ずんだもんー猫だっこ1.png</file>
+    <file alias="ずんだもんー落ち込む12.png">images/ずんだもんー落ち込む12.png</file>
+  </qresource>
 </RCC>

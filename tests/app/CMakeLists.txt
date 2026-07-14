@@ -134,6 +134,29 @@ add_test(
     COMMAND utsure_app_windows_taskbar_progress_tests
 )
 
+add_executable(utsure_app_queue_terminal_notification_tests
+    queue_terminal_notification_tests.cpp
+    "${CMAKE_SOURCE_DIR}/src/app/queue_terminal_notification.cpp"
+    "${CMAKE_SOURCE_DIR}/src/app/queue_terminal_notification.hpp"
+    "${CMAKE_SOURCE_DIR}/src/app/resources/app_resources.qrc"
+)
+
+set_target_properties(utsure_app_queue_terminal_notification_tests PROPERTIES AUTORCC ON)
+
+target_include_directories(utsure_app_queue_terminal_notification_tests
+    PRIVATE
+        "${CMAKE_SOURCE_DIR}/src/app"
+)
+
+target_link_libraries(utsure_app_queue_terminal_notification_tests PRIVATE Qt6::Core)
+target_compile_features(utsure_app_queue_terminal_notification_tests PRIVATE cxx_std_20)
+utsure_enable_warnings(utsure_app_queue_terminal_notification_tests)
+
+add_test(
+    NAME utsure.app.queue_terminal_notification
+    COMMAND utsure_app_queue_terminal_notification_tests
+)
+
 find_program(UTSURE_APP_FFMPEG_EXECUTABLE NAMES ffmpeg)
 if(NOT UTSURE_APP_FFMPEG_EXECUTABLE AND DEFINED ENV{CI})
     message(FATAL_ERROR "ffmpeg is required in CI for the app encode-runner real cancel/destroy lifecycle smoke.")
@@ -499,6 +522,7 @@ utsure_label_tests_matching("^utsure\\.app\\.batch_import_planner$" unit smoke)
 utsure_label_tests_matching("^utsure\\.app\\.ui_font$" integration smoke)
 utsure_label_tests_matching("^utsure\\.app\\.crash_dump_writer$" unit smoke)
 utsure_label_tests_matching("^utsure\\.app\\.windows_taskbar_progress$" unit smoke)
+utsure_label_tests_matching("^utsure\\.app\\.queue_terminal_notification$" unit smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.lifecycle$" integration smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.real_cancel_destroy$" integration media smoke)
 utsure_label_tests_matching("^utsure\\.app\\.encode_job_runner\\.parallel_smokes$" integration media smoke)

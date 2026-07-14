@@ -3,6 +3,7 @@
 #include "batch_import_planner.hpp"
 #include "encode_job_duplicate.hpp"
 #include "encode_job_runner_controller.hpp"
+#include "forced_queue_notification.hpp"
 #include "preview_audio_controller.hpp"
 #include "preview_frame_renderer_controller.hpp"
 #include "preview_surface_widget.hpp"
@@ -1895,14 +1896,14 @@ QLabel#PreviewTimeBadge {
     special_tab_layout->addStretch(1);
     editor_tabs_->addTab(wrap_in_scroll_area(special_tab_content, editor_tabs_), "Special");
 
-    auto *logs_tab = new QWidget(editor_tabs_);
-    auto *logs_tab_layout = new QVBoxLayout(logs_tab);
+    logs_tab_ = new QWidget(editor_tabs_);
+    auto *logs_tab_layout = new QVBoxLayout(logs_tab_);
     logs_tab_layout->setContentsMargins(8, 8, 8, 8);
-    session_log_view_ = new QPlainTextEdit(logs_tab);
+    session_log_view_ = new QPlainTextEdit(logs_tab_);
     session_log_view_->setReadOnly(true);
     session_log_view_->setLineWrapMode(QPlainTextEdit::NoWrap);
     logs_tab_layout->addWidget(session_log_view_);
-    editor_tabs_->addTab(logs_tab, "Logs");
+    editor_tabs_->addTab(logs_tab_, "Logs");
 
     auto *right_tabs = new QTabWidget(content_splitter);
     right_tabs->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -2239,6 +2240,18 @@ QLabel#PreviewTimeBadge {
     connect(jump_out_button_, &QPushButton::clicked, this, &MainWindow::jump_selected_job_to_out);
     connect(trim_timeline_widget_, &TrimTimelineWidget::seek_requested, this, &MainWindow::handle_timeline_seek);
 
+    forced_queue_notification_ = new utsure::app::ForcedQueueNotification(this);
+    forced_queue_notification_->set_open_logs_handler([this]() {
+        if (!shutting_down_ && editor_tabs_ != nullptr && logs_tab_ != nullptr) {
+            editor_tabs_->setCurrentWidget(logs_tab_);
+        }
+    });
+    forced_queue_notification_->set_log_handler([this](const QString &line) {
+        if (!shutting_down_) {
+            append_session_log(line);
+        }
+    });
+
     append_session_log("[info] Window ready.");
     append_session_log(QString("[info] Settings file: %1").arg(QDir::toNativeSeparators(app_settings_path_)));
     if (!settings_load_result.warning.trimmed().isEmpty()) {
@@ -2246,6 +2259,11 @@ QLabel#PreviewTimeBadge {
     }
     refresh_profile_combo();
     refresh_all_views();
+}
+
+MainWindow::~MainWindow() {
+    delete forced_queue_notification_;
+    forced_queue_notification_ = nullptr;
 }
 
 QString MainWindow::window_structure_summary() const {
@@ -2324,6 +2342,12 @@ void MainWindow::dropEvent(QDropEvent *event) {
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
+    shutting_down_ = true;
+    queue_notification_tracker_.abandon();
+    if (forced_queue_notification_ != nullptr) {
+        delete forced_queue_notification_;
+        forced_queue_notification_ = nullptr;
+    }
     persist_intro_outro_settings_from_editor();
     QMainWindow::closeEvent(event);
 }
@@ -6109,6 +6133,7 @@ void MainWindow::start_encode_queue() {
     planned_queue_jobs_.clear();
     queue_cursor_ = 0;
     stop_requested_ = false;
+    queue_stop_due_to_failure_ = false;
 
     std::vector<int> checked_job_indices{};
     checked_job_indices.reserve(jobs_.size());
@@ -6261,6 +6286,12 @@ void MainWindow::handle_preflighted_queue_jobs(std::vector<MainWindow::Preflight
 
     queue_quarantine_baseline_ = EncodeJobRunnerController::quarantined_worker_count();
     queue_run_active_ = true;
+    std::vector<int> planned_job_indices{};
+    planned_job_indices.reserve(planned_queue_jobs_.size());
+    for (const auto &planned_job : planned_queue_jobs_) {
+        planned_job_indices.push_back(planned_job.job_index);
+    }
+    queue_notification_tracker_.begin(++queue_run_sequence_, planned_job_indices);
     ensure_runner_slot_count(configured_parallel_job_count());
     QString memory_suffix = " | RSS unavailable | Peak RSS unavailable";
     if (const auto memory = sample_process_memory(); memory.has_value()) {
@@ -6295,13 +6326,14 @@ void MainWindow::start_available_queued_jobs() {
 
     const std::size_t quarantine_count = EncodeJobRunnerController::quarantined_worker_count();
     if (quarantine_count > queue_quarantine_baseline_) {
-        stop_requested_ = true;
+        queue_stop_due_to_failure_ = true;
+        queue_notification_tracker_.mark_run_failure("Encode worker failure stopped the queue");
         append_session_log(
             QString("[error] Encode worker quarantine increased during queue run; stopping further dispatch. Quarantine count: %1 (baseline %2).")
                 .arg(static_cast<qulonglong>(quarantine_count))
                 .arg(static_cast<qulonglong>(queue_quarantine_baseline_))
         );
-        refresh_all_views();
+        stop_encode_queue();
         return;
     }
 
@@ -6315,6 +6347,7 @@ void MainWindow::start_available_queued_jobs() {
         auto &slot = runner_slots_[static_cast<std::size_t>(slot_index)];
         auto &planned_job = planned_queue_jobs_[static_cast<std::size_t>(queue_cursor_++)];
         if (!is_valid_job_index(planned_job.job_index) || slot.controller == nullptr) {
+            queue_notification_tracker_.mark_run_failure("The encode runner could not start a queued job");
             continue;
         }
 
@@ -6363,6 +6396,12 @@ void MainWindow::start_available_queued_jobs() {
             job.last_status_message = "Encode failed to start.";
             job.last_details_summary = "The encode runner refused to accept the selected job.";
             append_job_log(planned_job.job_index, "[error] Encode runner refused to start the queued job.");
+            queue_notification_tracker_.record_job_result(
+                planned_job.job_index,
+                false,
+                false,
+                job.output_path
+            );
             slot.active_job_index = -1;
             slot.elapsed_valid = false;
             continue;
@@ -6386,7 +6425,11 @@ void MainWindow::stop_encode_queue() {
     }
 
     stop_requested_ = true;
-    append_session_log("[warning] Stop requested. Canceling active jobs and leaving queued jobs pending.");
+    append_session_log(
+        queue_stop_due_to_failure_
+            ? "[error] Queue entered a failed state. Canceling active jobs and leaving queued jobs pending."
+            : "[warning] Stop requested. Canceling active jobs and leaving queued jobs pending."
+    );
     for (auto &slot : runner_slots_) {
         if (slot.controller == nullptr || !slot.controller->is_running()) {
             continue;
@@ -6395,7 +6438,12 @@ void MainWindow::stop_encode_queue() {
         if (slot.active_job_index >= 0 && slot.active_job_index < static_cast<int>(jobs_.size())) {
             jobs_[static_cast<std::size_t>(slot.active_job_index)].state = UiJobState::cancel_requested;
             jobs_[static_cast<std::size_t>(slot.active_job_index)].last_status_message = "Cancel requested.";
-            append_job_log(slot.active_job_index, "[warning] Cancel requested by user.");
+            append_job_log(
+                slot.active_job_index,
+                queue_stop_due_to_failure_
+                    ? "[warning] Cancel requested because the queue entered a failed state."
+                    : "[warning] Cancel requested by user."
+            );
         }
 
         slot.controller->cancel_job();
@@ -6411,8 +6459,11 @@ void MainWindow::stop_encode_queue() {
 }
 
 void MainWindow::finish_queue_run() {
+    const bool stopped = stop_requested_;
+    const auto terminal_notification = queue_notification_tracker_.finish(stopped);
     queue_run_active_ = false;
     stop_requested_ = false;
+    queue_stop_due_to_failure_ = false;
     planned_queue_jobs_.clear();
     queue_cursor_ = 0;
     queue_quarantine_baseline_ = EncodeJobRunnerController::quarantined_worker_count();
@@ -6421,6 +6472,9 @@ void MainWindow::finish_queue_run() {
         slot.elapsed_valid = false;
     }
     refresh_all_views();
+    if (!shutting_down_ && terminal_notification.has_value() && forced_queue_notification_ != nullptr) {
+        forced_queue_notification_->present(*terminal_notification);
+    }
 }
 
 void MainWindow::append_session_log(const QString &line) {
@@ -6610,6 +6664,13 @@ void MainWindow::handle_runner_finished(
         job.remaining_ms = -1;
         append_job_log(job_index, "[error] Encode failed.");
     }
+
+    queue_notification_tracker_.record_job_result(
+        job_index,
+        succeeded,
+        canceled,
+        job.output_path
+    );
 
     append_job_log(job_index, details_text, false);
     slot.active_job_index = -1;

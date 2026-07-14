@@ -1714,6 +1714,31 @@ Validation:
 
 ## Immediate next milestone
 
+### M56 Windows forced queue-finished notifications
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Show one persistent, non-activating Windows popup when an active encode queue reaches a genuine success or failure terminal state.
+  * Follow the supplied green/red SVG mockups, using the existing Utsure logo plus the bundled success/failure mascot and MP3 resources.
+  * Keep notification presentation, actions, positioning, and sound on the GUI thread without changing queue scheduling or encode behavior.
+
+Implementation approach:
+  * Derive a run-scoped presentation result only at the existing queue terminal boundary, recording each planned job outcome once and distinguishing real failures from a clean user cancellation.
+  * Add one reusable top-level notification component with Windows no-activate/topmost behavior, available-work-area placement, persistent dismissal, and replacement by a newer run result.
+  * Reuse Qt resource paths, Qt Multimedia, desktop services, and the existing Logs tab; add focused lifecycle-summary tests and static resource checks.
+
+Implemented:
+  * Added a run-scoped terminal-result tracker at the existing queue finish boundary. It records each planned job once, reports success only when all planned jobs succeeded, preserves a real job/start/worker failure through later queue work, ignores clean manual cancellation, and gives every new run its own identity.
+  * Added one reusable frameless green/red popup that closely follows the supplied SVG geometry and palette, uses the real Utsure logo and mapped Zundamon PNG, supplies real output/count summaries and allowed actions, and replaces an older visible result instead of stacking.
+  * Made Windows presentation independent of the main window's foreground/minimized state and non-activating through `WindowDoesNotAcceptFocus`, `WA_ShowWithoutActivating`, `WS_EX_NOACTIVATE`, `WM_MOUSEACTIVATE`, and `SetWindowPos(... SWP_NOACTIVATE)` while retaining global topmost behavior.
+  * Positioned the popup against the preferred monitor's available geometry, kept it visible until explicit dismissal, stopped/deleted it during shutdown, and kept all construction, updates, actions, and one-shot Qt Multimedia playback on the GUI layer.
+  * Registered both MP3s and both mascot PNGs under Qt resource prefixes, added resource/lifecycle coverage, and registered the new test target in the Windows CI build script.
+
+Validation:
+  * Local compilation and CTest execution were not run because repository instructions reserve them for GitHub Actions; the available local caches also have `CMAKE_CXX_COMPILER-NOTFOUND` and no Qt 6 installation.
+  * Static validation passed: `git diff --check`, Windows CI shell syntax, XML/resource existence checks for every `.qrc` entry, Unicode runtime-path searches, and audits confirming sound is triggered only by a new run id and no developer/source/executable-relative notification paths remain.
+
 ### M55 Legacy Bitmap ownership diagnosis and decoration-rnd lifetime repair
 
 Status: Implemented; awaiting GitHub Actions validation

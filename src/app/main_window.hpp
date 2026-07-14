@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app_settings.hpp"
+#include "queue_terminal_notification.hpp"
 #include "windows_taskbar_progress.hpp"
 #include "utsure/core/job/batch_parallelism.hpp"
 #include "utsure/core/job/encode_job.hpp"
@@ -47,9 +48,14 @@ class QToolButton;
 class QTimer;
 class TrimTimelineWidget;
 
+namespace utsure::app {
+class ForcedQueueNotification;
+}
+
 class MainWindow final : public QMainWindow {
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+    ~MainWindow() override;
 
     [[nodiscard]] QString window_structure_summary() const;
     enum class UiJobState : std::uint8_t {
@@ -335,6 +341,10 @@ private:
     bool queue_run_active_{false};
     bool queue_start_planning_active_{false};
     bool stop_requested_{false};
+    bool queue_stop_due_to_failure_{false};
+    bool shutting_down_{false};
+    quint64 queue_run_sequence_{0};
+    utsure::app::QueueTerminalNotificationTracker queue_notification_tracker_{};
     bool loading_selected_job_{false};
     bool suppress_queue_table_changes_{false};
     bool taskbar_progress_visible_{false};
@@ -371,6 +381,7 @@ private:
     QPushButton *output_browse_button_{nullptr};
     QCheckBox *same_as_input_check_{nullptr};
     QTabWidget *editor_tabs_{nullptr};
+    QWidget *logs_tab_{nullptr};
     QCheckBox *subtitle_enable_check_{nullptr};
     QLineEdit *subtitle_path_edit_{nullptr};
     QPushButton *subtitle_auto_button_{nullptr};
@@ -432,6 +443,7 @@ private:
     QTimer *preview_playback_timer_{nullptr};
     PreviewAudioController *preview_audio_controller_{nullptr};
     PreviewFrameRendererController *preview_renderer_controller_{nullptr};
+    utsure::app::ForcedQueueNotification *forced_queue_notification_{nullptr};
     utsure::core::job::ParallelBatchSettings parallel_batch_settings_{};
     utsure::core::job::ParallelBatchSummary parallel_batch_summary_{};
     AppSettings app_settings_{};

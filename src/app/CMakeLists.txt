@@ -19,6 +19,8 @@ qt_add_executable(utsure_encoder_app WIN32
     encode_job_runner_controller.hpp
     encode_job_runner_worker.cpp
     encode_job_runner_worker.hpp
+    forced_queue_notification.cpp
+    forced_queue_notification.hpp
     main.cpp
     main_window.cpp
     main_window.hpp
@@ -32,6 +34,8 @@ qt_add_executable(utsure_encoder_app WIN32
     preview_frame_renderer_worker.hpp
     preview_surface_widget.cpp
     preview_surface_widget.hpp
+    queue_terminal_notification.cpp
+    queue_terminal_notification.hpp
     resources/app_resources.qrc
     trim_timeline_widget.cpp
     trim_timeline_widget.hpp
