@@ -1,9 +1,42 @@
 #include "queue_terminal_notification.hpp"
 
+#include <QByteArray>
 #include <QFile>
 
 #include <cassert>
 #include <vector>
+
+namespace {
+
+quint16 read_little_endian_u16(const QByteArray &bytes, const qsizetype offset) {
+    assert(offset >= 0 && offset + 2 <= bytes.size());
+    return static_cast<quint16>(static_cast<unsigned char>(bytes[offset])) |
+        static_cast<quint16>(static_cast<unsigned char>(bytes[offset + 1]) << 8U);
+}
+
+quint32 read_little_endian_u32(const QByteArray &bytes, const qsizetype offset) {
+    assert(offset >= 0 && offset + 4 <= bytes.size());
+    return static_cast<quint32>(static_cast<unsigned char>(bytes[offset])) |
+        (static_cast<quint32>(static_cast<unsigned char>(bytes[offset + 1])) << 8U) |
+        (static_cast<quint32>(static_cast<unsigned char>(bytes[offset + 2])) << 16U) |
+        (static_cast<quint32>(static_cast<unsigned char>(bytes[offset + 3])) << 24U);
+}
+
+void assert_notification_wav(const QString &resource_path) {
+    QFile wav_file(resource_path);
+    assert(wav_file.open(QIODevice::ReadOnly));
+    const QByteArray header = wav_file.read(44);
+    assert(header.size() == 44);
+    assert(header.mid(0, 4) == "RIFF");
+    assert(header.mid(8, 4) == "WAVE");
+    assert(header.mid(12, 4) == "fmt ");
+    assert(read_little_endian_u16(header, 20) == 1);      // PCM
+    assert(read_little_endian_u16(header, 22) == 1);      // mono
+    assert(read_little_endian_u32(header, 24) == 48000);  // Hz
+    assert(read_little_endian_u16(header, 34) == 16);     // bits per sample
+}
+
+}  // namespace
 
 int main() {
     Q_INIT_RESOURCE(app_resources);
@@ -53,8 +86,10 @@ int main() {
     assert(forced_failure->outcome == QueueTerminalNotificationOutcome::failed);
     assert(forced_failure->failure_summary == "Encode worker failure stopped the queue");
 
-    assert(QFile::exists(QStringLiteral(":/audio/\u6C7A\u5B9A\u30DC\u30BF\u30F3\u3092\u62BC\u305941.mp3")));
-    assert(QFile::exists(QStringLiteral(":/audio/\u30D3\u30FC\u30D7\u97F34.mp3")));
+    assert(QFile::exists(QStringLiteral(":/audio/\u6C7A\u5B9A\u30DC\u30BF\u30F3\u3092\u62BC\u305941.wav")));
+    assert(QFile::exists(QStringLiteral(":/audio/\u30D3\u30FC\u30D7\u97F34.wav")));
+    assert_notification_wav(QStringLiteral(":/audio/\u6C7A\u5B9A\u30DC\u30BF\u30F3\u3092\u62BC\u305941.wav"));
+    assert_notification_wav(QStringLiteral(":/audio/\u30D3\u30FC\u30D7\u97F34.wav"));
     assert(QFile::exists(QStringLiteral(":/images/\u305A\u3093\u3060\u3082\u3093\u30FC\u732B\u3060\u3063\u30531.png")));
     assert(QFile::exists(QStringLiteral(":/images/\u305A\u3093\u3060\u3082\u3093\u30FC\u843D\u3061\u8FBC\u308012.png")));
     assert(QFile::exists(":/icons/logo.svg"));

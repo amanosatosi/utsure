@@ -1,24 +1,26 @@
 #include "forced_queue_notification.hpp"
 
-#include <QAudioOutput>
 #include <QCloseEvent>
 #include <QDesktopServices>
 #include <QDir>
+#include <QEasingCurve>
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLinearGradient>
-#include <QMediaPlayer>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
 #include <QPixmap>
+#include <QPropertyAnimation>
 #include <QPushButton>
 #include <QScreen>
 #include <QShowEvent>
+#include <QSoundEffect>
 #include <QSvgRenderer>
+#include <QTimer>
 #include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -37,12 +39,30 @@
 namespace utsure::app {
 namespace {
 
-constexpr int kPanelWidth = 880;
-constexpr int kPanelHeight = 430;
-constexpr int kWorkAreaMargin = 24;
+constexpr int kPanelWidth = 540;
+constexpr int kPanelHeight = 270;
+constexpr int kWorkAreaMargin = 18;
+constexpr int kFullyVisibleDurationMs = 3000;
+constexpr int kFadeDurationMs = 5000;
+static_assert(kPanelWidth >= 500 && kPanelWidth <= 560);
+static_assert(kPanelHeight >= 250 && kPanelHeight <= 290);
 
 bool is_success(const QueueTerminalNotificationData &data) {
     return data.outcome == QueueTerminalNotificationOutcome::succeeded;
+}
+
+QString sound_status_name(const QSoundEffect::Status status) {
+    switch (status) {
+    case QSoundEffect::Null:
+        return "Null";
+    case QSoundEffect::Loading:
+        return "Loading";
+    case QSoundEffect::Ready:
+        return "Ready";
+    case QSoundEffect::Error:
+        return "Error";
+    }
+    return "Unknown";
 }
 
 QPixmap render_svg_pixmap(const QString &resource_path, const QSize &logical_size) {
@@ -63,7 +83,7 @@ QPixmap render_svg_pixmap(const QString &resource_path, const QSize &logical_siz
 class StatusIconWidget final : public QWidget {
 public:
     explicit StatusIconWidget(QWidget *parent) : QWidget(parent) {
-        setFixedSize(86, 86);
+        setFixedSize(54, 54);
         setAttribute(Qt::WA_TransparentForMouseEvents);
     }
 
@@ -79,19 +99,19 @@ protected:
         const QColor fill = success_ ? QColor("#123B22") : QColor("#40191B");
         const QColor outline = success_ ? QColor("#7FEA8B") : QColor("#FF7C7C");
         const QColor mark = success_ ? QColor("#9BFFA6") : QColor("#FFA0A0");
-        painter.setPen(QPen(outline, 4.0));
+        painter.setPen(QPen(outline, 2.5));
         painter.setBrush(fill);
-        painter.drawEllipse(QRectF(3.0, 3.0, 80.0, 80.0));
-        painter.setPen(QPen(mark, 7.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawEllipse(QRectF(2.0, 2.0, 50.0, 50.0));
+        painter.setPen(QPen(mark, 4.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         if (success_) {
             QPainterPath check;
-            check.moveTo(23.0, 44.0);
-            check.lineTo(37.0, 58.0);
-            check.lineTo(64.0, 29.0);
+            check.moveTo(14.0, 28.0);
+            check.lineTo(23.0, 37.0);
+            check.lineTo(40.0, 18.0);
             painter.drawPath(check);
         } else {
-            painter.drawLine(QPointF(27.0, 27.0), QPointF(59.0, 59.0));
-            painter.drawLine(QPointF(59.0, 27.0), QPointF(27.0, 59.0));
+            painter.drawLine(QPointF(17.0, 17.0), QPointF(37.0, 37.0));
+            painter.drawLine(QPointF(37.0, 17.0), QPointF(17.0, 37.0));
         }
     }
 
@@ -120,16 +140,16 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
     setFixedSize(kPanelWidth, kPanelHeight);
 
     auto *root_layout = new QVBoxLayout(this);
-    root_layout->setContentsMargins(34, 24, 34, 24);
-    root_layout->setSpacing(10);
+    root_layout->setContentsMargins(18, 14, 18, 14);
+    root_layout->setSpacing(6);
 
     auto *header = new QWidget(this);
-    header->setFixedHeight(62);
+    header->setFixedHeight(38);
     auto *header_layout = new QHBoxLayout(header);
     header_layout->setContentsMargins(0, 0, 0, 0);
-    header_layout->setSpacing(12);
+    header_layout->setSpacing(8);
     auto *logo_label = new QLabel(header);
-    logo_label->setFixedSize(58, 58);
+    logo_label->setFixedSize(36, 36);
     logo_label->setPixmap(render_svg_pixmap(":/icons/logo.svg", logo_label->size()));
     logo_label->setScaledContents(false);
     logo_label->setAlignment(Qt::AlignCenter);
@@ -141,10 +161,10 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
 
     forced_badge_ = new QWidget(header);
     forced_badge_->setObjectName("ForcedNotificationBadge");
-    forced_badge_->setFixedSize(195, 44);
+    forced_badge_->setFixedSize(142, 30);
     auto *badge_layout = new QHBoxLayout(forced_badge_);
-    badge_layout->setContentsMargins(16, 0, 16, 0);
-    badge_layout->setSpacing(8);
+    badge_layout->setContentsMargins(10, 0, 10, 0);
+    badge_layout->setSpacing(5);
     auto *bolt_label = new QLabel(QStringLiteral("\u26A1"), forced_badge_);
     bolt_label->setObjectName("ForcedNotificationBolt");
     auto *badge_label = new QLabel("Forced Notification", forced_badge_);
@@ -156,7 +176,7 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
     close_button_ = new QToolButton(header);
     close_button_->setObjectName("ForcedNotificationClose");
     close_button_->setText(QStringLiteral("\u00D7"));
-    close_button_->setFixedSize(36, 36);
+    close_button_->setFixedSize(28, 28);
     close_button_->setCursor(Qt::PointingHandCursor);
     close_button_->setFocusPolicy(Qt::NoFocus);
     header_layout->addWidget(close_button_, 0, Qt::AlignVCenter);
@@ -164,15 +184,15 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
 
     auto *content = new QWidget(this);
     auto *content_layout = new QHBoxLayout(content);
-    content_layout->setContentsMargins(10, 0, 10, 0);
-    content_layout->setSpacing(20);
+    content_layout->setContentsMargins(5, 0, 5, 0);
+    content_layout->setSpacing(10);
     status_icon_ = new StatusIconWidget(content);
     content_layout->addWidget(status_icon_, 0, Qt::AlignTop);
 
     auto *text_column = new QWidget(content);
     auto *text_layout = new QVBoxLayout(text_column);
-    text_layout->setContentsMargins(0, 2, 0, 0);
-    text_layout->setSpacing(5);
+    text_layout->setContentsMargins(0, 1, 0, 0);
+    text_layout->setSpacing(3);
     title_label_ = new QLabel(text_column);
     title_label_->setObjectName("ForcedNotificationTitle");
     result_label_ = new QLabel(text_column);
@@ -187,28 +207,29 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
     information_label_->setTextFormat(Qt::RichText);
     text_layout->addWidget(title_label_);
     text_layout->addWidget(result_label_);
-    text_layout->addSpacing(8);
+    text_layout->addSpacing(3);
     text_layout->addWidget(separator);
-    text_layout->addSpacing(7);
+    text_layout->addSpacing(3);
     text_layout->addWidget(information_label_, 1, Qt::AlignTop);
     content_layout->addWidget(text_column, 1);
 
     mascot_label_ = new QLabel(content);
     mascot_label_->setObjectName("ForcedNotificationMascot");
-    mascot_label_->setFixedSize(220, 210);
+    mascot_label_->setFixedSize(130, 128);
     mascot_label_->setAlignment(Qt::AlignCenter | Qt::AlignBottom);
     content_layout->addWidget(mascot_label_, 0, Qt::AlignTop);
     root_layout->addWidget(content, 1);
 
     auto *button_row = new QHBoxLayout();
-    button_row->setContentsMargins(3, 0, 3, 0);
-    button_row->setSpacing(15);
+    button_row->setContentsMargins(2, 0, 2, 0);
+    button_row->setSpacing(8);
     primary_button_ = new QPushButton(this);
     secondary_button_ = new QPushButton(this);
     dismiss_button_ = new QPushButton("Dismiss", this);
     for (QPushButton *button : {primary_button_, secondary_button_, dismiss_button_}) {
-        button->setFixedHeight(52);
-        button->setMinimumWidth(190);
+        button->setFixedHeight(36);
+        button->setMinimumWidth(104);
+        button->setMaximumWidth(132);
         button->setCursor(Qt::PointingHandCursor);
         button->setFocusPolicy(Qt::NoFocus);
     }
@@ -221,30 +242,41 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
     button_row->addWidget(dismiss_button_, 1);
     root_layout->addLayout(button_row);
 
-    media_player_ = new QMediaPlayer(this);
-    audio_output_ = new QAudioOutput(this);
-    audio_output_->setVolume(0.85F);
-    media_player_->setAudioOutput(audio_output_);
+    success_sound_ = new QSoundEffect(this);
+    success_sound_->setLoopCount(1);
+    success_sound_->setVolume(0.85F);
+    success_sound_->setSource(QUrl(QStringLiteral("qrc:/audio/\u6C7A\u5B9A\u30DC\u30BF\u30F3\u3092\u62BC\u305941.wav")));
+    failure_sound_ = new QSoundEffect(this);
+    failure_sound_->setLoopCount(1);
+    failure_sound_->setVolume(0.85F);
+    failure_sound_->setSource(QUrl(QStringLiteral("qrc:/audio/\u30D3\u30FC\u30D7\u97F34.wav")));
+    visible_timer_ = new QTimer(this);
+    visible_timer_->setSingleShot(true);
+    fade_animation_ = new QPropertyAnimation(this, "windowOpacity", this);
+    fade_animation_->setDuration(kFadeDurationMs);
+    fade_animation_->setStartValue(1.0);
+    fade_animation_->setEndValue(0.0);
+    fade_animation_->setEasingCurve(QEasingCurve::InOutQuad);
 
     connect(close_button_, &QToolButton::clicked, this, [this]() { dismiss(); });
     connect(dismiss_button_, &QPushButton::clicked, this, [this]() { dismiss(); });
     connect(primary_button_, &QPushButton::clicked, this, [this]() { handle_primary_action(); });
     connect(secondary_button_, &QPushButton::clicked, this, [this]() { handle_secondary_action(); });
-    connect(media_player_, &QMediaPlayer::errorOccurred, this, [this](QMediaPlayer::Error, const QString &error_text) {
-        if (!current_data_.has_value() || audio_failure_logged_run_id_ == current_data_->run_id) {
-            return;
+    connect(success_sound_, &QSoundEffect::statusChanged, this, [this]() {
+        if (success_sound_->status() == QSoundEffect::Error) {
+            log_sound_failure_once(true, success_sound_, "QSoundEffect entered Error status");
         }
-        audio_failure_logged_run_id_ = current_data_->run_id;
-        log_message(QString("[warning] Forced notification audio playback failed: %1").arg(error_text));
+    });
+    connect(failure_sound_, &QSoundEffect::statusChanged, this, [this]() {
+        if (failure_sound_->status() == QSoundEffect::Error) {
+            log_sound_failure_once(false, failure_sound_, "QSoundEffect entered Error status");
+        }
     });
 }
 
 ForcedQueueNotification::~ForcedQueueNotification() {
-    if (media_player_ != nullptr) {
-        media_player_->stop();
-        media_player_->setSource(QUrl{});
-    }
-    audio_resource_.reset();
+    stop_lifetime();
+    stop_sounds();
 }
 
 void ForcedQueueNotification::set_open_logs_handler(std::function<void()> handler) {
@@ -264,25 +296,24 @@ void ForcedQueueNotification::present(const QueueTerminalNotificationData &data)
         return;
     }
 
+    stop_lifetime();
+    setWindowOpacity(1.0);
     last_presented_run_id_ = data.run_id;
     current_data_ = data;
     apply_theme();
     update_content();
     position_inside_work_area();
     apply_windows_no_activate(true);
-    play_sound_once(
-        is_success(data)
-            ? QStringLiteral(":/audio/\u6C7A\u5B9A\u30DC\u30BF\u30F3\u3092\u62BC\u305941.mp3")
-            : QStringLiteral(":/audio/\u30D3\u30FC\u30D7\u97F34.mp3")
-    );
+    play_sound_once(is_success(data));
+    start_lifetime(data.run_id);
 #endif
 }
 
 void ForcedQueueNotification::dismiss() {
-    if (media_player_ != nullptr) {
-        media_player_->stop();
-    }
+    stop_lifetime();
+    stop_sounds();
     hide();
+    setWindowOpacity(1.0);
 }
 
 void ForcedQueueNotification::paintEvent(QPaintEvent *) {
@@ -293,26 +324,26 @@ void ForcedQueueNotification::paintEvent(QPaintEvent *) {
     QLinearGradient background(panel_rect.topLeft(), panel_rect.bottomRight());
     background.setColorAt(0.0, success ? QColor("#0F1B18") : QColor("#211112"));
     background.setColorAt(1.0, success ? QColor("#14231B") : QColor("#2B1416"));
-    painter.setPen(QPen(success ? QColor("#65C96F") : QColor("#E35D5D"), 2.5));
+    painter.setPen(QPen(success ? QColor("#65C96F") : QColor("#E35D5D"), 1.5));
     painter.setBrush(background);
-    painter.drawRoundedRect(panel_rect, 30.0, 30.0);
+    painter.drawRoundedRect(panel_rect, 18.0, 18.0);
 
     painter.save();
     QPainterPath clip;
-    clip.addRoundedRect(panel_rect, 30.0, 30.0);
+    clip.addRoundedRect(panel_rect, 18.0, 18.0);
     painter.setClipPath(clip);
     QPainterPath curve;
-    curve.moveTo(-20.0, 360.0);
-    curve.cubicTo(185.0, 295.0, 445.0, 470.0, 900.0, 340.0);
-    curve.lineTo(900.0, 455.0);
-    curve.lineTo(-20.0, 455.0);
+    curve.moveTo(-10.0, 220.0);
+    curve.cubicTo(115.0, 185.0, 280.0, 290.0, 560.0, 205.0);
+    curve.lineTo(560.0, 285.0);
+    curve.lineTo(-10.0, 285.0);
     curve.closeSubpath();
     painter.setPen(Qt::NoPen);
     QColor curve_fill = success ? QColor("#2E7D32") : QColor("#8A2424");
     curve_fill.setAlphaF(0.25);
     painter.setBrush(curve_fill);
     painter.drawPath(curve);
-    painter.setPen(QPen(success ? QColor(143, 227, 154, 46) : QColor(255, 139, 139, 46), 2.0));
+    painter.setPen(QPen(success ? QColor(143, 227, 154, 46) : QColor(255, 139, 139, 46), 1.25));
     painter.setBrush(Qt::NoBrush);
     painter.drawPath(curve);
     painter.restore();
@@ -359,17 +390,17 @@ void ForcedQueueNotification::apply_theme() {
     const QString primary_end = success ? "#79D66F" : "#E56A5B";
     setStyleSheet(QString(R"(
         QWidget { background: transparent; color: #F5F3F5; }
-        QLabel#ForcedNotificationBrand { color: #F7F2E8; font-size: 28px; font-weight: 800; letter-spacing: 2px; }
-        QWidget#ForcedNotificationBadge { background: %1; border-radius: 22px; }
-        QLabel#ForcedNotificationBolt { color: %2; font-size: 18px; font-weight: 800; }
-        QLabel#ForcedNotificationBadgeText { color: #F7F2F3; font-size: 14px; font-weight: 700; }
-        QToolButton#ForcedNotificationClose { color: #EFE8EA; border: none; border-radius: 18px; font-size: 28px; }
+        QLabel#ForcedNotificationBrand { color: #F7F2E8; font-size: 18px; font-weight: 800; letter-spacing: 1px; }
+        QWidget#ForcedNotificationBadge { background: %1; border-radius: 15px; }
+        QLabel#ForcedNotificationBolt { color: %2; font-size: 12px; font-weight: 800; }
+        QLabel#ForcedNotificationBadgeText { color: #F7F2F3; font-size: 10px; font-weight: 700; }
+        QToolButton#ForcedNotificationClose { color: #EFE8EA; border: none; border-radius: 14px; font-size: 20px; }
         QToolButton#ForcedNotificationClose:hover { background: rgba(255, 255, 255, 28); }
-        QLabel#ForcedNotificationTitle { color: %2; font-family: "Yu Gothic UI", "Meiryo UI"; font-size: 40px; font-weight: 800; }
-        QLabel#ForcedNotificationResult { color: #F2EDEF; font-size: 18px; font-weight: 600; }
+        QLabel#ForcedNotificationTitle { color: %2; font-family: "Yu Gothic UI", "Meiryo UI"; font-size: 27px; font-weight: 800; }
+        QLabel#ForcedNotificationResult { color: #F2EDEF; font-size: 12px; font-weight: 600; }
         QWidget#ForcedNotificationSeparator { background: rgba(255, 255, 255, 38); }
-        QLabel#ForcedNotificationInformation { color: #D3CBCD; font-size: 15px; line-height: 1.35; }
-        QPushButton { border-radius: 14px; padding: 0 18px; font-size: 16px; font-weight: 750; }
+        QLabel#ForcedNotificationInformation { color: #D3CBCD; font-size: 11px; }
+        QPushButton { border-radius: 9px; padding: 0 10px; font-size: 11px; font-weight: 750; }
         QPushButton#ForcedNotificationPrimary { color: #101713; border: none; background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 %3, stop:1 %4); }
         QPushButton#ForcedNotificationPrimary:hover { border: 2px solid %2; }
         QPushButton#ForcedNotificationSecondary { color: #F4EEF0; background: #2C292D; border: 1px solid #504A50; }
@@ -503,24 +534,104 @@ void ForcedQueueNotification::apply_windows_no_activate(const bool show_window) 
 #endif
 }
 
-void ForcedQueueNotification::play_sound_once(const QString &resource_path) {
-    if (!current_data_.has_value() || media_player_ == nullptr) {
+void ForcedQueueNotification::play_sound_once(const bool success) {
+    if (!current_data_.has_value()) {
         return;
     }
 
-    media_player_->stop();
-    media_player_->setSource(QUrl{});
-    audio_resource_ = std::make_unique<QFile>(resource_path);
-    if (!audio_resource_->open(QIODevice::ReadOnly)) {
-        if (audio_failure_logged_run_id_ != current_data_->run_id) {
-            audio_failure_logged_run_id_ = current_data_->run_id;
-            log_message(QString("[warning] Forced notification audio resource failed to open: %1").arg(resource_path));
+    stop_sounds();
+    QSoundEffect *sound_effect = success ? success_sound_ : failure_sound_;
+    if (sound_effect == nullptr) {
+        log_sound_failure_once(success, nullptr, "QSoundEffect object is unavailable");
+        return;
+    }
+    const QString resource_path = QStringLiteral(":") + sound_effect->source().path();
+    if (!QFile::exists(resource_path)) {
+        log_sound_failure_once(success, sound_effect, "Qt resource does not exist");
+        return;
+    }
+    if (sound_effect->status() == QSoundEffect::Error) {
+        log_sound_failure_once(success, sound_effect, "QSoundEffect is in Error status");
+        return;
+    }
+    sound_effect->play();
+}
+
+void ForcedQueueNotification::log_sound_failure_once(
+    const bool success,
+    const QSoundEffect *sound_effect,
+    const QString &reason
+) {
+    if (!current_data_.has_value() || is_success(*current_data_) != success ||
+        audio_failure_logged_run_id_ == current_data_->run_id) {
+        return;
+    }
+    audio_failure_logged_run_id_ = current_data_->run_id;
+    const QUrl source = sound_effect == nullptr ? QUrl{} : sound_effect->source();
+    const QString status = sound_effect == nullptr ? QString("Unavailable") : sound_status_name(sound_effect->status());
+    const bool resource_exists = source.isValid() && QFile::exists(QStringLiteral(":") + source.path());
+    log_message(
+        QString("[warning] Forced notification audio failed: state=%1 url=%2 status=%3 resource_exists=%4 reason=%5")
+            .arg(success ? "success" : "failure")
+            .arg(source.toString())
+            .arg(status)
+            .arg(resource_exists ? "true" : "false")
+            .arg(reason)
+    );
+}
+
+void ForcedQueueNotification::start_lifetime(const quint64 run_id) {
+    if (visible_timer_ == nullptr || fade_animation_ == nullptr) {
+        return;
+    }
+    lifetime_run_id_ = run_id;
+    visible_timer_->stop();
+    disconnect(visible_timer_, nullptr, this, nullptr);
+    connect(visible_timer_, &QTimer::timeout, this, [this, run_id]() {
+        if (lifetime_run_id_ == run_id && current_data_.has_value() && current_data_->run_id == run_id) {
+            begin_fade(run_id);
         }
+    });
+    visible_timer_->start(kFullyVisibleDurationMs);
+}
+
+void ForcedQueueNotification::begin_fade(const quint64 run_id) {
+    if (fade_animation_ == nullptr || lifetime_run_id_ != run_id ||
+        !current_data_.has_value() || current_data_->run_id != run_id) {
         return;
     }
+    fade_animation_->stop();
+    disconnect(fade_animation_, nullptr, this, nullptr);
+    fade_animation_->setDuration(kFadeDurationMs);
+    fade_animation_->setStartValue(1.0);
+    fade_animation_->setEndValue(0.0);
+    connect(fade_animation_, &QPropertyAnimation::finished, this, [this, run_id]() {
+        if (lifetime_run_id_ == run_id && current_data_.has_value() && current_data_->run_id == run_id) {
+            dismiss();
+        }
+    });
+    fade_animation_->start();
+}
 
-    media_player_->setSourceDevice(audio_resource_.get(), QUrl(QString("qrc%1").arg(resource_path)));
-    media_player_->play();
+void ForcedQueueNotification::stop_lifetime() {
+    lifetime_run_id_ = 0;
+    if (visible_timer_ != nullptr) {
+        visible_timer_->stop();
+        disconnect(visible_timer_, nullptr, this, nullptr);
+    }
+    if (fade_animation_ != nullptr) {
+        fade_animation_->stop();
+        disconnect(fade_animation_, nullptr, this, nullptr);
+    }
+}
+
+void ForcedQueueNotification::stop_sounds() {
+    if (success_sound_ != nullptr) {
+        success_sound_->stop();
+    }
+    if (failure_sound_ != nullptr) {
+        failure_sound_->stop();
+    }
 }
 
 void ForcedQueueNotification::handle_primary_action() {
@@ -529,6 +640,7 @@ void ForcedQueueNotification::handle_primary_action() {
     }
 
     const auto &data = *current_data_;
+    stop_lifetime();
     if (!is_success(data)) {
         if (open_logs_handler_) {
             open_logs_handler_();
@@ -543,13 +655,16 @@ void ForcedQueueNotification::handle_primary_action() {
     if (!target.isEmpty() && !QDesktopServices::openUrl(QUrl::fromLocalFile(target))) {
         log_message(QString("[warning] Forced notification action could not open: %1").arg(target));
     }
+    dismiss();
 }
 
 void ForcedQueueNotification::handle_secondary_action() {
+    stop_lifetime();
     const QString target = shared_output_directory();
     if (!target.isEmpty() && !QDesktopServices::openUrl(QUrl::fromLocalFile(target))) {
         log_message(QString("[warning] Forced notification action could not open folder: %1").arg(target));
     }
+    dismiss();
 }
 
 void ForcedQueueNotification::log_message(const QString &message) const {

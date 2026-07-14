@@ -1714,6 +1714,34 @@ Validation:
 
 ## Immediate next milestone
 
+### M57 Compact forced notification, WAV playback, and fixed lifetime
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Preserve M56's queue-level terminal trigger and anime-themed success/failure design while reducing the popup to approximately `540 x 270` logical pixels.
+  * Convert the two notification MP3 source assets once to bundled PCM signed 16-bit little-endian, 48 kHz, mono WAV files and play them through persistent `QSoundEffect` objects.
+  * Keep each new result fully visible for three seconds, fade the entire top-level popup over five seconds, then dismiss it; a newer result must safely restart the lifecycle.
+  * Consolidate the existing notification asset attribution in repository-level `CREDITS.md` without changing the assets' stated ownership or usage terms.
+
+Implementation approach:
+  * Scale the current widget's real layout metrics and painter geometry rather than cropping or redesigning it.
+  * Keep two preloaded GUI-owned sound effects and log only resource/status failures associated with a genuinely new run id.
+  * Use one single-shot GUI timer and one `QPropertyAnimation`, stopping both before dismissal, action handling, shutdown, or replacement by a newer notification.
+
+Implemented:
+  * Reduced the existing notification from `880 x 430` to `540 x 270` logical pixels and proportionally adjusted its margins, header, logo, badge, status icon, title, detail text, mascot region, buttons, corner radius, outline, and decorative curve without changing its design or queue content logic.
+  * Converted the two source MP3 effects with the user-provided local FFmpeg to ASCII-named repository WAV assets; FFprobe reports `pcm_s16le`, `48000 Hz`, and one channel for both. The QRC retains Japanese `.wav` aliases and no longer bundles the MP3 files.
+  * Replaced the notification's `QMediaPlayer`/resource-device path with two component-owned, preloaded, one-loop `QSoundEffect` instances and focused failure diagnostics containing state, qrc URL, status, resource existence, and reason.
+  * Added an asynchronous three-second fully opaque phase followed by a five-second `windowOpacity` animation. Explicit dismissal/actions and new results stop and disconnect the previous timer/animation first; captured run ids prevent stale callbacks from closing replacement content.
+  * Made Open File, Open Folder, and Open Logs dismiss after performing their existing actions, while preserving immediate Dismiss/close behavior and the existing queue-run duplicate protection.
+  * Renamed the repository-level attribution file to `CREDITS.md`, preserved the artwork terms, and documented the original Sound Effect Lab MP3s plus the PCM WAV conversions and runtime aliases.
+
+Validation:
+  * FFprobe validation passed for both generated WAV files: `pcm_s16le`, `48000 Hz`, mono; the app resource test now checks the bundled RIFF/WAVE PCM format, channel count, sample rate, and bit depth.
+  * Static validation passed for the `540 x 270`, `3000 ms`, and `5000 ms` constants, QRC source existence/ASCII build paths, absence of notification MP3/FFmpeg runtime references, and `git diff --check`.
+  * Local compilation and interactive Windows playback/focus verification were not run because repository instructions reserve compiling/testing for GitHub Actions and the local workspace has no configured Qt/compiler toolchain.
+
 ### M56 Windows forced queue-finished notifications
 
 Status: Implemented; awaiting GitHub Actions validation

@@ -48,15 +48,25 @@ Notification sound effects are provided by 効果音ラボ (Sound Effect Lab).
 Source:
 https://soundeffect-lab.info/
 
-Assets used:
+Original source assets:
 
 - `決定ボタンを押す41.mp3`
-  - Bundled as `notification-success.mp3` for Windows build-tool compatibility.
   - Used for successful queue completion notifications.
 
 - `ビープ音4.mp3`
-  - Bundled as `notification-failure.mp3` for Windows build-tool compatibility.
   - Used for failed queue notifications.
+
+Utsure bundles PCM signed 16-bit little-endian, 48 kHz, mono WAV conversions
+of these sound effects for notification playback:
+
+- `notification-success.wav`
+  - Qt resource alias: `決定ボタンを押す41.wav`
+
+- `notification-failure.wav`
+  - Qt resource alias: `ビープ音4.wav`
+
+The audio format conversion does not change the ownership or usage terms of
+the original sound effects.
 
 The sound effects remain subject to the 効果音ラボ usage terms.
 

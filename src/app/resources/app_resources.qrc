@@ -24,8 +24,8 @@
     <file alias="Pyidaungsu-2.5.3_Bold.ttf">fonts/Pyidaungsu-2.5.3_Bold.ttf</file>
   </qresource>
   <qresource prefix="/audio">
-    <file alias="決定ボタンを押す41.mp3">audio/notification-success.mp3</file>
-    <file alias="ビープ音4.mp3">audio/notification-failure.mp3</file>
+    <file alias="決定ボタンを押す41.wav">audio/notification-success.wav</file>
+    <file alias="ビープ音4.wav">audio/notification-failure.wav</file>
   </qresource>
   <qresource prefix="/images">
     <file alias="ずんだもんー猫だっこ1.png">images/notification-success-zundamon.png</file>

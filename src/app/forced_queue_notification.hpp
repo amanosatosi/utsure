@@ -6,17 +6,16 @@
 #include <QWidget>
 
 #include <functional>
-#include <memory>
 #include <optional>
 
-class QAudioOutput;
 class QCloseEvent;
-class QFile;
 class QLabel;
-class QMediaPlayer;
 class QPaintEvent;
+class QPropertyAnimation;
 class QPushButton;
 class QShowEvent;
+class QSoundEffect;
+class QTimer;
 class QToolButton;
 
 namespace utsure::app {
@@ -43,7 +42,12 @@ private:
     void update_mascot(const QString &resource_path);
     void position_inside_work_area();
     void apply_windows_no_activate(bool show_window);
-    void play_sound_once(const QString &resource_path);
+    void play_sound_once(bool success);
+    void log_sound_failure_once(bool success, const QSoundEffect *sound_effect, const QString &reason);
+    void start_lifetime(quint64 run_id);
+    void begin_fade(quint64 run_id);
+    void stop_lifetime();
+    void stop_sounds();
     void handle_primary_action();
     void handle_secondary_action();
     void log_message(const QString &message) const;
@@ -65,9 +69,11 @@ private:
     QPushButton *primary_button_{nullptr};
     QPushButton *secondary_button_{nullptr};
     QPushButton *dismiss_button_{nullptr};
-    QMediaPlayer *media_player_{nullptr};
-    QAudioOutput *audio_output_{nullptr};
-    std::unique_ptr<QFile> audio_resource_{};
+    QSoundEffect *success_sound_{nullptr};
+    QSoundEffect *failure_sound_{nullptr};
+    QTimer *visible_timer_{nullptr};
+    QPropertyAnimation *fade_animation_{nullptr};
+    quint64 lifetime_run_id_{0};
 };
 
 }  // namespace utsure::app
