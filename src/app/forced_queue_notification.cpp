@@ -39,13 +39,13 @@
 namespace utsure::app {
 namespace {
 
-constexpr int kPanelWidth = 540;
-constexpr int kPanelHeight = 270;
-constexpr int kWorkAreaMargin = 18;
+constexpr int kPanelWidth = 480;
+constexpr int kPanelHeight = 230;
+constexpr int kWorkAreaMargin = 16;
 constexpr int kFullyVisibleDurationMs = 3000;
 constexpr int kFadeDurationMs = 5000;
-static_assert(kPanelWidth >= 500 && kPanelWidth <= 560);
-static_assert(kPanelHeight >= 250 && kPanelHeight <= 290);
+static_assert(kPanelWidth == 480);
+static_assert(kPanelHeight == 230);
 
 bool is_success(const JobTerminalNotificationData &data) {
     return data.outcome == JobTerminalNotificationOutcome::succeeded;
@@ -83,7 +83,7 @@ QPixmap render_svg_pixmap(const QString &resource_path, const QSize &logical_siz
 class StatusIconWidget final : public QWidget {
 public:
     explicit StatusIconWidget(QWidget *parent) : QWidget(parent) {
-        setFixedSize(54, 54);
+        setFixedSize(46, 46);
         setAttribute(Qt::WA_TransparentForMouseEvents);
     }
 
@@ -99,19 +99,19 @@ protected:
         const QColor fill = success_ ? QColor("#123B22") : QColor("#40191B");
         const QColor outline = success_ ? QColor("#7FEA8B") : QColor("#FF7C7C");
         const QColor mark = success_ ? QColor("#9BFFA6") : QColor("#FFA0A0");
-        painter.setPen(QPen(outline, 2.5));
+        painter.setPen(QPen(outline, 2.0));
         painter.setBrush(fill);
-        painter.drawEllipse(QRectF(2.0, 2.0, 50.0, 50.0));
-        painter.setPen(QPen(mark, 4.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawEllipse(QRectF(2.0, 2.0, 42.0, 42.0));
+        painter.setPen(QPen(mark, 3.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         if (success_) {
             QPainterPath check;
-            check.moveTo(14.0, 28.0);
-            check.lineTo(23.0, 37.0);
-            check.lineTo(40.0, 18.0);
+            check.moveTo(12.0, 24.0);
+            check.lineTo(20.0, 32.0);
+            check.lineTo(34.0, 15.0);
             painter.drawPath(check);
         } else {
-            painter.drawLine(QPointF(17.0, 17.0), QPointF(37.0, 37.0));
-            painter.drawLine(QPointF(37.0, 17.0), QPointF(17.0, 37.0));
+            painter.drawLine(QPointF(14.5, 14.5), QPointF(31.5, 31.5));
+            painter.drawLine(QPointF(31.5, 14.5), QPointF(14.5, 31.5));
         }
     }
 
@@ -140,16 +140,16 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
     setFixedSize(kPanelWidth, kPanelHeight);
 
     auto *root_layout = new QVBoxLayout(this);
-    root_layout->setContentsMargins(18, 14, 18, 14);
-    root_layout->setSpacing(6);
+    root_layout->setContentsMargins(15, 11, 15, 11);
+    root_layout->setSpacing(4);
 
     auto *header = new QWidget(this);
-    header->setFixedHeight(38);
+    header->setFixedHeight(32);
     auto *header_layout = new QHBoxLayout(header);
     header_layout->setContentsMargins(0, 0, 0, 0);
-    header_layout->setSpacing(8);
+    header_layout->setSpacing(7);
     auto *logo_label = new QLabel(header);
-    logo_label->setFixedSize(36, 36);
+    logo_label->setFixedSize(30, 30);
     logo_label->setPixmap(render_svg_pixmap(":/icons/logo.svg", logo_label->size()));
     logo_label->setScaledContents(false);
     logo_label->setAlignment(Qt::AlignCenter);
@@ -161,10 +161,10 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
 
     forced_badge_ = new QWidget(header);
     forced_badge_->setObjectName("ForcedNotificationBadge");
-    forced_badge_->setFixedSize(142, 30);
+    forced_badge_->setFixedSize(126, 26);
     auto *badge_layout = new QHBoxLayout(forced_badge_);
-    badge_layout->setContentsMargins(10, 0, 10, 0);
-    badge_layout->setSpacing(5);
+    badge_layout->setContentsMargins(8, 0, 8, 0);
+    badge_layout->setSpacing(4);
     auto *bolt_label = new QLabel(QStringLiteral("\u26A1"), forced_badge_);
     bolt_label->setObjectName("ForcedNotificationBolt");
     auto *badge_label = new QLabel("Forced Notification", forced_badge_);
@@ -176,7 +176,7 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
     close_button_ = new QToolButton(header);
     close_button_->setObjectName("ForcedNotificationClose");
     close_button_->setText(QStringLiteral("\u00D7"));
-    close_button_->setFixedSize(28, 28);
+    close_button_->setFixedSize(24, 24);
     close_button_->setCursor(Qt::PointingHandCursor);
     close_button_->setFocusPolicy(Qt::NoFocus);
     header_layout->addWidget(close_button_, 0, Qt::AlignVCenter);
@@ -184,15 +184,15 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
 
     auto *content = new QWidget(this);
     auto *content_layout = new QHBoxLayout(content);
-    content_layout->setContentsMargins(5, 0, 5, 0);
-    content_layout->setSpacing(10);
+    content_layout->setContentsMargins(4, 0, 4, 0);
+    content_layout->setSpacing(8);
     status_icon_ = new StatusIconWidget(content);
     content_layout->addWidget(status_icon_, 0, Qt::AlignTop);
 
     auto *text_column = new QWidget(content);
     auto *text_layout = new QVBoxLayout(text_column);
-    text_layout->setContentsMargins(0, 1, 0, 0);
-    text_layout->setSpacing(3);
+    text_layout->setContentsMargins(0, 0, 0, 0);
+    text_layout->setSpacing(2);
     title_label_ = new QLabel(text_column);
     title_label_->setObjectName("ForcedNotificationTitle");
     result_label_ = new QLabel(text_column);
@@ -207,29 +207,29 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
     information_label_->setTextFormat(Qt::RichText);
     text_layout->addWidget(title_label_);
     text_layout->addWidget(result_label_);
-    text_layout->addSpacing(3);
+    text_layout->addSpacing(2);
     text_layout->addWidget(separator);
-    text_layout->addSpacing(3);
+    text_layout->addSpacing(2);
     text_layout->addWidget(information_label_, 1, Qt::AlignTop);
     content_layout->addWidget(text_column, 1);
 
     mascot_label_ = new QLabel(content);
     mascot_label_->setObjectName("ForcedNotificationMascot");
-    mascot_label_->setFixedSize(130, 128);
+    mascot_label_->setFixedSize(112, 108);
     mascot_label_->setAlignment(Qt::AlignCenter | Qt::AlignBottom);
     content_layout->addWidget(mascot_label_, 0, Qt::AlignTop);
     root_layout->addWidget(content, 1);
 
     auto *button_row = new QHBoxLayout();
     button_row->setContentsMargins(2, 0, 2, 0);
-    button_row->setSpacing(8);
+    button_row->setSpacing(6);
     primary_button_ = new QPushButton(this);
     secondary_button_ = new QPushButton(this);
     dismiss_button_ = new QPushButton("Dismiss", this);
     for (QPushButton *button : {primary_button_, secondary_button_, dismiss_button_}) {
-        button->setFixedHeight(36);
-        button->setMinimumWidth(104);
-        button->setMaximumWidth(132);
+        button->setFixedHeight(31);
+        button->setMinimumWidth(90);
+        button->setMaximumWidth(116);
         button->setCursor(Qt::PointingHandCursor);
         button->setFocusPolicy(Qt::NoFocus);
     }
@@ -326,17 +326,17 @@ void ForcedQueueNotification::paintEvent(QPaintEvent *) {
     background.setColorAt(1.0, success ? QColor("#14231B") : QColor("#2B1416"));
     painter.setPen(QPen(success ? QColor("#65C96F") : QColor("#E35D5D"), 1.5));
     painter.setBrush(background);
-    painter.drawRoundedRect(panel_rect, 18.0, 18.0);
+    painter.drawRoundedRect(panel_rect, 15.0, 15.0);
 
     painter.save();
     QPainterPath clip;
-    clip.addRoundedRect(panel_rect, 18.0, 18.0);
+    clip.addRoundedRect(panel_rect, 15.0, 15.0);
     painter.setClipPath(clip);
     QPainterPath curve;
-    curve.moveTo(-10.0, 220.0);
-    curve.cubicTo(115.0, 185.0, 280.0, 290.0, 560.0, 205.0);
-    curve.lineTo(560.0, 285.0);
-    curve.lineTo(-10.0, 285.0);
+    curve.moveTo(-9.0, 187.0);
+    curve.cubicTo(102.0, 158.0, 249.0, 247.0, 498.0, 175.0);
+    curve.lineTo(498.0, 243.0);
+    curve.lineTo(-9.0, 243.0);
     curve.closeSubpath();
     painter.setPen(Qt::NoPen);
     QColor curve_fill = success ? QColor("#2E7D32") : QColor("#8A2424");
@@ -390,17 +390,17 @@ void ForcedQueueNotification::apply_theme() {
     const QString primary_end = success ? "#79D66F" : "#E56A5B";
     setStyleSheet(QString(R"(
         QWidget { background: transparent; color: #F5F3F5; }
-        QLabel#ForcedNotificationBrand { color: #F7F2E8; font-size: 18px; font-weight: 800; letter-spacing: 1px; }
-        QWidget#ForcedNotificationBadge { background: %1; border-radius: 15px; }
-        QLabel#ForcedNotificationBolt { color: %2; font-size: 12px; font-weight: 800; }
-        QLabel#ForcedNotificationBadgeText { color: #F7F2F3; font-size: 10px; font-weight: 700; }
-        QToolButton#ForcedNotificationClose { color: #EFE8EA; border: none; border-radius: 14px; font-size: 20px; }
+        QLabel#ForcedNotificationBrand { color: #F7F2E8; font-size: 16px; font-weight: 800; letter-spacing: 1px; }
+        QWidget#ForcedNotificationBadge { background: %1; border-radius: 13px; }
+        QLabel#ForcedNotificationBolt { color: %2; font-size: 11px; font-weight: 800; }
+        QLabel#ForcedNotificationBadgeText { color: #F7F2F3; font-size: 9px; font-weight: 700; }
+        QToolButton#ForcedNotificationClose { color: #EFE8EA; border: none; border-radius: 12px; font-size: 18px; }
         QToolButton#ForcedNotificationClose:hover { background: rgba(255, 255, 255, 28); }
-        QLabel#ForcedNotificationTitle { color: %2; font-family: "Yu Gothic UI", "Meiryo UI"; font-size: 27px; font-weight: 800; }
-        QLabel#ForcedNotificationResult { color: #F2EDEF; font-size: 12px; font-weight: 600; }
+        QLabel#ForcedNotificationTitle { color: %2; font-family: "Yu Gothic UI", "Meiryo UI"; font-size: 23px; font-weight: 800; }
+        QLabel#ForcedNotificationResult { color: #F2EDEF; font-size: 11px; font-weight: 600; }
         QWidget#ForcedNotificationSeparator { background: rgba(255, 255, 255, 38); }
-        QLabel#ForcedNotificationInformation { color: #D3CBCD; font-size: 11px; }
-        QPushButton { border-radius: 9px; padding: 0 10px; font-size: 11px; font-weight: 750; }
+        QLabel#ForcedNotificationInformation { color: #D3CBCD; font-size: 10px; }
+        QPushButton { border-radius: 8px; padding: 0 8px; font-size: 10px; font-weight: 750; }
         QPushButton#ForcedNotificationPrimary { color: #101713; border: none; background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 %3, stop:1 %4); }
         QPushButton#ForcedNotificationPrimary:hover { border: 2px solid %2; }
         QPushButton#ForcedNotificationSecondary { color: #F4EEF0; background: #2C292D; border: 1px solid #504A50; }

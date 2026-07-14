@@ -1714,6 +1714,28 @@ Validation:
 
 ## Immediate next milestone
 
+### M59 Compact 480 x 230 forced-notification layout
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Preserve the current per-job trigger, visual hierarchy, themes, mascots, sounds, actions, and fixed fade lifetime while reducing the popup to approximately `480 x 230` logical pixels.
+  * Rework the real widget/layout/painter metrics proportionally so no content is cropped or left at the previous oversized scale.
+
+Implementation approach:
+  * Tighten outer/content margins, header and badge geometry, status icon, mascot region, button sizing, and inter-widget spacing as one coordinated layout pass.
+  * Scale typography and decorative painter geometry to the new logical dimensions while keeping the Japanese title prominent and job information readable.
+
+Implemented:
+  * Set the forced notification to `480 x 230` logical pixels and proportionally reduced the outer margins, header/logo/badge/close controls, content spacing, status icon, mascot region, and buttons.
+  * Scaled the Japanese title, result/detail typography, rounded corners, and decorative background curve to preserve the existing visual hierarchy within the smaller panel.
+  * Left per-job presentation, replacement behavior, mascot and WAV mappings, action handling, and the three-second plus five-second lifetime unchanged.
+
+Validation:
+  * Static layout checks confirm the exact `480 x 230` logical size and coordinated smaller child metrics rather than an outer-window-only reduction.
+  * `git diff --check` passed and targeted review confirmed that only layout/painter styling plus this milestone record changed.
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+
 ### M58 Per-job forced-notification lifecycle
 
 Status: Implemented; awaiting GitHub Actions validation
