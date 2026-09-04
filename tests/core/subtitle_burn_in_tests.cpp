@@ -164,7 +164,7 @@ struct SubtitleScheduleDiagnostic final {
     std::string segment_name{};
     std::int64_t output_pts{0};
     std::int64_t segment_relative_timestamp_microseconds{0};
-    std::int64_t subtitle_timestamp_microseconds{0};
+    std::int64_t subtitle_source_time_microseconds{0};
     std::int64_t bitmap_count{0};
     int destination_width{0};
     int destination_height{0};
@@ -263,13 +263,13 @@ std::vector<SubtitleScheduleDiagnostic> collect_subtitle_schedule_diagnostics(
         const auto segment_name = parse_diagnostic_text(message.message, "segment=");
         const auto output_pts = parse_diagnostic_int64(message.message, "output_pts=");
         const auto segment_relative_us = parse_diagnostic_int64(message.message, "segment_relative_us=");
-        const auto subtitle_timestamp_us = parse_diagnostic_int64(message.message, "subtitle_timestamp_us=");
+        const auto subtitle_source_time_us = parse_diagnostic_int64(message.message, "subtitle_source_time_us=");
         const auto bitmap_count = parse_diagnostic_int64(message.message, "bitmap_count=");
         const auto destination = parse_diagnostic_dimensions(message.message, "destination=");
         if (!segment_name.has_value() ||
             !output_pts.has_value() ||
             !segment_relative_us.has_value() ||
-            !subtitle_timestamp_us.has_value() ||
+            !subtitle_source_time_us.has_value() ||
             !bitmap_count.has_value() ||
             !destination.has_value()) {
             continue;
@@ -279,7 +279,7 @@ std::vector<SubtitleScheduleDiagnostic> collect_subtitle_schedule_diagnostics(
             .segment_name = *segment_name,
             .output_pts = *output_pts,
             .segment_relative_timestamp_microseconds = *segment_relative_us,
-            .subtitle_timestamp_microseconds = *subtitle_timestamp_us,
+            .subtitle_source_time_microseconds = *subtitle_source_time_us,
             .bitmap_count = *bitmap_count,
             .destination_width = destination->first,
             .destination_height = destination->second
@@ -347,10 +347,10 @@ void dump_subtitle_schedule_frame_count_diagnostics(
         const auto &last = diagnostics.back();
         std::cerr << "diagnostic.subtitle.first.output_pts=" << first.output_pts << '\n';
         std::cerr << "diagnostic.subtitle.last.output_pts=" << last.output_pts << '\n';
-        std::cerr << "diagnostic.subtitle.first.subtitle_timestamp_us="
-                  << first.subtitle_timestamp_microseconds << '\n';
-        std::cerr << "diagnostic.subtitle.last.subtitle_timestamp_us="
-                  << last.subtitle_timestamp_microseconds << '\n';
+        std::cerr << "diagnostic.subtitle.first.subtitle_source_time_us="
+                  << first.subtitle_source_time_microseconds << '\n';
+        std::cerr << "diagnostic.subtitle.last.subtitle_source_time_us="
+                  << last.subtitle_source_time_microseconds << '\n';
         std::cerr << "diagnostic.subtitle.first.segment_relative_us="
                   << first.segment_relative_timestamp_microseconds << '\n';
         std::cerr << "diagnostic.subtitle.last.segment_relative_us="
@@ -366,7 +366,7 @@ void dump_subtitle_schedule_frame_count_diagnostics(
                   << "segment=" << diagnostic.segment_name
                   << ",output_pts=" << diagnostic.output_pts
                   << ",segment_relative_us=" << diagnostic.segment_relative_timestamp_microseconds
-                  << ",subtitle_timestamp_us=" << diagnostic.subtitle_timestamp_microseconds
+                  << ",subtitle_source_time_us=" << diagnostic.subtitle_source_time_microseconds
                   << ",destination=" << diagnostic.destination_width << 'x' << diagnostic.destination_height
                   << ",bitmap_count=" << diagnostic.bitmap_count
                   << ",subtitle_visible=" << (diagnostic.bitmap_count > 0 ? "yes" : "no")
@@ -800,6 +800,7 @@ int assert_subtitle_render_schedule_diagnostics(
     const std::size_t expected_frame_count,
     const std::int64_t segment_start_microseconds,
     const std::string_view context,
+    const std::int64_t source_trim_start_microseconds = 0,
     const std::optional<std::pair<int, int>> expected_destination_dimensions = std::nullopt
 ) {
     if (summary.streaming_runtime.subtitle_diagnostics_mode == "off") {
@@ -819,26 +820,21 @@ int assert_subtitle_render_schedule_diagnostics(
     }
 
     if (std::llabs(diagnostics.front().segment_relative_timestamp_microseconds) > 1 ||
-        std::llabs(diagnostics.front().subtitle_timestamp_microseconds) > 1) {
+        std::llabs(
+            diagnostics.front().subtitle_source_time_microseconds - source_trim_start_microseconds
+        ) > 1) {
         return fail(
             std::string(context) +
-            " did not start the main-segment subtitle clock near zero."
-        );
-    }
-
-    if (segment_start_microseconds > 0 &&
-        diagnostics.front().subtitle_timestamp_microseconds >=
-            decoded_output.video_frames[output_frame_offset].timestamp.start_microseconds) {
-        return fail(
-            std::string(context) +
-            " included pre-main output time in the first main subtitle timestamp."
+            " did not start the subtitle source/media clock at the requested trim boundary."
         );
     }
 
     for (std::size_t index = 0; index < expected_frame_count; ++index) {
-        const auto expected_timestamp =
+        const auto expected_output_relative_timestamp =
             decoded_output.video_frames[output_frame_offset + index].timestamp.start_microseconds -
             segment_start_microseconds;
+        const auto expected_subtitle_source_time =
+            expected_output_relative_timestamp + source_trim_start_microseconds;
         if (diagnostics[index].segment_name != "main") {
             return fail(
                 std::string(context) +
@@ -848,12 +844,12 @@ int assert_subtitle_render_schedule_diagnostics(
 
         const auto actual_segment_relative_timestamp =
             diagnostics[index].segment_relative_timestamp_microseconds;
-        const auto actual_subtitle_timestamp = diagnostics[index].subtitle_timestamp_microseconds;
-        if (std::llabs(actual_segment_relative_timestamp - expected_timestamp) > 1 ||
-            std::llabs(actual_subtitle_timestamp - expected_timestamp) > 1) {
+        const auto actual_subtitle_source_time = diagnostics[index].subtitle_source_time_microseconds;
+        if (std::llabs(actual_segment_relative_timestamp - expected_output_relative_timestamp) > 1 ||
+            std::llabs(actual_subtitle_source_time - expected_subtitle_source_time) > 1) {
             return fail(
                 std::string(context) +
-                " used a subtitle render timestamp that did not match the segment-relative main clock."
+                " did not convert the output-relative frame time to source/media render time exactly once."
             );
         }
 
@@ -1079,7 +1075,7 @@ int run_img_asset_render_assertion(const std::filesystem::path &subtitle_path) {
     const SubtitleCompositionDebugContext debug_context{
         .decoded_frame_index = 0,
         .output_pts = 0,
-        .subtitle_timestamp_microseconds = 0,
+        .subtitle_source_time_microseconds = 0,
         .worker_id = 0,
         .session_id = 1,
         .log_frame_details = true,
@@ -1174,7 +1170,7 @@ int run_subtitle_render_lifecycle_trace_assertion(
         const SubtitleCompositionDebugContext debug_context{
             .decoded_frame_index = frame_index,
             .output_pts = frame_index,
-            .subtitle_timestamp_microseconds = timestamp_us,
+            .subtitle_source_time_microseconds = timestamp_us,
             .worker_id = 0,
             .session_id = 1,
             .log_frame_details = false,
@@ -1756,7 +1752,7 @@ int run_trimmed_main_burn_in_assertion(
         summary.job.input.main_source_trim_out_us != std::optional<std::int64_t>(1250000) ||
         summary.timeline_summary.output_duration_microseconds != 1000000 ||
         summary.timeline_summary.output_video_frame_count != 24 ||
-        summary.subtitled_video_frame_count != 11 ||
+        summary.subtitled_video_frame_count != 5 ||
         summary.streaming_runtime.subtitle_compose_microseconds == 0U) {
         return fail("Unexpected trimmed subtitle burn-in summary state.");
     }
@@ -1790,7 +1786,7 @@ int run_trimmed_main_burn_in_assertion(
     }
 
     if (!frame_changed(*plain_output_decode.decoded_media_source, *burned_output_decode.decoded_media_source, 0U)) {
-        return fail("Trimmed subtitle burn-in did not alter the first kept output frame.");
+        return fail("A subtitle overlapping trim start was not visible on the first encoded frame.");
     }
 
     const auto report = format_encode_job_report(summary);
@@ -1807,10 +1803,22 @@ int run_trimmed_main_burn_in_assertion(
             0U,
             static_cast<std::size_t>(summary.timeline_summary.output_video_frame_count),
             0,
-            "Trimmed main subtitle render scheduling"
+            "Trimmed main subtitle render scheduling",
+            250000
         );
         if (schedule_result != 0) {
             return schedule_result;
+        }
+
+        const auto diagnostics = collect_subtitle_schedule_diagnostics(observer);
+        if (diagnostics.size() <= 5U ||
+            diagnostics.front().bitmap_count <= 0 ||
+            diagnostics[4].bitmap_count <= 0 ||
+            diagnostics[5].bitmap_count != 0) {
+            return fail(
+                "Trimmed subtitle diagnostics did not preserve the overlap at output zero "
+                "or stop rendering at the original source end time."
+            );
         }
     }
 
@@ -2260,6 +2268,7 @@ int run_timeline_resize_burn_in_assertion(
             main_frame_count,
             summary.timeline_summary.segments[1].start_microseconds,
             "Main-relative resized timeline subtitle render scheduling",
+            0,
             std::pair<int, int>{160, 90}
         );
         if (schedule_result != 0) {
@@ -2393,6 +2402,7 @@ int run_timeline_thumbnail_resize_burn_in_assertion(
             main_frame_count,
             summary.timeline_summary.segments[1].start_microseconds,
             "Resized thumbnail pre-roll main-segment subtitle render scheduling",
+            0,
             std::pair<int, int>{160, 90}
         );
         if (schedule_result != 0) {

@@ -140,7 +140,10 @@ int assert_filter_value_escaping() {
 }
 
 int assert_command_generation() {
-    const auto plan = utsure::core::job::build_ffmpeg_filter_hardsub_command(make_job(), make_plan());
+    auto timeline_plan = make_plan();
+    timeline_plan.segments.front().source_trim_in_microseconds = 250000;
+    timeline_plan.segments.front().source_trim_out_microseconds = 1250000;
+    const auto plan = utsure::core::job::build_ffmpeg_filter_hardsub_command(make_job(), timeline_plan);
 
     std::string joined{};
     for (const auto &argument : plan.arguments) {
@@ -158,6 +161,23 @@ int assert_command_generation() {
     if (joined.find("scale=1920:1080") == std::string::npos ||
         joined.find("ass=filename='") < joined.find("scale=1920:1080")) {
         return fail("Generated filtergraph should scale before applying subtitles.");
+    }
+    const auto trim_position = joined.find("trim=start=0.250000:end=1.250000");
+    const auto subtitle_source_clock_position =
+        joined.find("setpts=PTS-STARTPTS+0.250000/TB");
+    const auto subtitle_position = joined.find("ass=filename='");
+    const auto output_rebase_position = joined.rfind("setpts=PTS-STARTPTS");
+    if (trim_position == std::string::npos ||
+        subtitle_source_clock_position == std::string::npos ||
+        subtitle_position == std::string::npos ||
+        output_rebase_position == std::string::npos ||
+        trim_position >= subtitle_source_clock_position ||
+        subtitle_source_clock_position >= subtitle_position ||
+        subtitle_position >= output_rebase_position) {
+        return fail(
+            "Generated filtergraph must trim, restore the requested source/media clock, render ASS, "
+            "then rebase encoded output PTS exactly once."
+        );
     }
     if (joined.find("-c:v\nlibx265\n") == std::string::npos ||
         joined.find("-crf\n18\n") == std::string::npos ||

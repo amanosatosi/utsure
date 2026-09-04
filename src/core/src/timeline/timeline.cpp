@@ -197,6 +197,67 @@ DecodedMediaSource build_composed_media_source(
 
 }  // namespace
 
+std::int64_t SourceTimelineMapping::stream_pts_for_source_time(
+    const std::int64_t source_time_microseconds
+) const {
+    if (!rational_is_positive(stream_time_base)) {
+        throw std::invalid_argument("A source timeline requires a positive stream time base.");
+    }
+
+    const auto source_offset_pts = av_rescale_q(
+        source_time_microseconds,
+        AV_TIME_BASE_Q,
+        to_av_rational(stream_time_base)
+    );
+    if ((source_offset_pts > 0 && source_origin_pts > std::numeric_limits<std::int64_t>::max() - source_offset_pts) ||
+        (source_offset_pts < 0 && source_origin_pts < std::numeric_limits<std::int64_t>::min() - source_offset_pts)) {
+        throw std::overflow_error("Source/media time cannot be represented on the FFmpeg stream timeline.");
+    }
+
+    return source_origin_pts + source_offset_pts;
+}
+
+std::int64_t SourceTimelineMapping::source_time_for_stream_pts(const std::int64_t source_pts) const {
+    if (!rational_is_positive(stream_time_base)) {
+        throw std::invalid_argument("A source timeline requires a positive stream time base.");
+    }
+    if ((source_origin_pts > 0 &&
+         source_pts < std::numeric_limits<std::int64_t>::min() + source_origin_pts) ||
+        (source_origin_pts < 0 &&
+         source_pts > std::numeric_limits<std::int64_t>::max() + source_origin_pts)) {
+        throw std::overflow_error("FFmpeg stream PTS cannot be represented as source/media time.");
+    }
+
+    return rescale_to_microseconds(source_pts - source_origin_pts, stream_time_base);
+}
+
+std::int64_t SourceTimelineMapping::source_time_for_output_time(
+    const std::int64_t output_time_microseconds
+) const {
+    if (output_time_microseconds < 0 || trim_start_microseconds < 0) {
+        throw std::invalid_argument("Source/media and output-relative timeline positions must not be negative.");
+    }
+    if (output_time_microseconds >
+        std::numeric_limits<std::int64_t>::max() - trim_start_microseconds) {
+        throw std::overflow_error("Output-relative time cannot be represented on the source/media timeline.");
+    }
+
+    return output_time_microseconds + trim_start_microseconds;
+}
+
+bool SourceTimelineMapping::source_interval_overlaps_encode_range(
+    const std::int64_t event_start_microseconds,
+    const std::int64_t event_end_microseconds
+) const noexcept {
+    if (event_end_microseconds <= event_start_microseconds ||
+        event_end_microseconds <= trim_start_microseconds) {
+        return false;
+    }
+
+    return !trim_end_microseconds.has_value() ||
+        event_start_microseconds < *trim_end_microseconds;
+}
+
 bool TimelineAssemblyResult::succeeded() const noexcept {
     return timeline_plan.has_value() && !error.has_value();
 }

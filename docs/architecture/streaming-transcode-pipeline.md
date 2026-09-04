@@ -133,6 +133,14 @@ Rules:
 
 ## Subtitle Path
 
+Main-source ASS files remain unchanged and loaded in full. The subtitle render handoff is the single timeline conversion boundary:
+
+    source_media_time = output_relative_time + requested_trim_start
+
+Decoded packet/frame PTS remain in their FFmpeg stream time bases for seeking and trim selection. `SourceTimelineMapping` translates those raw PTS through the common media origin; keyframe seek preroll is discarded against the requested source range and never becomes the trim origin. Encoded video PTS remain zero-based and include any preceding thumbnail/intro segment offset, which is removed before the subtitle source time is calculated.
+
+ASS events are not prefiltered or timestamp-rewritten. Because Mangetsu/libassmod evaluates the original event timeline at source/media time, an event is retained whenever its half-open interval overlaps the encode range: `event_end > trim_start` and, when a trim end exists, `event_start < trim_end`.
+
 Subtitle rendering stays behind the existing abstraction. The active libassmod adapter uses the RGBA-capable path unconditionally for rendered frames so RGBA-only effects are not forced back through the old `ASS_Image` bitmap flow.
 
 ASS subtitle sessions are prepared with `FontCollector` before libassmod session creation. The prepared font directory is passed through `SubtitleRenderSessionCreateRequest::font_search_directory`, kept alive for the session lifetime, and treated as the primary font-preparation result for preview, preflight, legacy burn-in, and streaming encode. Missing or failed `FontCollector` blocks ASS rendering instead of silently falling back to the normal font provider.

@@ -1131,6 +1131,11 @@ utsure_enable_warnings(utsure_core_timeline_tests)
 add_dependencies(utsure_core_timeline_tests utsure_generate_sample_media)
 
 add_test(
+    NAME utsure.core.timeline.subtitle_source_time
+    COMMAND utsure_core_timeline_tests --subtitle-source-timeline
+)
+
+add_test(
     NAME utsure.core.timeline.main_only
     COMMAND utsure_core_timeline_tests --main-only
         "${UTSURE_SAMPLE_MEDIA_FILE}"

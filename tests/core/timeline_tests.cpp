@@ -25,6 +25,7 @@ using utsure::core::media::MediaDecodeResult;
 using utsure::core::media::MediaDecoder;
 using utsure::core::media::Rational;
 using utsure::core::timeline::SubtitleTimingMode;
+using utsure::core::timeline::SourceTimelineMapping;
 using utsure::core::timeline::TimelineAssembler;
 using utsure::core::timeline::TimelineAssemblyRequest;
 using utsure::core::timeline::TimelineAssemblyResult;
@@ -767,9 +768,102 @@ int assert_trimmed_main(const std::filesystem::path &main_path) {
     return 0;
 }
 
+int assert_subtitle_source_timeline_mapping() {
+    const SourceTimelineMapping no_trim{
+        .source_origin_pts = 0,
+        .stream_time_base = Rational{1, 1000}
+    };
+    if (no_trim.source_time_for_output_time(15000000) != 15000000) {
+        return fail("No-trim subtitle rendering did not preserve source/media time.");
+    }
+
+    const SourceTimelineMapping ten_second_trim{
+        .source_origin_pts = 0,
+        .stream_time_base = Rational{1, 1000},
+        .trim_start_microseconds = 10000000,
+        .trim_end_microseconds = 20000000
+    };
+    if (ten_second_trim.source_time_for_output_time(0) != 10000000 ||
+        ten_second_trim.source_time_for_output_time(2000000) != 12000000 ||
+        ten_second_trim.source_time_for_output_time(5000000) != 15000000 ||
+        ten_second_trim.source_time_for_output_time(8000000) != 18000000 ||
+        ten_second_trim.source_time_for_output_time(1583000) != 11583000) {
+        return fail("Trimmed subtitle rendering did not convert output-relative time to source/media time.");
+    }
+
+    const SourceTimelineMapping eighty_second_trim{
+        .source_origin_pts = 0,
+        .stream_time_base = Rational{1, 1000},
+        .trim_start_microseconds = 80000000
+    };
+    if (eighty_second_trim.source_time_for_output_time(3500000) != 83500000 ||
+        eighty_second_trim.source_time_for_output_time(6000000) != 86000000) {
+        return fail("Large trim offsets were not represented exactly on the subtitle source timeline.");
+    }
+
+    const SourceTimelineMapping fractional_trim{
+        .source_origin_pts = 5000,
+        .stream_time_base = Rational{1, 1000},
+        .trim_start_microseconds = 10417000
+    };
+    if (fractional_trim.source_time_for_output_time(1583000) != 12000000 ||
+        fractional_trim.stream_pts_for_source_time(10417000) != 15417 ||
+        fractional_trim.source_time_for_stream_pts(15417) != 10417000 ||
+        fractional_trim.source_time_for_stream_pts(5100) != 100000 ||
+        fractional_trim.source_time_for_stream_pts(14000) >=
+            fractional_trim.trim_start_microseconds) {
+        return fail("Fractional trim or non-zero FFmpeg stream origin conversion lost precision.");
+    }
+
+    const std::vector<std::int64_t> vfr_output_times{0, 42000, 83000, 125000};
+    const std::vector<std::int64_t> expected_vfr_source_times{
+        10417000,
+        10459000,
+        10500000,
+        10542000
+    };
+    for (std::size_t index = 0; index < vfr_output_times.size(); ++index) {
+        if (fractional_trim.source_time_for_output_time(vfr_output_times[index]) !=
+            expected_vfr_source_times[index]) {
+            return fail("VFR-derived output presentation times did not map exactly to source/media time.");
+        }
+    }
+
+    if (!ten_second_trim.source_interval_overlaps_encode_range(8000000, 13000000) ||
+        ten_second_trim.source_interval_overlaps_encode_range(5000000, 8000000) ||
+        !ten_second_trim.source_interval_overlaps_encode_range(10000000, 13000000) ||
+        ten_second_trim.source_interval_overlaps_encode_range(5000000, 10000000) ||
+        ten_second_trim.source_interval_overlaps_encode_range(9999998, 9999999) ||
+        !ten_second_trim.source_interval_overlaps_encode_range(9999999, 10000001) ||
+        !ten_second_trim.source_interval_overlaps_encode_range(12000000, 15000000) ||
+        ten_second_trim.source_interval_overlaps_encode_range(20000000, 22000000)) {
+        return fail("Subtitle event overlap checks did not use half-open source/media intervals.");
+    }
+
+    const SourceTimelineMapping long_trim{
+        .source_origin_pts = 0,
+        .stream_time_base = Rational{1, 1000},
+        .trim_start_microseconds = 60000000
+    };
+    if (!long_trim.source_interval_overlaps_encode_range(20000000, 120000000) ||
+        long_trim.source_time_for_output_time(60000000) != 120000000) {
+        return fail("A long-running subtitle overlapping trim start was not preserved.");
+    }
+
+    std::cout << "subtitle_timeline.no_trim_source_us=15000000\n";
+    std::cout << "subtitle_timeline.trim_10s.output_5s_source_us=15000000\n";
+    std::cout << "subtitle_timeline.overlap_at_trim_start=preserved\n";
+    std::cout << "subtitle_timeline.non_zero_stream_origin=preserved\n";
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char *argv[]) {
+    if (argc == 2 && std::string_view(argv[1]) == "--subtitle-source-timeline") {
+        return assert_subtitle_source_timeline_mapping();
+    }
+
     if (argc < 3) {
         return fail(
             "Usage: utsure_core_timeline_tests "
@@ -778,7 +872,7 @@ int main(int argc, char *argv[]) {
             "--normalized-fps <bad-intro> <main>|"
             "--normalized-common <intro> <main> <outro>|"
             "--missing-main-audio-target <intro> <main>|"
-            "--trimmed-main <main>]"
+            "--trimmed-main <main>|--subtitle-source-timeline]"
         );
     }
 

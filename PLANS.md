@@ -49,6 +49,38 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M46 Busy indicator yellow circle color implemented; awaiting GitHub Actions validation.
 - [x] M47 Uncaught C++ encode crash diagnostics implemented; awaiting GitHub Actions validation.
 - [x] M48 FFmpeg/libassmod hardsub filter backend implemented; awaiting GitHub Actions validation.
+- [x] M49 Trim-aware subtitle source timeline correction implemented; awaiting GitHub Actions validation.
+
+### M49 Trim-aware subtitle source timeline correction
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Correct subtitle rendering for start-trimmed encodes without rewriting ASS event timestamps or applying an arbitrary delay.
+  * Define one source-media-time/output-relative-time boundary and preserve subtitle events that overlap the retained encode range.
+  * Keep FFmpeg stream start PTS, seek landing timestamps, requested trim bounds, subtitle render time, and encoded output PTS in explicit timeline domains.
+  * Cover no-trim, ordinary/fractional trim, trim-boundary and long-running overlap cases, trim end, VFR-derived output timing, and non-zero stream origins with focused regression checks.
+
+Implementation approach:
+  * Convert the main segment's zero-based output-relative frame time to original source/media time exactly once at the subtitle-render handoff by adding the requested trim start.
+  * Keep the complete original ASS script loaded in Mangetsu/libassmod so interval overlap behavior is decided by the renderer on its original event timeline.
+  * Express streaming seek and trim comparisons relative to the selected FFmpeg stream's start PTS instead of mixing raw stream PTS with media-relative trim values.
+  * In the FFmpeg-filter backend, evaluate the ASS filter before rebasing retained video PTS to zero.
+  * Add unit-level timeline boundary coverage and strengthen the existing trimmed burn-in diagnostics to assert the source/media timestamp actually passed to the renderer.
+
+Implemented:
+  * Added SourceTimelineMapping as the shared boundary among raw FFmpeg stream PTS, source/media time, requested trim bounds, and output-relative time.
+  * Changed the internal streaming subtitle handoff to pass output_relative_time + trim_start to Mangetsu/libassmod while leaving encoded output PTS zero-based.
+  * Kept the complete original ASS track loaded without event filtering or timestamp rewriting, preserving events whose half-open intervals overlap the retained range.
+  * Made streaming seek, decoded-frame trimming, packet trim-end checks, and audio sample trimming account for the common non-zero source origin while retaining deliberate audio/video stream offsets.
+  * Changed the FFmpeg-filter backend to establish PTS-STARTPTS+trim_start/TB before the ASS filter and apply final output PTS rebasing only after subtitle composition.
+  * Renamed subtitle composition diagnostics to report subtitle_source_time_us explicitly.
+  * Added source/output mapping coverage for no trim, ordinary and fractional trims, exact boundaries, fully pre-trim and post-trim events, long-running overlap, trim end, VFR-derived frame times, keyframe preroll classification, and non-zero PTS origins.
+  * Strengthened the existing trimmed hardsub media regression so a 0-450 ms ASS event trimmed at 250 ms must render on output frame zero, remain active for five frames, and stop according to its original source end time.
+
+Validation:
+  * Local compile/CTest execution was not run because repository instructions reserve compiling/testing for GitHub Actions.
+  * Static validation confirmed branch new-version, no modified ASS files, the complete ass_read_file track-loading path, required timeline conversion markers, and a clean git diff --check result apart from expected CRLF normalization notices.
 
 ### M48 FFmpeg/libassmod hardsub filter backend
 

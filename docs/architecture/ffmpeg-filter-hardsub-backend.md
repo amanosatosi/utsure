@@ -49,6 +49,8 @@ For sidecar `.ass`/`.ssa` subtitles, Utsure generates an FFmpeg filtergraph usin
 ass=filename='PATH_TO_SUBS.ass':mangetsu_rgba=auto:mangetsu_actor_colorcoding=auto
 ```
 
+For a trimmed main source, the graph trims first, establishes the subtitle source/media clock as `PTS-STARTPTS+trim_start/TB`, renders the unchanged ASS script, and only then applies the final `PTS-STARTPTS` rebase for encoded output. This mirrors the internal renderer's `source_media_time = output_relative_time + trim_start` boundary and naturally preserves events already active at the trim point.
+
 Embedded subtitle streams are not exposed in the current Utsure job model. When selected stream metadata is added, the intended FFmpeg form is:
 
 ```bash

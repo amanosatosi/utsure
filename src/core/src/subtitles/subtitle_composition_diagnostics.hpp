@@ -72,7 +72,7 @@ inline std::string format_subtitle_frame_diagnostics(
         message << "unknown";
     }
 
-    message << ", subtitle_timestamp_us=" << request.timestamp_microseconds
+    message << ", subtitle_source_time_us=" << request.timestamp_microseconds
             << ", worker_id=";
     if (request.debug_context != nullptr) {
         message << request.debug_context->worker_id;

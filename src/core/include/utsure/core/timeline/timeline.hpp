@@ -46,6 +46,32 @@ struct TimelineSegmentPlan final {
     }
 };
 
+// Maps between three deliberately separate domains for one source stream:
+// raw FFmpeg stream PTS, source/media time relative to the chosen media origin,
+// and zero-based output time relative to the requested trim start.
+struct SourceTimelineMapping final {
+    // The common media origin expressed in this stream's time base. For audio this
+    // is not necessarily the audio stream's first-sample PTS.
+    std::int64_t source_origin_pts{0};
+    media::Rational stream_time_base{};
+    std::int64_t trim_start_microseconds{0};
+    std::optional<std::int64_t> trim_end_microseconds{};
+
+    [[nodiscard]] std::int64_t stream_pts_for_source_time(
+        std::int64_t source_time_microseconds
+    ) const;
+    [[nodiscard]] std::int64_t source_time_for_stream_pts(
+        std::int64_t source_pts
+    ) const;
+    [[nodiscard]] std::int64_t source_time_for_output_time(
+        std::int64_t output_time_microseconds
+    ) const;
+    [[nodiscard]] bool source_interval_overlaps_encode_range(
+        std::int64_t event_start_microseconds,
+        std::int64_t event_end_microseconds
+    ) const noexcept;
+};
+
 struct TimelineOutputVideoShape final {
     int width{0};
     int height{0};

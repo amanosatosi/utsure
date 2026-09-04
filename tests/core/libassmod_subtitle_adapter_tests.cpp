@@ -41,7 +41,7 @@ int run_empty_bitmap_assertion(const std::string_view bitmap_mode) {
     SubtitleCompositionDebugContext debug_context{
         .decoded_frame_index = 6,
         .output_pts = 6,
-        .subtitle_timestamp_microseconds = 250000,
+        .subtitle_source_time_microseconds = 250000,
         .worker_id = 0,
         .session_id = 7,
         .log_frame_details = true,
@@ -151,7 +151,7 @@ int run_large_clipped_bitmap_assertion() {
     SubtitleCompositionDebugContext debug_context{
         .decoded_frame_index = 2,
         .output_pts = 2,
-        .subtitle_timestamp_microseconds = 41667,
+        .subtitle_source_time_microseconds = 41667,
         .worker_id = 0,
         .session_id = 11,
         .log_frame_details = true,

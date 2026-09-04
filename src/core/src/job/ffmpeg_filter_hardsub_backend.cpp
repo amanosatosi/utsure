@@ -295,6 +295,14 @@ private:
         "':mangetsu_rgba=auto:mangetsu_actor_colorcoding=auto";
 }
 
+[[nodiscard]] std::string subtitle_source_clock_filter(const timeline::TimelineSegmentPlan &segment) {
+    const auto trim_start_microseconds = std::max<std::int64_t>(
+        segment.source_trim_in_microseconds,
+        0
+    );
+    return "setpts=PTS-STARTPTS+" + format_seconds(trim_start_microseconds) + "/TB";
+}
+
 void append_filter(std::string &chain, std::string filter) {
     if (filter.empty()) {
         return;
@@ -330,12 +338,20 @@ void append_filter(std::string &chain, std::string filter) {
         const auto &segment = timeline_plan.segments[index];
         std::string chain = "[" + std::to_string(index) + ":v:0]";
         append_filter(chain, trim_filter_for_segment(segment));
-        append_filter(chain, "setpts=PTS-STARTPTS");
+        append_filter(
+            chain,
+            segment.subtitles_enabled
+                ? subtitle_source_clock_filter(segment)
+                : std::string("setpts=PTS-STARTPTS")
+        );
         append_filter(chain, "fps=" + fps);
         append_filter(chain, "scale=" + std::to_string(shape.width) + ":" + std::to_string(shape.height));
         append_filter(chain, "setsar=" + sar);
         if (segment.subtitles_enabled) {
+            // Evaluate the unchanged ASS script at output-relative time plus the requested trim
+            // start, then establish the zero-based encoded-output clock after composition.
             append_filter(chain, make_subtitle_filter(*job.subtitles));
+            append_filter(chain, "setpts=PTS-STARTPTS");
         }
         append_filter(chain, "format=yuv420p");
         chain += "[v" + std::to_string(index) + "]";

@@ -32,7 +32,7 @@ struct SubtitleCompositionDebugContext final {
     std::optional<std::int64_t> decoded_frame_pts{};
     std::optional<std::int64_t> output_pts{};
     std::optional<std::int64_t> segment_relative_timestamp_microseconds{};
-    std::int64_t subtitle_timestamp_microseconds{0};
+    std::int64_t subtitle_source_time_microseconds{0};
     int worker_id{-1};
     int session_id{-1};
     bool log_frame_details{false};

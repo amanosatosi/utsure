@@ -1940,6 +1940,7 @@ std::optional<AudioCopyTemplate> build_audio_copy_template(
 
 void seek_segment_to_trim_start(
     const timeline::TimelineSegmentPlan &segment_plan,
+    const timeline::SourceTimelineMapping &video_source_timeline,
     SegmentDecoderResources &resources
 ) {
     if (!segment_has_source_trim(segment_plan) || segment_plan.source_trim_in_microseconds <= 0) {
@@ -1950,15 +1951,13 @@ void seek_segment_to_trim_start(
         throw std::runtime_error("The streaming trim path requires a readable main video stream.");
     }
 
-    const auto requested_pts = av_rescale_q(
-        segment_plan.source_trim_in_microseconds,
-        AV_TIME_BASE_Q,
-        resources.video_stream->time_base
+    const auto requested_source_pts = video_source_timeline.stream_pts_for_source_time(
+        segment_plan.source_trim_in_microseconds
     );
     const auto seek_result = av_seek_frame(
         resources.format_context.get(),
         segment_plan.inspected_source_info.primary_video_stream->stream_index,
-        requested_pts,
+        requested_source_pts,
         AVSEEK_FLAG_BACKWARD
     );
     if (seek_result < 0) {
@@ -2173,7 +2172,7 @@ struct VideoProcessTask final {
     std::string segment_name{};
     std::optional<std::int64_t> segment_relative_timestamp_microseconds{};
     QueuedVideoFrameOutput output{};
-    std::optional<std::int64_t> subtitle_timestamp_microseconds{};
+    std::optional<std::int64_t> subtitle_source_time_microseconds{};
     int normalized_width{0};
     int normalized_height{0};
     Rational normalized_sample_aspect_ratio{1, 1};
@@ -2439,7 +2438,7 @@ private:
                         std::chrono::steady_clock::now() - process_start
                     ).count();
                 long long subtitle_duration = 0;
-                if (task.subtitle_timestamp_microseconds.has_value()) {
+                if (task.subtitle_source_time_microseconds.has_value()) {
                     throw_if_cancellation_requested(cancellation_requested_);
                     if (!subtitle_session.session) {
                         throw std::runtime_error(
@@ -2453,7 +2452,7 @@ private:
                         .decoded_frame_pts = task.output.frame.metadata.timestamp.source_pts,
                         .output_pts = std::optional<std::int64_t>(task.output.timing.output_pts),
                         .segment_relative_timestamp_microseconds = task.segment_relative_timestamp_microseconds,
-                        .subtitle_timestamp_microseconds = *task.subtitle_timestamp_microseconds,
+                        .subtitle_source_time_microseconds = *task.subtitle_source_time_microseconds,
                         .worker_id = worker_id,
                         .session_id = subtitle_session.session_id,
                         .log_frame_details = subtitle_diagnostics_.has_value() &&
@@ -2480,10 +2479,10 @@ private:
                         std::ostringstream message;
                         message << "Subtitle composite start: frame="
                                 << task.output.frame.metadata.frame_index
-                                << ", pts_us=" << *task.subtitle_timestamp_microseconds
+                                << ", source_time_us=" << *task.subtitle_source_time_microseconds
                                 << ", renderer_pts_ms="
                                 << subtitles::subtitle_timestamp_microseconds_to_renderer_milliseconds(
-                                    *task.subtitle_timestamp_microseconds
+                                    *task.subtitle_source_time_microseconds
                                 )
                                 << ", worker_id=" << worker_id
                                 << ", thread_id=" << std::this_thread::get_id()
@@ -2496,7 +2495,7 @@ private:
                     const auto compose_result = subtitle_session.session->compose_into_frame(
                         task.output.frame.metadata,
                         subtitles::SubtitleRenderRequest{
-                            .timestamp_microseconds = *task.subtitle_timestamp_microseconds,
+                            .timestamp_microseconds = *task.subtitle_source_time_microseconds,
                             .debug_context = &debug_context
                         }
                     );
@@ -2515,10 +2514,10 @@ private:
                         std::ostringstream message;
                         message << "Subtitle composite end: frame="
                                 << task.output.frame.metadata.frame_index
-                                << ", pts_us=" << *task.subtitle_timestamp_microseconds
+                                << ", source_time_us=" << *task.subtitle_source_time_microseconds
                                 << ", renderer_pts_ms="
                                 << subtitles::subtitle_timestamp_microseconds_to_renderer_milliseconds(
-                                    *task.subtitle_timestamp_microseconds
+                                    *task.subtitle_source_time_microseconds
                                 )
                                 << ", worker_id=" << worker_id
                                 << ", thread_id=" << std::this_thread::get_id()
@@ -4309,8 +4308,9 @@ ResolvedVideoFrameTiming resolve_video_frame_timing_for_segment(
     };
 }
 
-std::optional<std::int64_t> resolve_main_subtitle_timestamp_microseconds(
+std::optional<std::int64_t> resolve_main_subtitle_source_time_microseconds(
     const timeline::TimelineSegmentPlan &segment_plan,
+    const timeline::SourceTimelineMapping &source_timeline,
     const ResolvedVideoFrameTiming &timing,
     const Rational &output_video_time_base,
     const std::int64_t segment_output_start_pts
@@ -4319,17 +4319,21 @@ std::optional<std::int64_t> resolve_main_subtitle_timestamp_microseconds(
         return std::nullopt;
     }
 
-    // Main subtitles are defined on the normalized main-segment output clock. At this point
-    // main frames have already been mapped onto the final output cadence, so subtracting the
-    // segment start removes thumbnail/intro time without falling back to the full output timeline.
-    const auto segment_relative_pts = timing.output_pts - segment_output_start_pts;
-    if (segment_relative_pts < 0) {
+    // The encoder clock is zero-based at the requested trim boundary, while the unchanged ASS
+    // script remains on the original main-source media timeline. Convert domains exactly once
+    // here, immediately before the render request.
+    const auto output_relative_pts = timing.output_pts - segment_output_start_pts;
+    if (output_relative_pts < 0) {
         throw std::runtime_error(
             "The main segment produced a subtitle render timestamp before the main video start."
         );
     }
 
-    return rescale_to_microseconds(segment_relative_pts, output_video_time_base);
+    const auto output_relative_time_microseconds = rescale_to_microseconds(
+        output_relative_pts,
+        output_video_time_base
+    );
+    return source_timeline.source_time_for_output_time(output_relative_time_microseconds);
 }
 
 SegmentProcessResult process_segment(
@@ -4393,6 +4397,8 @@ SegmentProcessResult process_segment(
     failure_context.subtitle_worker_count = runtime_behavior.subtitle_processing_worker_count;
     failure_context.encoder_thread_count = runtime_behavior.selected_video_encoder_thread_count;
 
+    const auto segment_trim_in_us = std::max<std::int64_t>(segment_plan.source_trim_in_microseconds, 0);
+    const std::optional<std::int64_t> segment_trim_out_us = segment_plan.source_trim_out_microseconds;
     SegmentDecoderResources resources = open_segment_resources(
         segment_plan,
         encode_audio,
@@ -4401,7 +4407,44 @@ SegmentProcessResult process_segment(
         cancellation_requested,
         log_callback
     );
-    seek_segment_to_trim_start(segment_plan, resources);
+    const auto video_stream_time_base = ffmpeg_support::to_rational(resources.video_stream->time_base);
+    const auto audio_stream_time_base = resources.audio_stream != nullptr
+        ? ffmpeg_support::to_rational(resources.audio_stream->time_base)
+        : Rational{};
+    const auto video_source_origin_pts = resources.video_stream->start_time != AV_NOPTS_VALUE
+        ? resources.video_stream->start_time
+        : segment_plan.inspected_source_info.primary_video_stream->timestamps.start_pts.value_or(0);
+    const auto audio_first_sample_pts = resources.audio_stream != nullptr &&
+            resources.audio_stream->start_time != AV_NOPTS_VALUE
+        ? resources.audio_stream->start_time
+        : segment_plan.inspected_source_info.primary_audio_stream.has_value()
+            ? segment_plan.inspected_source_info.primary_audio_stream->timestamps.start_pts.value_or(0)
+            : 0;
+    // Audio/video stream start_time values describe their first samples and may intentionally
+    // differ. Express the primary-video media origin in the audio time base so that offset is
+    // preserved instead of independently rebasing both streams to zero.
+    const auto audio_source_origin_pts =
+        segment_plan.inspected_source_info.primary_audio_stream.has_value() &&
+            rational_is_positive(audio_stream_time_base)
+        ? av_rescale_q(
+            video_source_origin_pts,
+            to_av_rational(video_stream_time_base),
+            to_av_rational(audio_stream_time_base)
+        )
+        : 0;
+    const timeline::SourceTimelineMapping video_source_timeline{
+        .source_origin_pts = video_source_origin_pts,
+        .stream_time_base = video_stream_time_base,
+        .trim_start_microseconds = segment_trim_in_us,
+        .trim_end_microseconds = segment_trim_out_us
+    };
+    const timeline::SourceTimelineMapping audio_source_timeline{
+        .source_origin_pts = audio_source_origin_pts,
+        .stream_time_base = audio_stream_time_base,
+        .trim_start_microseconds = segment_trim_in_us,
+        .trim_end_microseconds = segment_trim_out_us
+    };
+    seek_segment_to_trim_start(segment_plan, video_source_timeline, resources);
     PacketHandle demux_packet = allocate_packet();
     FrameHandle decoded_video_frame = allocate_frame();
     FrameHandle decoded_audio_frame = allocate_frame();
@@ -4494,30 +4537,16 @@ SegmentProcessResult process_segment(
         );
     }
 
-    const auto segment_trim_in_us = std::max<std::int64_t>(segment_plan.source_trim_in_microseconds, 0);
-    const std::optional<std::int64_t> segment_trim_out_us = segment_plan.source_trim_out_microseconds;
-    const auto video_stream_time_base =
-        segment_plan.inspected_source_info.primary_video_stream->timestamps.time_base;
-    const auto audio_stream_time_base = segment_plan.inspected_source_info.primary_audio_stream.has_value()
-        ? segment_plan.inspected_source_info.primary_audio_stream->timestamps.time_base
-        : Rational{};
-    const auto requested_video_trim_start_pts = av_rescale_q(
-        segment_trim_in_us,
-        AV_TIME_BASE_Q,
-        to_av_rational(video_stream_time_base)
-    );
+    const auto requested_video_trim_start_pts = video_source_timeline.stream_pts_for_source_time(segment_trim_in_us);
     const auto requested_audio_trim_start_pts =
         segment_plan.inspected_source_info.primary_audio_stream.has_value() && rational_is_positive(audio_stream_time_base)
-            ? av_rescale_q(segment_trim_in_us, AV_TIME_BASE_Q, to_av_rational(audio_stream_time_base))
+            ? audio_source_timeline.stream_pts_for_source_time(segment_trim_in_us)
             : 0;
-    std::int64_t next_fallback_source_pts = segment_has_source_trim(segment_plan)
-        ? requested_video_trim_start_pts
-        : segment_plan.inspected_source_info.primary_video_stream->timestamps.start_pts.value_or(0);
-    std::int64_t next_audio_fallback_source_pts = segment_has_source_trim(segment_plan)
-        ? requested_audio_trim_start_pts
-        : segment_plan.inspected_source_info.primary_audio_stream.has_value()
-            ? segment_plan.inspected_source_info.primary_audio_stream->timestamps.start_pts.value_or(0)
-            : 0;
+    std::int64_t next_fallback_source_pts = requested_video_trim_start_pts;
+    std::int64_t next_audio_fallback_source_pts = std::max(
+        requested_audio_trim_start_pts,
+        audio_first_sample_pts
+    );
     const auto fallback_video_duration_pts =
         infer_video_frame_duration_pts(*segment_plan.inspected_source_info.primary_video_stream).value_or(1);
     const std::optional<std::int64_t> estimated_segment_duration_pts = estimate_segment_duration_pts(
@@ -4525,10 +4554,7 @@ SegmentProcessResult process_segment(
         timeline_plan.output_video_time_base,
         timeline_plan.output_frame_rate
     );
-    const std::int64_t segment_video_start_pts =
-        segment_has_source_trim(segment_plan)
-            ? requested_video_trim_start_pts
-            : segment_plan.inspected_source_info.primary_video_stream->timestamps.start_pts.value_or(0);
+    const std::int64_t segment_video_start_pts = requested_video_trim_start_pts;
 
     SwrContextHandle audio_resample_context{};
     std::vector<std::vector<float>> pending_audio_channels{};
@@ -4623,23 +4649,29 @@ SegmentProcessResult process_segment(
         );
     };
 
-    const auto packet_start_microseconds = [&](const AVPacket &packet, const Rational &time_base)
+    const auto packet_source_time_microseconds = [&](
+        const AVPacket &packet,
+        const timeline::SourceTimelineMapping &source_timeline
+    )
         -> std::optional<std::int64_t> {
         const auto packet_timestamp = choose_packet_timestamp_seed(packet);
         if (!packet_timestamp.has_value()) {
             return std::nullopt;
         }
 
-        return rescale_to_microseconds(*packet_timestamp, time_base);
+        return source_timeline.source_time_for_stream_pts(*packet_timestamp);
     };
 
-    const auto packet_starts_after_trim_end = [&](const AVPacket &packet, const Rational &time_base) {
+    const auto packet_starts_after_trim_end = [&](
+        const AVPacket &packet,
+        const timeline::SourceTimelineMapping &source_timeline
+    ) {
         if (!segment_trim_out_us.has_value()) {
             return false;
         }
 
-        const auto packet_start_us = packet_start_microseconds(packet, time_base);
-        return packet_start_us.has_value() && *packet_start_us >= *segment_trim_out_us;
+        const auto packet_source_time_us = packet_source_time_microseconds(packet, source_timeline);
+        return packet_source_time_us.has_value() && *packet_source_time_us >= *segment_trim_out_us;
     };
 
     const auto update_known_video_timeline = [&](const AVPacket &video_packet) {
@@ -4993,10 +5025,11 @@ SegmentProcessResult process_segment(
             throw_if_cancellation_requested(cancellation_requested);
             failure_context.stage = "subtitle_stage";
             failure_context.segment_name = segment_name;
-            std::optional<std::int64_t> subtitle_timestamp_microseconds{};
+            std::optional<std::int64_t> subtitle_source_time_microseconds{};
             if (segment_uses_subtitle_path) {
-                subtitle_timestamp_microseconds = resolve_main_subtitle_timestamp_microseconds(
+                subtitle_source_time_microseconds = resolve_main_subtitle_source_time_microseconds(
                     segment_plan,
+                    video_source_timeline,
                     timing,
                     timeline_plan.output_video_time_base,
                     segment_output_start_pts
@@ -5019,7 +5052,7 @@ SegmentProcessResult process_segment(
                     .frame = std::move(video_frame),
                     .timing = std::move(timing)
                 },
-                .subtitle_timestamp_microseconds = subtitle_timestamp_microseconds,
+                .subtitle_source_time_microseconds = subtitle_source_time_microseconds,
                 .normalized_width = video_output_plan.width,
                 .normalized_height = video_output_plan.height,
                 .normalized_sample_aspect_ratio = video_output_plan.sample_aspect_ratio
@@ -5087,12 +5120,14 @@ SegmentProcessResult process_segment(
     };
 
     const auto process_video_frame = [&](StreamingVideoFrame video_frame) {
-        if (video_frame.metadata.timestamp.start_microseconds < segment_trim_in_us) {
+        const auto source_pts = video_frame.metadata.timestamp.source_pts.value_or(requested_video_trim_start_pts);
+        const auto source_time_microseconds = video_source_timeline.source_time_for_stream_pts(source_pts);
+        if (source_time_microseconds < segment_trim_in_us) {
             return;
         }
 
         if (segment_trim_out_us.has_value() &&
-            video_frame.metadata.timestamp.start_microseconds >= *segment_trim_out_us) {
+            source_time_microseconds >= *segment_trim_out_us) {
             video_input_complete = true;
             return;
         }
@@ -5272,7 +5307,7 @@ SegmentProcessResult process_segment(
                 ? 0
                 : static_cast<int>(converted_channels.front().size());
             if (segment_has_source_trim(segment_plan)) {
-                const auto frame_start_us = rescale_to_microseconds(timestamp_seed.source_pts, audio_stream_time_base);
+                const auto frame_start_us = audio_source_timeline.source_time_for_stream_pts(timestamp_seed.source_pts);
                 const auto frame_duration_us = av_rescale_q(
                     decoded_audio_frame->nb_samples,
                     AVRational{1, decoded_audio_sample_rate},
@@ -5379,7 +5414,7 @@ SegmentProcessResult process_segment(
         }
 
         if (demux_packet->stream_index == segment_plan.inspected_source_info.primary_video_stream->stream_index) {
-            if (packet_starts_after_trim_end(*demux_packet, video_stream_time_base)) {
+            if (packet_starts_after_trim_end(*demux_packet, video_source_timeline)) {
                 video_input_complete = true;
                 av_packet_unref(demux_packet.get());
                 continue;
@@ -5391,7 +5426,7 @@ SegmentProcessResult process_segment(
         } else if (resources.audio_stream &&
                    segment_plan.inspected_source_info.primary_audio_stream.has_value() &&
                    demux_packet->stream_index == segment_plan.inspected_source_info.primary_audio_stream->stream_index) {
-            if (packet_starts_after_trim_end(*demux_packet, audio_stream_time_base)) {
+            if (packet_starts_after_trim_end(*demux_packet, audio_source_timeline)) {
                 audio_input_complete = true;
                 av_packet_unref(demux_packet.get());
                 continue;
