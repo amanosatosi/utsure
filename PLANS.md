@@ -50,6 +50,29 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M47 Uncaught C++ encode crash diagnostics implemented; awaiting GitHub Actions validation.
 - [x] M48 FFmpeg/libassmod hardsub filter backend implemented; awaiting GitHub Actions validation.
 - [x] M49 Trim-aware subtitle source timeline correction implemented; awaiting GitHub Actions validation.
+- [x] M50 Encode ring geometry and live output size refresh implemented; awaiting GitHub Actions validation.
+
+### M50 Encode ring geometry and live output size refresh
+
+Status: Implemented; awaiting GitHub Actions validation
+
+Scope:
+  * Make the thick toolbar encode arc's visible sweep match its canonical timeline progress fraction.
+  * Refresh the actual output file size during encoding, including intervals between progress callbacks.
+
+Implementation approach:
+  * Use flat caps for the determinate arc and inset the shared track/arc centerline by half the existing stroke width.
+  * Keep the core timestamp-based progress calculation and read the live output file size from disk on the existing busy timer.
+  * Validate geometry and file handling statically; local compilation is prohibited by repository instructions.
+
+Implemented:
+  * Kept the 3.4 px stroke, used flat caps, and rendered the supplied progress fraction as a floating-point arc sweep on the same inset path as the background track.
+  * Reused the busy timer to refresh the selected job's on-disk output size between encode progress callbacks; missing or non-file paths display `--`.
+  * Confirmed the existing core progress fraction prioritizes encoded output end timestamps divided by planned output duration, including trims, intro/outro, and thumbnail preroll.
+
+Validation:
+  * Statically checked 0, 1, 10, 25, 50, 75, 99, and 100 percent sweeps, track alignment, 6 px outer radius within the 18 px pixmap, and the full-circle completion path.
+  * `git diff --check` passed. Local compile/CTest execution was not run because repository instructions reserve that for GitHub Actions.
 
 ### M49 Trim-aware subtitle source timeline correction
 

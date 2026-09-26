@@ -61,6 +61,7 @@
 #include <QMenu>
 #include <QModelIndex>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
@@ -893,21 +894,28 @@ QIcon make_busy_icon(const int phase, const double progress_fraction) {
     QColor track_color("#ffce2e");
     track_color.setAlpha(72);
     QColor ring_color("#ffce2e");
-    const QRectF arc_rect(-6.0, -6.0, 12.0, 12.0);
+    constexpr qreal kRingStrokeWidth = 3.4;
+    constexpr qreal kRingOuterRadius = 6.0;
+    const qreal centerline_radius = kRingOuterRadius - (kRingStrokeWidth / 2.0);
+    const QRectF arc_rect(
+        -centerline_radius,
+        -centerline_radius,
+        centerline_radius * 2.0,
+        centerline_radius * 2.0
+    );
 
-    painter.setPen(QPen(track_color, 3.4, Qt::SolidLine, Qt::RoundCap));
+    painter.setPen(QPen(track_color, kRingStrokeWidth, Qt::SolidLine, Qt::FlatCap));
     painter.setBrush(Qt::NoBrush);
     painter.drawEllipse(arc_rect);
 
-    painter.setPen(QPen(ring_color, 3.4, Qt::SolidLine, Qt::RoundCap));
+    painter.setPen(QPen(ring_color, kRingStrokeWidth, Qt::SolidLine, Qt::FlatCap));
     if (clamped_progress >= 1.0) {
         painter.drawEllipse(arc_rect);
     } else if (clamped_progress > 0.0) {
-        painter.drawArc(
-            arc_rect,
-            35 * 16,
-            static_cast<int>(std::lround(clamped_progress * 360.0 * 16.0))
-        );
+        QPainterPath progress_arc;
+        progress_arc.arcMoveTo(arc_rect, 35.0);
+        progress_arc.arcTo(arc_rect, 35.0, clamped_progress * 360.0);
+        painter.drawPath(progress_arc);
     }
 
     return QIcon(pixmap);
@@ -6098,6 +6106,7 @@ void MainWindow::advance_busy_spinner() {
 
     busy_spinner_phase_ = (busy_spinner_phase_ + 1) % 12;
     start_button_->setIcon(make_busy_icon(busy_spinner_phase_, current_busy_spinner_progress_fraction()));
+    refresh_selected_job_details();
 }
 
 void MainWindow::set_source_drop_overlay_visible(const bool visible) {
@@ -6601,7 +6610,7 @@ void MainWindow::update_job_file_sizes(UiEncodeJob &job) {
     job.input_size_bytes = source_info.exists() ? source_info.size() : -1;
 
     const QFileInfo output_info(job.output_path);
-    job.output_size_bytes = output_info.exists() ? output_info.size() : -1;
+    job.output_size_bytes = output_info.isFile() ? output_info.size() : -1;
 }
 
 void MainWindow::handle_runner_running_changed(const int /*slot_index*/, const bool /*running*/) {
