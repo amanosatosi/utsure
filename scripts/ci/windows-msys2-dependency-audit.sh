@@ -6,7 +6,7 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 third_party_root="${UTSURE_THIRD_PARTY_ROOT:-${project_root}/.deps}"
 ffmpeg_prefix="${UTSURE_FFMPEG_PREFIX:-${third_party_root}/ffmpeg/prefix}"
 ffmpeg_source_mode="${UTSURE_FFMPEG_SOURCE:-upstream}"
-ffmpeg_mangetsu_commit="${UTSURE_FFMPEG_MANGETSU_COMMIT:-6282c1941e3611ce43a4dcbe83a679c0323b8b13}"
+ffmpeg_mangetsu_commit="${UTSURE_FFMPEG_MANGETSU_COMMIT:-07d5fc59c586fee18b2f85c291013099f4112cb3}"
 ffmpeg_pcdir="${ffmpeg_prefix}/lib/pkgconfig"
 ffms2_prefix="${UTSURE_FFMS2_PREFIX:-${third_party_root}/ffms2/prefix}"
 ffms2_pcdir="${ffms2_prefix}/lib/pkgconfig"
@@ -94,15 +94,17 @@ if [[ "${ffmpeg_source_mode}" == "mangetsu" ]]; then
 
   ass_filter_help="$(ffmpeg -hide_banner -h filter=ass 2>&1)"
   if [[ "${ass_filter_help}" != *"mangetsu_rgba"* ||
-        "${ass_filter_help}" != *"mangetsu_actor_colorcoding"* ]]; then
-    echo "Expected the Mangetsu FFmpeg ass filter to expose mangetsu_rgba and mangetsu_actor_colorcoding options."
+        "${ass_filter_help}" != *"mangetsu_actor_colorcoding"* ||
+        "${ass_filter_help}" != *"mangetsu_blend"* ]]; then
+    echo "Expected the Mangetsu FFmpeg ass filter to expose mangetsu_rgba, mangetsu_actor_colorcoding, and mangetsu_blend options."
     exit 1
   fi
 
   subtitles_filter_help="$(ffmpeg -hide_banner -h filter=subtitles 2>&1)"
   if [[ "${subtitles_filter_help}" != *"mangetsu_rgba"* ||
-        "${subtitles_filter_help}" != *"mangetsu_actor_colorcoding"* ]]; then
-    echo "Expected the Mangetsu FFmpeg subtitles filter to expose mangetsu_rgba and mangetsu_actor_colorcoding options."
+        "${subtitles_filter_help}" != *"mangetsu_actor_colorcoding"* ||
+        "${subtitles_filter_help}" != *"mangetsu_blend"* ]]; then
+    echo "Expected the Mangetsu FFmpeg subtitles filter to expose mangetsu_rgba, mangetsu_actor_colorcoding, and mangetsu_blend options."
     exit 1
   fi
 fi
