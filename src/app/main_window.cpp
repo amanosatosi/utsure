@@ -50,6 +50,7 @@
 #include <QIcon>
 #include <QInputDialog>
 #include <QItemSelectionModel>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -1880,6 +1881,7 @@ QLabel#PreviewTimeBadge {
     thumbnail_image_browse_button_ = thumbnail_row.browse_button;
     thumbnail_title_edit_ = new QLineEdit(thumbnail_group);
     thumbnail_title_edit_->setPlaceholderText("thumbnail.ass Dialogue actor/name utsure_data text");
+    thumbnail_title_edit_->installEventFilter(this);
     thumbnail_auto_button_ = new QPushButton("Auto", thumbnail_group);
     thumbnail_auto_button_->setToolTip("Load thumbnail.* and matching thumbnail.ass from the selected subtitle folder");
     thumbnail_auto_button_->setCursor(Qt::PointingHandCursor);
@@ -2365,6 +2367,17 @@ void MainWindow::resizeEvent(QResizeEvent *event) {
 }
 
 bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == thumbnail_title_edit_ && event != nullptr && event->type() == QEvent::KeyPress) {
+        auto *key_event = static_cast<QKeyEvent *>(event);
+        const auto modifiers = key_event->modifiers();
+        const auto navigation_modifiers =
+            modifiers & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier);
+        if (key_event->key() == Qt::Key_Down && navigation_modifiers == Qt::NoModifier) {
+            thumbnail_title_edit_->end(modifiers.testFlag(Qt::ShiftModifier));
+            return true;
+        }
+    }
+
     if (watched == preview_time_badge_ && event != nullptr) {
         switch (event->type()) {
         case QEvent::MouseButtonDblClick:
