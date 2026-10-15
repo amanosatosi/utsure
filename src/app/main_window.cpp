@@ -998,7 +998,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     app_settings_ = settings_load_result.settings;
     app_settings_path_ = settings_load_result.config_path;
 
-    setWindowTitle(QString("%1 %2")
+    setWindowTitle(QString("%1 version %2")
                        .arg(to_qstring(utsure::core::BuildInfo::project_name()))
                        .arg(to_qstring(utsure::core::BuildInfo::project_version())));
     resize(1240, 680);
@@ -3636,7 +3636,7 @@ void MainWindow::show_info_dialog() {
     QMessageBox::information(
         this,
         "utsure",
-        QString("%1 %2\n\nQueue-based desktop shell over encoder-core.\n\nThis slice updates the UI around queue editing, preview/task logs, and placeholder surfaces for unfinished features.")
+        QString("%1 version %2\n\nQueue-based desktop shell over encoder-core.\n\nThis slice updates the UI around queue editing, preview/task logs, and placeholder surfaces for unfinished features.")
             .arg(to_qstring(utsure::core::BuildInfo::project_name()))
             .arg(to_qstring(utsure::core::BuildInfo::project_version()))
     );
