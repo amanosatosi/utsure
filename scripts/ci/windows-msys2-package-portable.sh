@@ -113,6 +113,20 @@ write_qt_runtime_manifest() {
   ) > "${qt_runtime_manifest}"
 }
 
+verify_mangetsu_dll() {
+  if [[ "${UTSURE_WINDOWS_MANGETSU_DLL:-0}" != "1" ]]; then
+    return 0
+  fi
+  if [[ ! -f "${bundle_dir}/mangetsu.dll" ]]; then
+    echo "Portable bundle must contain mangetsu.dll, not a version-named libass DLL." >&2
+    exit 1
+  fi
+  if find "${bundle_dir}" -maxdepth 1 -type f -iname "libass*.dll" | grep -q .; then
+    echo "Portable bundle contains a legacy libass*.dll alongside mangetsu.dll." >&2
+    exit 1
+  fi
+}
+
 write_bundle_manifest() {
   {
     (
@@ -266,6 +280,7 @@ done
 
 strip_portable_debug_symbols
 
+verify_mangetsu_dll
 write_bundle_manifest
 
 bundle_dir_windows="$(cygpath -m "${bundle_dir}")"
