@@ -241,6 +241,28 @@ declare -a scan_queue=(
   "${ffmpeg_prefix}/bin/ffprobe.exe"
 )
 
+# Some MSYS2 FFmpeg/QtMultimedia runtime DLLs have additional optional
+# dependencies that the transitive ldd walk can miss after windeployqt copies
+# version-matched FFmpeg DLLs into the portable directory. Explicitly stage
+# these reported missing libraries, then walk each library's own dependencies.
+required_msys2_ffmpeg_dlls=(
+  libgme.dll
+  libbluray-4.dll
+  libgnutls-30.dll
+  libmodplug-1.dll
+)
+
+for dependency_name in "${required_msys2_ffmpeg_dlls[@]}"; do
+  dependency_path="${msys2_bin_dir}/${dependency_name}"
+  if [[ ! -f "${dependency_path}" ]]; then
+    echo "Missing required MSYS2 FFmpeg runtime DLL: ${dependency_path}" >&2
+    exit 1
+  fi
+  cp "${dependency_path}" "${bundle_dir}/${dependency_name}"
+  copied_non_qt_dependencies["${dependency_name}"]=1
+  scan_queue+=("${dependency_path}")
+done
+
 while [ "${#scan_queue[@]}" -gt 0 ]; do
   current_binary="${scan_queue[0]}"
   scan_queue=("${scan_queue[@]:1}")
