@@ -39,7 +39,7 @@ else
     "ffmpeg version 9.0"*|"ffmpeg version n9.0"*)
       ;;
     *)
-      echo "Expected the upstream/release pinned ffmpeg executable to report a 7.1.x release, but got: ${ffmpeg_release_line}"
+      echo "Expected the upstream/release pinned ffmpeg executable to report a 9.0.x release, but got: ${ffmpeg_release_line}"
       exit 1
       ;;
   esac
