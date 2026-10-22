@@ -21,9 +21,9 @@ The Mangetsu mode is pinned to:
 
 ```text
 Repo: https://github.com/amanosatosi/FFmpeg
-Branch: 7.1
-Commit: 6282c1941e3611ce43a4dcbe83a679c0323b8b13
-Commit title: Enhance FFmpeg support for libassmod/mangetsu integration
+Branch: 9.0
+Commit: ef4164de9f5cc18cda26ca84567ff457290be114
+Commit title: avfilter: port Mangetsu RGBA and blend renderer to FFmpeg 9
 ```
 
 The Mangetsu build enables FFmpeg's existing `ass` and `subtitles` filters with libassmod-backed Mangetsu options. It does not introduce new FFmpeg filter names.
