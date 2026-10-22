@@ -1048,7 +1048,7 @@ std::string format_codec_id_detail(const AVCodecID codec_id) {
 }
 
 std::string codec_profile_name(const AVCodecID codec_id, const int profile) {
-    if (profile == FF_PROFILE_UNKNOWN) {
+    if (profile == AV_PROFILE_UNKNOWN) {
         return "unknown";
     }
 
@@ -3961,7 +3961,7 @@ std::string format_first_decoded_video_frame_log(
     const AVCodecID source_codec_id = streaming_frame.source_codec_id;
     const int decoder_profile = resources.video_decoder != nullptr
         ? resources.video_decoder->profile
-        : FF_PROFILE_UNKNOWN;
+        : AV_PROFILE_UNKNOWN;
     const AVPixelFormat decoder_pixel_format = resources.video_decoder != nullptr
         ? resources.video_decoder->pix_fmt
         : AV_PIX_FMT_NONE;
