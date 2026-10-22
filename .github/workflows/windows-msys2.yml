@@ -16,11 +16,11 @@ jobs:
       UTSURE_MSYS2_PREFIX: "/ucrt64"
       UTSURE_TOOLCHAIN_ID_PREFIX: "ucrt64-gcc"
       UTSURE_FFMPEG_SOURCE: "mangetsu"
-      UTSURE_FFMPEG_SERIES: "7.1"
-      UTSURE_FFMPEG_VERSION: "7.1.2"
+      UTSURE_FFMPEG_SERIES: "9.0"
+      UTSURE_FFMPEG_VERSION: "9.0"
       UTSURE_FFMPEG_MANGETSU_REPO_URL: "https://github.com/amanosatosi/FFmpeg.git"
-      UTSURE_FFMPEG_MANGETSU_REF: "7.1"
-      UTSURE_FFMPEG_MANGETSU_COMMIT: "6282c1941e3611ce43a4dcbe83a679c0323b8b13"
+      UTSURE_FFMPEG_MANGETSU_REF: "9.0"
+      UTSURE_FFMPEG_MANGETSU_COMMIT: "ef4164de9f5cc18cda26ca84567ff457290be114"
       UTSURE_FFMS2_REF: "25cef14386fcaaa58ee547065deee8f6e82c56a2"
       UTSURE_FFMPEG_CONFIGURE_FLAGS: >-
         --enable-gpl --enable-libx264 --enable-libx265 --enable-shared --disable-static
@@ -28,7 +28,9 @@ jobs:
         --enable-libass
       UTSURE_FONTCOLLECTOR_VERSION: "4.0.2"
       UTSURE_PYINSTALLER_VERSION: "6.19.0"
-      UTSURE_LIBASSMOD_REF: "mangetsu"
+      UTSURE_LIBASSMOD_REF: "codex/windows-mangetsu-dll"
+      UTSURE_LIBASSMOD_COMMIT: "56b02b2e60bd86333b9b5c05df6f82c16b335135"
+      UTSURE_WINDOWS_MANGETSU_DLL: "1"
       UTSURE_LIBASSMOD_ALIGNED_ALLOCATION_DEBUG: "1"
       UTSURE_PORTABLE_BUNDLE_NAME: encoder-windows-x64-portable
       UTSURE_CTEST_ARGS: "-LE slow"
