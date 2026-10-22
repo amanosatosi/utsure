@@ -8,6 +8,10 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+concurrency:
+  group: utsure-windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: windows-latest
@@ -20,7 +24,7 @@ jobs:
       UTSURE_FFMPEG_VERSION: "9.0"
       UTSURE_FFMPEG_MANGETSU_REPO_URL: "https://github.com/amanosatosi/FFmpeg.git"
       UTSURE_FFMPEG_MANGETSU_REF: "9.0"
-      UTSURE_FFMPEG_MANGETSU_COMMIT: "ef4164de9f5cc18cda26ca84567ff457290be114"
+      UTSURE_FFMPEG_MANGETSU_COMMIT: "4e70a291327ae7c0c93713a29e09ce14259c6e27"
       UTSURE_FFMS2_REF: "25cef14386fcaaa58ee547065deee8f6e82c56a2"
       UTSURE_FFMPEG_CONFIGURE_FLAGS: >-
         --enable-gpl --enable-libx264 --enable-libx265 --enable-shared --disable-static
