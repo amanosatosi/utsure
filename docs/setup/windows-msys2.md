@@ -37,8 +37,10 @@ pacman -S --needed \
 From a clean repository checkout:
 
 ```bash
-export UTSURE_LIBASSMOD_REF=mangetsu
-export UTSURE_FFMPEG_VERSION=7.1.2
+export UTSURE_LIBASSMOD_REF=codex/windows-mangetsu-dll
+export UTSURE_LIBASSMOD_COMMIT=56b02b2e60bd86333b9b5c05df6f82c16b335135
+export UTSURE_WINDOWS_MANGETSU_DLL=1
+export UTSURE_FFMPEG_VERSION=9.0
 export UTSURE_FFMS2_REF=25cef14386fcaaa58ee547065deee8f6e82c56a2
 ./scripts/ci/windows-msys2-build-ffmpeg.sh
 ./scripts/ci/windows-msys2-build-ffms2.sh
@@ -49,9 +51,9 @@ UTSURE_CMAKE_BUILD_TYPE=Debug ./scripts/ci/windows-msys2-build.sh
 
 What that does:
 
-- builds the pinned FFmpeg 7.1.2 source dependency into `.deps/ffmpeg/prefix`
+- builds the pinned FFmpeg 9.0 source dependency into `.deps/ffmpeg/prefix`
 - builds the pinned FFMS2 preview dependency into `.deps/ffms2/prefix`
-- builds the `libassmod` source dependency from the `mangetsu` branch into `.deps/libassmod/prefix`
+- builds the `libassmod` source dependency from the Mangetsu DLL branch into `.deps/libassmod/prefix`
 - audits configure-time dependency discovery before the main build
 - configures `build/` with CMake and Ninja
 - builds the core library, desktop app, and core test executables
@@ -103,7 +105,7 @@ The FontCollector bundling step requires a Windows Python on `PATH`; GitHub Acti
 - `PKG_CONFIG_PATH` must resolve `libass` from the `libassmod` prefix before any system `libass`.
 - `CMAKE_PREFIX_PATH` should include `/ucrt64` for the MSYS2 Qt and other packaged dependencies.
 - The desktop app now uses SVG-backed toolbar and timeline icons, so the MSYS2 setup must include both `mingw-w64-ucrt-x86_64-qt6-base` and `mingw-w64-ucrt-x86_64-qt6-svg`.
-- Configure now fails if the discovered FFmpeg core libraries or FFMS2 preview library are outside their pinned prefixes, or if the pinned `ffmpeg` executable is outside the supported `7.1.x` series.
+- Configure now fails if the discovered FFmpeg core libraries or FFMS2 preview library are outside their pinned prefixes, or if the pinned `ffmpeg` executable is outside the supported `9.0.x` series.
 
 ## Current limits
 
