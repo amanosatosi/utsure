@@ -22,7 +22,7 @@ The Mangetsu mode is pinned to:
 ```text
 Repo: https://github.com/amanosatosi/FFmpeg
 Branch: 9.0
-Commit: ef4164de9f5cc18cda26ca84567ff457290be114
+Commit: 4e70a291327ae7c0c93713a29e09ce14259c6e27
 Commit title: avfilter: port Mangetsu RGBA and blend renderer to FFmpeg 9
 ```
 
