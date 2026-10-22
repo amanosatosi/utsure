@@ -36,7 +36,7 @@ if [[ "${ffmpeg_source_mode}" == "mangetsu" ]]; then
   echo "Mangetsu FFmpeg source selected; accepting commit-version ffmpeg string: ${ffmpeg_mangetsu_short_commit}"
 else
   case "${ffmpeg_release_line}" in
-    "ffmpeg version 7.1."*|"ffmpeg version n7.1."*)
+    "ffmpeg version 9.0"*|"ffmpeg version n9.0"*)
       ;;
     *)
       echo "Expected the upstream/release pinned ffmpeg executable to report a 7.1.x release, but got: ${ffmpeg_release_line}"
