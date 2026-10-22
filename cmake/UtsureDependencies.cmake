@@ -2,7 +2,7 @@ include_guard(GLOBAL)
 
 set(UTSURE_QT_MIN_VERSION "6.5" CACHE STRING "Minimum supported Qt 6 version.")
 set(UTSURE_FFMPEG_REQUIRED_SERIES "9.0" CACHE STRING "Required FFmpeg major.minor series for the active media pipeline.")
-set(UTSURE_FFMPEG_NEXT_UNTESTED_SERIES "7.2" CACHE STRING "First FFmpeg series outside the currently supported range.")
+set(UTSURE_FFMPEG_NEXT_UNTESTED_SERIES "10.0" CACHE STRING "First FFmpeg series outside the currently supported range.")
 set(UTSURE_FFMPEG_SOURCE "$ENV{UTSURE_FFMPEG_SOURCE}" CACHE STRING "FFmpeg source mode: upstream or mangetsu.")
 if("${UTSURE_FFMPEG_SOURCE}" STREQUAL "")
     set(UTSURE_FFMPEG_SOURCE "upstream" CACHE STRING "FFmpeg source mode: upstream or mangetsu." FORCE)
