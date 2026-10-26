@@ -53,6 +53,26 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M50 Encode ring geometry and live output size refresh implemented; awaiting GitHub Actions validation.
 - [x] M51 Portable dependency closure and startup verification implemented; awaiting GitHub Actions validation.
 - [x] M52 Accurate, legible toolbar progress ring implemented; awaiting GitHub Actions visual/build verification.
+- [x] M53 Animated yellow progress arc correction implemented; awaiting GitHub Actions validation.
+
+### M53 Restore spinning progress and disabled-icon gold
+
+Status: Implemented; awaiting GitHub Actions validation.
+
+Scope:
+  * Restore motion of the progress arc during active encoding as well as preparation.
+  * Ensure the Start button retains its gold icon while deliberately disabled during encoding.
+  * Preserve the 20 px outer ring diameter, 22 px icon slot, the 3.4 px stroke and exact progress sweep.
+
+Implementation:
+  * Rotate the foreground arc by the existing animation phase every 90 ms, keeping the gray-gold track stationary and preserving the exact progress fraction as the arc sweep.
+  * Preserve flat caps and no minimum sweep, so the visible yellow extent never exceeds the actual percentage.
+  * Reuse fixed_color_icon_from_pixmap() to supply the same gold pixmap for Normal, Disabled, Active and Selected Qt icon states. Finish QPainter before producing the icon.
+  * Keep unknown-progress preparation activity animation separate from measured encoding progress and do not change progress accounting or layout.
+
+Validation:
+  * Source invariants checked for rotation independent of the measured sweep, explicit disabled-mode icon pixmaps, and the existing timer's phase update.
+  * GitHub Actions Windows build and packaged startup tests provide compilation/runtime validation. No local compilation per AGENTS.md.
 
 ### M52 Accurate, legible toolbar progress ring
 

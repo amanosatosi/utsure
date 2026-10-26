@@ -917,18 +917,19 @@ QIcon make_busy_icon(const int phase, const std::optional<double> progress_fract
     painter.drawEllipse(arc_rect);
 
     painter.setPen(QPen(ring_color, kRingStrokeWidth, Qt::SolidLine, Qt::FlatCap));
+
+    // Spin the arc, not its progress: rotation changes only the starting angle,
+    // never the sweep. A 6.2% encode remains precisely 22.32 degrees at every
+    // animation frame, so the indicator cannot imply more work is completed.
+    painter.rotate(static_cast<qreal>(phase) * 30.0);
     if (!progress_fraction.has_value()) {
-        // Preparing has no meaningful percentage: show a rotating activity
-        // segment instead of implying 0% or a fabricated amount of progress.
-        painter.rotate(static_cast<qreal>(phase) * 30.0);
+        // Preparation is indeterminate, so a separate activity arc is valid.
         painter.drawArc(arc_rect, 90 * 16, -70 * 16);
     } else {
         const double progress = clamp_progress_fraction(*progress_fraction);
         if (progress >= 1.0) {
             painter.drawEllipse(arc_rect);
         } else if (progress > 0.0) {
-            // A stationary clockwise arc from 12 o'clock, with flat ends.
-            // No minimum sweep or round caps: 6.2% uses exactly 22.32 degrees.
             QPainterPath progress_arc;
             progress_arc.arcMoveTo(arc_rect, 90.0);
             progress_arc.arcTo(arc_rect, 90.0, -progress * 360.0);
@@ -936,7 +937,11 @@ QIcon make_busy_icon(const int phase, const std::optional<double> progress_fract
         }
     }
 
-    return QIcon(pixmap);
+    painter.end();
+    // During encoding the Start button is disabled to prevent duplicate jobs.
+    // QIcon(pixmap) is automatically tinted gray for a disabled QToolButton.
+    // Explicit pixmaps for every mode keep the foreground #ffce2e gold.
+    return fixed_color_icon_from_pixmap(pixmap);
 }
 
 QString status_prefix_for_session(const QString &job_name, const QString &line) {
