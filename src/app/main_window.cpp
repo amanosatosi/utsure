@@ -1031,8 +1031,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     app_settings_ = settings_load_result.settings;
     app_settings_path_ = settings_load_result.config_path;
 
-    setWindowTitle(QString("%1 %2")
-                       .arg(to_qstring(utsure::core::BuildInfo::project_name()))
+    setWindowTitle(QString("Utsure v%1")
                        .arg(to_qstring(utsure::core::BuildInfo::project_version())));
     resize(1240, 680);
     setMinimumSize(960, 500);
@@ -3755,8 +3754,7 @@ void MainWindow::show_info_dialog() {
     QMessageBox::information(
         this,
         "utsure",
-        QString("%1 %2\n\nWindows desktop video encoder with batch queues, FFmpeg media processing, and libassmod subtitle burn-in.")
-            .arg(to_qstring(utsure::core::BuildInfo::project_name()))
+        QString("Utsure v%1\n\nWindows desktop video encoder with batch queues, FFmpeg media processing, and libassmod subtitle burn-in.")
             .arg(to_qstring(utsure::core::BuildInfo::project_version()))
     );
 }

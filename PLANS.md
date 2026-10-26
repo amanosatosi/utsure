@@ -54,6 +54,23 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M51 Portable dependency closure and startup verification implemented; awaiting GitHub Actions validation.
 - [x] M52 Accurate, legible toolbar progress ring implemented; awaiting GitHub Actions visual/build verification.
 - [x] M53 Animated yellow progress arc correction implemented; awaiting GitHub Actions validation.
+- [x] M54 Set the displayed application version to Utsure v3.0 on master; awaiting GitHub Actions validation.
+
+### M54 Display Utsure v3.0
+
+Status: Implemented; awaiting GitHub Actions validation.
+
+Scope:
+  * Change the user-facing version on master to Utsure v3.0 without modifying the settings-file schema or dependency versions.
+
+Implementation:
+  * Set CMake's authoritative project version to 3.0, inherited by Qt application metadata and build/crash diagnostics.
+  * Use "Utsure v3.0" for the title bar and Info dialog, with the version coming from BuildInfo instead of a separate UI hardcoded value.
+  * Align the fallback and descriptive BuildInfo strings with v3.0.
+  * Leave AppSettings::kCurrentVersion unchanged at 1 because it is the JSON settings schema, not the application release.
+
+Validation:
+  * Static validation of version flow and changed strings; compile and smoke tests are performed by GitHub Actions per AGENTS.md.
 
 ### M53 Restore spinning progress and disabled-icon gold
 
