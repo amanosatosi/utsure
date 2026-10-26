@@ -882,21 +882,28 @@ std::optional<double> encode_progress_fraction_for(
     return std::nullopt;
 }
 
-QIcon make_busy_icon(const int phase, const double progress_fraction) {
-    const double clamped_progress = clamp_progress_fraction(progress_fraction);
-    QPixmap pixmap(18, 18);
+constexpr int kBusyRingIconSize = 22;
+
+QIcon make_busy_icon(const int phase, const std::optional<double> progress_fraction) {
+    // Render at 2x resolution for sharp edges on high-DPI screens. Qt uses
+    // logical coordinates with the pixmap's device pixel ratio.
+    constexpr qreal kDevicePixelRatio = 2.0;
+    QPixmap pixmap(kBusyRingIconSize * 2, kBusyRingIconSize * 2);
+    pixmap.setDevicePixelRatio(kDevicePixelRatio);
     pixmap.fill(Qt::transparent);
 
     QPainter painter(&pixmap);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.translate(9, 9);
-    painter.rotate(static_cast<qreal>(phase) * 30.0);
+    painter.translate(kBusyRingIconSize / 2.0, kBusyRingIconSize / 2.0);
 
     QColor track_color("#ffce2e");
-    track_color.setAlpha(72);
-    QColor ring_color("#ffce2e");
+    track_color.setAlpha(104);
+    const QColor ring_color("#ffce2e");
+
+    // 20px outer diameter in a 22px icon; the toolbar button stays 30px.
+    // Both the track and progress use one centerline to avoid overpainting.
     constexpr qreal kRingStrokeWidth = 3.4;
-    constexpr qreal kRingOuterRadius = 6.0;
+    constexpr qreal kRingOuterRadius = 10.0;
     const qreal centerline_radius = kRingOuterRadius - (kRingStrokeWidth / 2.0);
     const QRectF arc_rect(
         -centerline_radius,
@@ -905,18 +912,28 @@ QIcon make_busy_icon(const int phase, const double progress_fraction) {
         centerline_radius * 2.0
     );
 
-    painter.setPen(QPen(track_color, kRingStrokeWidth, Qt::SolidLine, Qt::FlatCap));
     painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(track_color, kRingStrokeWidth, Qt::SolidLine, Qt::FlatCap));
     painter.drawEllipse(arc_rect);
 
     painter.setPen(QPen(ring_color, kRingStrokeWidth, Qt::SolidLine, Qt::FlatCap));
-    if (clamped_progress >= 1.0) {
-        painter.drawEllipse(arc_rect);
-    } else if (clamped_progress > 0.0) {
-        QPainterPath progress_arc;
-        progress_arc.arcMoveTo(arc_rect, 35.0);
-        progress_arc.arcTo(arc_rect, 35.0, clamped_progress * 360.0);
-        painter.drawPath(progress_arc);
+    if (!progress_fraction.has_value()) {
+        // Preparing has no meaningful percentage: show a rotating activity
+        // segment instead of implying 0% or a fabricated amount of progress.
+        painter.rotate(static_cast<qreal>(phase) * 30.0);
+        painter.drawArc(arc_rect, 90 * 16, -70 * 16);
+    } else {
+        const double progress = clamp_progress_fraction(*progress_fraction);
+        if (progress >= 1.0) {
+            painter.drawEllipse(arc_rect);
+        } else if (progress > 0.0) {
+            // A stationary clockwise arc from 12 o'clock, with flat ends.
+            // No minimum sweep or round caps: 6.2% uses exactly 22.32 degrees.
+            QPainterPath progress_arc;
+            progress_arc.arcMoveTo(arc_rect, 90.0);
+            progress_arc.arcTo(arc_rect, 90.0, -progress * 360.0);
+            painter.drawPath(progress_arc);
+        }
     }
 
     return QIcon(pixmap);
@@ -6073,7 +6090,13 @@ void MainWindow::update_start_button_visuals() {
         start_button_->setToolTip(queue_start_planning_active_ ? "Preparing..." : (stop_requested_ ? "Stopping..." : "Encoding..."));
         start_button_->setText(QString{});
         start_button_->setProperty("iconFallback", false);
-        start_button_->setIcon(make_busy_icon(busy_spinner_phase_, current_busy_spinner_progress_fraction()));
+        start_button_->setIconSize(QSize(kBusyRingIconSize, kBusyRingIconSize));
+        start_button_->setIcon(make_busy_icon(
+            busy_spinner_phase_,
+            queue_start_planning_active_
+                ? std::nullopt
+                : std::optional<double>{current_busy_spinner_progress_fraction()}
+        ));
         start_button_->setMinimumWidth(30);
         start_button_->setMaximumWidth(30);
         start_button_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
@@ -6118,7 +6141,12 @@ void MainWindow::advance_busy_spinner() {
     }
 
     busy_spinner_phase_ = (busy_spinner_phase_ + 1) % 12;
-    start_button_->setIcon(make_busy_icon(busy_spinner_phase_, current_busy_spinner_progress_fraction()));
+    start_button_->setIcon(make_busy_icon(
+        busy_spinner_phase_,
+        queue_start_planning_active_
+            ? std::nullopt
+            : std::optional<double>{current_busy_spinner_progress_fraction()}
+    ));
     refresh_selected_job_details();
 }
 

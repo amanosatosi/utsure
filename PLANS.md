@@ -52,6 +52,27 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M49 Trim-aware subtitle source timeline correction implemented; awaiting GitHub Actions validation.
 - [x] M50 Encode ring geometry and live output size refresh implemented; awaiting GitHub Actions validation.
 - [x] M51 Portable dependency closure and startup verification implemented; awaiting GitHub Actions validation.
+- [x] M52 Accurate, legible toolbar progress ring implemented; awaiting GitHub Actions visual/build verification.
+
+### M52 Accurate, legible toolbar progress ring
+
+Status: Implemented; awaiting GitHub Actions validation.
+
+Scope:
+  * Make the existing toolbar encoding ring visually large enough for a 30px button without modifying the surrounding layout.
+  * Keep progress percentage truthful: do not introduce round caps, a minimum visible arc, or any non-linear scaling.
+  * Preserve a spinning activity indicator only for the unknown-progress preparation state.
+
+Implementation:
+  * Render a 20px outer-diameter ring in a 22px logical icon at 2x resolution for crisp anti-aliasing, and request a 22px busy icon rather than shrinking it into the default 16px icon slot.
+  * Increase the background track visibility while preserving the gold progress color and 3.4px stroke.
+  * Render determinate progress as a stationary clockwise sweep from 12 o'clock with exact 360° * fraction and flat ends; zero has no gold arc and 100% is the complete ring.
+  * Rotate a distinct activity arc only while the queue is preparing and has no measurable encoding fraction.
+  * Preserve the current timer for selected-job output-size refreshes and restore the normal play icon's 16px size on idle.
+
+Validation:
+  * Inspect geometric invariants and representative progress sweeps (0, 6.2, 25, 50, 75, 100%); no local compilation per AGENTS.md.
+  * GitHub Actions Windows CI must build and smoke-test the updated application.
 
 ### M51 Portable dependency closure and startup verification
 
