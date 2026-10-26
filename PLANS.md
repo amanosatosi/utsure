@@ -51,6 +51,26 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M48 FFmpeg/libassmod hardsub filter backend implemented; awaiting GitHub Actions validation.
 - [x] M49 Trim-aware subtitle source timeline correction implemented; awaiting GitHub Actions validation.
 - [x] M50 Encode ring geometry and live output size refresh implemented; awaiting GitHub Actions validation.
+- [x] M51 Portable dependency closure and startup verification implemented; awaiting GitHub Actions validation.
+
+### M51 Portable dependency closure and startup verification
+
+Status: Implemented; awaiting GitHub Actions validation.
+
+Scope:
+  * Repair missing Windows portable runtime DLLs: libaom.dll, libcairo-2.dll, libdav1d-7.dll, and libgobject-2.0-0.dll.
+  * Stage transitive dependencies of the actual shipped Utsure EXE, FFmpeg tools, Qt plugins, and helper executables.
+  * Preserve pinned FFmpeg 9.0/Mangetsu, FFMS2 and Qt versions.
+
+Implementation:
+  * Add the four reported dependencies to the required MSYS2 runtime staging set.
+  * Recursively scan each shipped PE binary's import table via objdump, resolve non-Windows DLLs from the app bundle or pinned dependency prefixes, and copy missing imports into the portable root.
+  * Fail packaging for unresolved imports instead of succeeding because PATH supplies a build-machine-only DLL.
+  * Treat Windows OS DLLs and API-set forwarders as external system-provided libraries.
+  * Check the actual exit code of the isolated extracted portable executable smoke test.
+
+Validation:
+  * GitHub Actions on Windows must validate the complete package and startup. No local compilation, per AGENTS.md.
 
 ### M50 Encode ring geometry and live output size refresh
 

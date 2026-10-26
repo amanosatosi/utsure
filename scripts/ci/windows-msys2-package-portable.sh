@@ -60,44 +60,47 @@ find_windeployqt() {
   return 1
 }
 
-list_dependency_paths() {
+# Read actual PE imports, including those of libraries copied by windeployqt.
+# Unlike ldd, this is independent of the build machine's working PATH.
+list_imported_dll_names() {
   local binary_path="$1"
-  ldd "${binary_path}" 2>/dev/null | sed -nE \
-    -e 's#.*=> (/[^ ]+) .*#\1#p' \
-    -e 's#^[[:space:]]*(/[^ ]+) .*#\1#p' | sort -u
+  objdump -p "${binary_path}" |
+    sed -nE 's/^[[:space:]]*DLL Name:[[:space:]]*([^[:space:]]+).*$/\1/p' |
+    LC_ALL=C sort -fu
 }
 
-should_package_dependency() {
-  local dependency_path="$1"
+# Never copy Windows system DLLs or virtual API-set forwarders into the zip.
+windows_system_dir="$(cygpath -u "${SystemRoot:-${WINDIR:-C:\\Windows}}")/System32"
 
-  if [ ! -f "${dependency_path}" ]; then
-    return 1
-  fi
-
-  case "${dependency_path}" in
-    "${msys2_bin_dir}"/*|\
-    "${ffmpeg_prefix}/bin/"*|\
-    "${ffms2_prefix}/bin/"*|\
-    "${libassmod_prefix}/bin/"*)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-is_qt_runtime() {
+resolve_runtime_dll() {
   local dependency_name="$1"
+  local importing_dir="$2"
+  local directory=""
+  local candidate=""
+  for directory in \
+    "${importing_dir}" \
+    "${bundle_dir}" \
+    "${ffmpeg_prefix}/bin" \
+    "${ffms2_prefix}/bin" \
+    "${libassmod_prefix}/bin" \
+    "${msys2_bin_dir}"; do
+    candidate="${directory}/${dependency_name}"
+    if [[ -f "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
 
+is_windows_runtime_dll() {
+  local dependency_name="${1,,}"
   case "${dependency_name}" in
-    Qt6*.dll|qt*.dll)
+    api-ms-win-*.dll|ext-ms-win-*.dll)
       return 0
       ;;
-    *)
-      return 1
-      ;;
   esac
+  [[ -f "${windows_system_dir}/${dependency_name}" ]]
 }
 
 write_qt_runtime_manifest() {
@@ -233,65 +236,89 @@ write_qt_runtime_manifest
 copy_fontcollector_tool
 copy_ffmpeg_cli_tools
 
+if ! command -v objdump >/dev/null 2>&1; then
+  echo "Portable packaging requires objdump from MSYS2 binutils." >&2
+  exit 1
+fi
+
 declare -A scanned_binaries=()
 declare -A copied_non_qt_dependencies=()
-declare -a scan_queue=(
-  "${app_executable}"
-  "${ffmpeg_prefix}/bin/ffmpeg.exe"
-  "${ffmpeg_prefix}/bin/ffprobe.exe"
-)
+declare -a scan_queue=()
 
-# Some MSYS2 FFmpeg/QtMultimedia runtime DLLs have additional optional
-# dependencies that the transitive ldd walk can miss after windeployqt copies
-# version-matched FFmpeg DLLs into the portable directory. Explicitly stage
-# these reported missing libraries, then walk each library's own dependencies.
+# Keep known FFmpeg 9 / QtMultimedia runtimes even when a library loads them
+# dynamically rather than through a regular PE import.
 required_msys2_ffmpeg_dlls=(
   libgme.dll
   libbluray-4.dll
   libgnutls-30.dll
   libmodplug-1.dll
+  libaom.dll
+  libcairo-2.dll
+  libdav1d-7.dll
+  libgobject-2.0-0.dll
 )
 
 for dependency_name in "${required_msys2_ffmpeg_dlls[@]}"; do
   dependency_path="${msys2_bin_dir}/${dependency_name}"
   if [[ ! -f "${dependency_path}" ]]; then
-    echo "Missing required MSYS2 FFmpeg runtime DLL: ${dependency_path}" >&2
+    echo "Missing required MSYS2 runtime DLL: ${dependency_path}" >&2
     exit 1
   fi
   cp "${dependency_path}" "${bundle_dir}/${dependency_name}"
-  copied_non_qt_dependencies["${dependency_name}"]=1
-  scan_queue+=("${dependency_path}")
+  copied_non_qt_dependencies["${dependency_name,,}"]=1
 done
 
-while [ "${#scan_queue[@]}" -gt 0 ]; do
+# Examine each EXE and DLL as it will be distributed. This includes the Qt
+# platform/image/icon plugins, FFmpeg CLI tools and nested FontCollector helper.
+while IFS= read -r -d '' bundled_binary; do
+  scan_queue+=("${bundled_binary}")
+done < <(find "${bundle_dir}" -type f \( -iname '*.exe' -o -iname '*.dll' \) -print0)
+
+while [[ ${#scan_queue[@]} -gt 0 ]]; do
   current_binary="${scan_queue[0]}"
   scan_queue=("${scan_queue[@]:1}")
 
-  if [ -n "${scanned_binaries["${current_binary}"]:-}" ]; then
+  if [[ -n "${scanned_binaries["${current_binary}"]:-}" ]]; then
     continue
   fi
   scanned_binaries["${current_binary}"]=1
 
-  while IFS= read -r dependency_path; do
-    if ! should_package_dependency "${dependency_path}"; then
-      continue
-    fi
+  if ! imports="$(list_imported_dll_names "${current_binary}")"; then
+    echo "Failed to inspect PE imports for '${current_binary}'." >&2
+    exit 1
+  fi
 
-    dependency_name="$(basename "${dependency_path}")"
-    if is_qt_runtime "${dependency_name}"; then
-      continue
-    fi
+  while IFS= read -r dependency_name; do
+    [[ -z "${dependency_name}" ]] && continue
 
-    if [ ! -f "${bundle_dir}/${dependency_name}" ]; then
-      cp "${dependency_path}" "${bundle_dir}/${dependency_name}"
-    fi
+    if dependency_path="$(resolve_runtime_dll "${dependency_name}" "$(dirname "${current_binary}")")"; then
+      dependency_filename="$(basename "${dependency_path}")"
+      if [[ "${dependency_path}" != "${bundle_dir}/"* ]]; then
+        if [[ ! -f "${bundle_dir}/${dependency_filename}" ]]; then
+          cp "${dependency_path}" "${bundle_dir}/${dependency_filename}"
+        fi
+        dependency_path="${bundle_dir}/${dependency_filename}"
+      fi
 
-    copied_non_qt_dependencies["${dependency_name}"]=1
-
-    if [ -z "${scanned_binaries["${dependency_path}"]:-}" ]; then
-      scan_queue+=("${dependency_path}")
+      if [[ ! "${dependency_filename}" =~ ^(Qt6|qt).*\.dll$ ]]; then
+        copied_non_qt_dependencies["${dependency_filename,,}"]=1
+      fi
+      if [[ -z "${scanned_binaries["${dependency_path}"]:-}" ]]; then
+        scan_queue+=("${dependency_path}")
+      fi
+    elif ! is_windows_runtime_dll "${dependency_name}"; then
+      echo "Unresolved portable DLL import '${dependency_name}' in '${current_binary}'." >&2
+      echo "Not present in the package, pinned dependency prefixes, MSYS2 or Windows System32." >&2
+      exit 1
     fi
-  done < <(list_dependency_paths "${current_binary}")
+  done <<< "${imports}"
+done
+
+for dependency_name in "${required_msys2_ffmpeg_dlls[@]}"; do
+  if [[ ! -f "${bundle_dir}/${dependency_name}" ]]; then
+    echo "Portable bundle is missing required runtime '${dependency_name}'." >&2
+    exit 1
+  fi
 done
 
 {
@@ -332,7 +359,8 @@ if ('${package_fontcollector}' -eq 'ON') { \
   if (!(Test-Path \$fontCollectorPath)) { throw \"Portable bundle is missing tools/fontcollector/fontcollector.exe\" }; \
   & \$fontCollectorPath --help | Out-Null; \
 }; \
-& \"\$portablePath/utsure.exe\" --dump-window-structure --smoke-test"
+& \"\$portablePath/utsure.exe\" --dump-window-structure --smoke-test; \
+if (\$LASTEXITCODE -ne 0) { throw \"Portable utsure.exe smoke test failed with exit code \$LASTEXITCODE\" }"
 
 echo "Portable bundle created at ${bundle_dir}"
 echo "Portable zip created at ${bundle_zip}"
