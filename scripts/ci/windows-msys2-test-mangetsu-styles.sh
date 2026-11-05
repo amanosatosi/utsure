@@ -2,7 +2,7 @@
 # Compare rendered pixels with Mangetsu style metadata against equivalent inline overrides.
 set -euo pipefail
 
-tmpdir="$(mktemp -d)"
+tmpdir="$(mktemp -d "./mangetsu-style-smoke.XXXXXX")"
 trap 'rm -rf "${tmpdir}"' EXIT
 
 ffmpeg_bin="${UTSURE_FFMPEG_PREFIX:-${UTSURE_THIRD_PARTY_ROOT:-.deps}/ffmpeg/prefix}/bin/ffmpeg"
