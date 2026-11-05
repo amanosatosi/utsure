@@ -10,7 +10,7 @@ Utsure is a Windows-first desktop video encoder for batch encoding and ASS/SSA h
 - Change the active encode process priority while work is running.
 - Use a bounded-memory FFmpeg streaming pipeline for decode, conversion, audio processing, video encode, and muxing.
 - Encode AAC audio, copy compatible source audio, disable audio, or select a specific source track.
-- Burn ASS/SSA subtitles through `libassmod`, including bundled-font preparation and supported `\img` sidecar assets.
+- Burn ASS/SSA subtitles through `libassmod`, including bundled-font preparation, supported `\img` sidecar assets, and Mangetsu style-extension metadata in external ASS files.
 - Automatically match subtitles or select them manually per job.
 - Preview video and audio, step through frames, jump to a timestamp, and set trim boundaries.
 - Compose intro, main, and end-card/outro media while retaining the main video's output frame rate.
@@ -40,10 +40,10 @@ The application identifies itself as version `1.0` in its window title, Qt appli
 Utsure v1.0 uses:
 
 - C++20 and Qt 6 Widgets for the desktop application.
-- A pinned Mangetsu FFmpeg 7.1-based build for the media pipeline.
+- A pinned Mangetsu FFmpeg 9.0-branch build for the media pipeline.
 - FFMS2 for preview indexing and frame access.
 - `libx264` and `libx265` for software video encoding.
-- Mangetsu `libassmod` for subtitle rendering.
+- Mangetsu `libassmod` for subtitle rendering, including `mangetsu-style` ASS comments when rendering complete external ASS scripts.
 - FontCollector for preparing fonts used by ASS subtitle scripts.
 
 The application is Windows-first. Linux and macOS builds are not release-validated yet, and hardware-accelerated encode/decode is not part of v1.0.
