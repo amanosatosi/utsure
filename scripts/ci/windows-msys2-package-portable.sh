@@ -338,9 +338,8 @@ done
   done
 } | LC_ALL=C sort > "${non_qt_runtime_manifest}"
 
-strip_portable_debug_symbols
-
 verify_mangetsu_dll
+strip_portable_debug_symbols
 write_bundle_manifest
 
 bundle_dir_windows="$(cygpath -m "${bundle_dir}")"
