@@ -32,9 +32,8 @@ jobs:
         --enable-libass
       UTSURE_FONTCOLLECTOR_VERSION: "4.0.2"
       UTSURE_PYINSTALLER_VERSION: "6.19.0"
-      UTSURE_LIBASSMOD_REF: "codex/mangetsu-style-windows-dll"
-      UTSURE_LIBASSMOD_COMMIT: "cc45a6b121927b28ee366dc299afaef56dab3b2a"
-      UTSURE_WINDOWS_MANGETSU_DLL: "1"
+      UTSURE_LIBASSMOD_REF: "mangetsu"
+      UTSURE_LIBASSMOD_COMMIT: "fb7a2f16476dd3b6ead5df485258889ccfd4849f"
       UTSURE_LIBASSMOD_ALIGNED_ALLOCATION_DEBUG: "1"
       UTSURE_PORTABLE_BUNDLE_NAME: encoder-windows-x64-portable
       UTSURE_CTEST_ARGS: "-LE slow"
