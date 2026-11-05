@@ -24,7 +24,7 @@ jobs:
       UTSURE_FFMPEG_VERSION: "9.0"
       UTSURE_FFMPEG_MANGETSU_REPO_URL: "https://github.com/amanosatosi/FFmpeg.git"
       UTSURE_FFMPEG_MANGETSU_REF: "9.0"
-      UTSURE_FFMPEG_MANGETSU_COMMIT: "4e70a291327ae7c0c93713a29e09ce14259c6e27"
+      UTSURE_FFMPEG_MANGETSU_COMMIT: "4a1a02cf9489319871135710d4a8f98baf461608"
       UTSURE_FFMS2_REF: "25cef14386fcaaa58ee547065deee8f6e82c56a2"
       UTSURE_FFMPEG_CONFIGURE_FLAGS: >-
         --enable-gpl --enable-libx264 --enable-libx265 --enable-shared --disable-static
@@ -32,9 +32,8 @@ jobs:
         --enable-libass
       UTSURE_FONTCOLLECTOR_VERSION: "4.0.2"
       UTSURE_PYINSTALLER_VERSION: "6.19.0"
-      UTSURE_LIBASSMOD_REF: "codex/windows-mangetsu-dll"
-      UTSURE_LIBASSMOD_COMMIT: "0f60f21889f675757e808a2f571eb6e481d7e22f"
-      UTSURE_WINDOWS_MANGETSU_DLL: "1"
+      UTSURE_LIBASSMOD_REF: "mangetsu"
+      UTSURE_LIBASSMOD_COMMIT: "fb7a2f16476dd3b6ead5df485258889ccfd4849f"
       UTSURE_LIBASSMOD_ALIGNED_ALLOCATION_DEBUG: "1"
       UTSURE_PORTABLE_BUNDLE_NAME: encoder-windows-x64-portable
       UTSURE_CTEST_ARGS: "-LE slow"
@@ -104,6 +103,9 @@ jobs:
         with:
           path: .deps/ffmpeg
           key: ${{ steps.ffmpeg-cache.outputs.cache-primary-key }}
+
+      - name: Verify Mangetsu style rendering in FFmpeg
+        run: bash ./scripts/ci/windows-msys2-test-mangetsu-styles.sh
 
       - name: Build FFMS2
         run: ./scripts/ci/windows-msys2-build-ffms2.sh

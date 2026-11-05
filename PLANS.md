@@ -2,6 +2,19 @@
 
 This file is the living execution plan for the repository. Update it when a milestone starts, changes shape, or completes.
 
+## M56 Mangetsu style-extension burn-in parity (proposed; CI pending)
+
+Scope:
+- Pin the unmodified `mangetsu` branch supporting `mangetsu-style` metadata, and consume its stock Windows libass ABI and DLL name.
+- Pin the FFmpeg 9.0 filter integration that keeps full native ASS Comment events when using the `subtitles` filter.
+- Preserve Utsure's existing internal `ass_read_file` subtitle-renderer integration, which already uses the full script parser.
+- Compare FFmpeg `ass` and `subtitles` output with style metadata against equivalent inline border override tags in a one-frame pixel regression.
+
+Validation:
+- GitHub Actions must build the unmodified pinned Mangetsu DLL and FFmpeg, pass the pixel checks, run CTest, and package/smoke-test the portable archive.
+- No local compilation was performed (repository requires GitHub Actions).
+- Embedded/container ASS remains on FFmpeg's packet parser; per-script Mangetsu `Comment` metadata cannot be reconstructed from Matroska packets and is not covered by this milestone.
+
 ## Current status
 
 - [x] M0 Repository inspection completed.
