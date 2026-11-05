@@ -8,7 +8,6 @@ libassmod_root="${third_party_root}/libassmod"
 libassmod_repo_url="${UTSURE_LIBASSMOD_SOURCE_URL:-https://github.com/amanosatosi/libassmod.git}"
 libassmod_ref="${UTSURE_LIBASSMOD_REF:-mangetsu}"
 libassmod_commit="${UTSURE_LIBASSMOD_COMMIT:-}"
-windows_mangetsu_dll="${UTSURE_WINDOWS_MANGETSU_DLL:-0}"
 libassmod_source_dir="${UTSURE_LIBASSMOD_SOURCE_DIR:-${libassmod_root}/src}"
 libassmod_build_dir="${UTSURE_LIBASSMOD_BUILD_DIR:-${libassmod_root}/build}"
 libassmod_prefix="${UTSURE_LIBASSMOD_PREFIX:-${libassmod_root}/prefix}"
@@ -74,10 +73,6 @@ if [[ "${libassmod_aligned_allocation_debug}" == "true" ]]; then
   libassmod_meson_args+=( -Daligned-allocation-debug=true )
 fi
 
-if [[ "${windows_mangetsu_dll}" == "1" ]]; then
-  libassmod_meson_args+=( -Dwindows-mangetsu-dll=true )
-fi
-
 meson setup "${libassmod_build_dir}" "${libassmod_source_dir}" \
   "${libassmod_meson_args[@]}" \
   --wipe
@@ -85,9 +80,5 @@ meson setup "${libassmod_build_dir}" "${libassmod_source_dir}" \
 meson compile -C "${libassmod_build_dir}"
 meson install -C "${libassmod_build_dir}"
 
-if [[ "${windows_mangetsu_dll}" == "1" && ! -f "${libassmod_prefix}/bin/mangetsu.dll" ]]; then
-  echo "Missing canonical mangetsu.dll after libassmod installation" >&2
-  exit 1
-fi
 
 echo "libassmod installed to ${libassmod_prefix}"
