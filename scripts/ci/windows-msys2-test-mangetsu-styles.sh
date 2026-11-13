@@ -5,9 +5,24 @@ set -euo pipefail
 tmpdir="$(mktemp -d "./mangetsu-style-smoke.XXXXXX")"
 trap 'rm -rf "${tmpdir}"' EXIT
 
-ffmpeg_bin="${UTSURE_FFMPEG_PREFIX:-${UTSURE_THIRD_PARTY_ROOT:-.deps}/ffmpeg/prefix}/bin/ffmpeg"
+third_party_root="${UTSURE_THIRD_PARTY_ROOT:-.deps}"
+ffmpeg_prefix="${UTSURE_FFMPEG_PREFIX:-${third_party_root}/ffmpeg/prefix}"
+libassmod_prefix="${UTSURE_LIBASSMOD_PREFIX:-${third_party_root}/libassmod/prefix}"
+msys2_prefix="${UTSURE_MSYS2_PREFIX:-/ucrt64}"
+
+# FFmpeg and Mangetsu are separate shared builds. Each CI step gets a fresh
+# shell, so the PATH exported by the previous build step is not inherited.
+# Without the Mangetsu DLL directory, the Windows loader can fail silently
+# with status 127 before FFmpeg prints any diagnostics.
+export PATH="${ffmpeg_prefix}/bin:${libassmod_prefix}/bin:${msys2_prefix}/bin:${PATH}"
+ffmpeg_bin="${ffmpeg_prefix}/bin/ffmpeg"
 if [[ ! -x "${ffmpeg_bin}" ]]; then
   echo "Missing pinned FFmpeg executable: ${ffmpeg_bin}" >&2
+  exit 1
+fi
+
+if ! "${ffmpeg_bin}" -hide_banner -version >/dev/null; then
+  echo "Pinned FFmpeg cannot start. Check Mangetsu and FFmpeg runtime DLL dependencies." >&2
   exit 1
 fi
 
