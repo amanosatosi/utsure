@@ -28,7 +28,7 @@ jobs:
       UTSURE_FFMPEG_VERSION: "9.0"
       UTSURE_FFMPEG_MANGETSU_REPO_URL: "https://github.com/amanosatosi/FFmpeg.git"
       UTSURE_FFMPEG_MANGETSU_REF: "9.0"
-      UTSURE_FFMPEG_MANGETSU_COMMIT: "4e70a291327ae7c0c93713a29e09ce14259c6e27"
+      UTSURE_FFMPEG_MANGETSU_COMMIT: "4a1a02cf9489319871135710d4a8f98baf461608"
       UTSURE_FFMS2_REF: "25cef14386fcaaa58ee547065deee8f6e82c56a2"
       UTSURE_FFMPEG_CONFIGURE_FLAGS: >-
         --enable-gpl --enable-libx264 --enable-libx265 --enable-shared --disable-static
@@ -36,9 +36,7 @@ jobs:
         --enable-libass
       UTSURE_FONTCOLLECTOR_VERSION: "4.0.2"
       UTSURE_PYINSTALLER_VERSION: "6.19.0"
-      UTSURE_LIBASSMOD_REF: "codex/windows-mangetsu-dll"
-      UTSURE_LIBASSMOD_COMMIT: "0f60f21889f675757e808a2f571eb6e481d7e22f"
-      UTSURE_WINDOWS_MANGETSU_DLL: "1"
+      UTSURE_LIBASSMOD_REF: "mangetsu"
       UTSURE_LIBASSMOD_ALIGNED_ALLOCATION_DEBUG: "1"
       UTSURE_PORTABLE_BUNDLE_NAME: encoder-windows-x64-portable
       UTSURE_CTEST_ARGS: "-LE slow"
@@ -89,17 +87,33 @@ jobs:
             libtool
             make
 
+      - name: Validate shell script syntax
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' script; do
+            echo "bash -n ${script}"
+            bash -n "${script}"
+          done < <(find scripts/ci -type f -name '*.sh' -print0)
+
+      - name: Build latest Mangetsu
+        id: mangetsu-build
+        run: |
+          ./scripts/ci/windows-msys2-build-libassmod.sh
+          mangetsu_commit="$(cat "${UTSURE_THIRD_PARTY_ROOT:-.deps}/libassmod/resolved-commit.txt")"
+          if [[ ! "${mangetsu_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Mangetsu build did not produce a valid source revision" >&2
+            exit 1
+          fi
+          echo "commit=${mangetsu_commit}" >> "${GITHUB_OUTPUT}"
+          echo "Mangetsu built from ${UTSURE_LIBASSMOD_REF}: ${mangetsu_commit}"
+
+      # Cache FFmpeg only against the exact Mangetsu revision used in this build.
       - name: Restore FFmpeg cache
         id: ffmpeg-cache
         uses: actions/cache/restore@v4
         with:
           path: .deps/ffmpeg
-          key: utsure-${{ runner.os }}-${{ env.UTSURE_TOOLCHAIN_ID_PREFIX }}-ffmpeg-${{ env.UTSURE_FFMPEG_SOURCE }}-${{ env.UTSURE_FFMPEG_MANGETSU_COMMIT }}-${{ hashFiles('.github/workflows/windows-msys2.yml', 'scripts/ci/windows-msys2-build-ffmpeg.sh') }}
-          restore-keys: |
-            utsure-${{ runner.os }}-${{ env.UTSURE_TOOLCHAIN_ID_PREFIX }}-ffmpeg-${{ env.UTSURE_FFMPEG_SOURCE }}-${{ env.UTSURE_FFMPEG_MANGETSU_COMMIT }}-
-
-      - name: Build libassmod
-        run: ./scripts/ci/windows-msys2-build-libassmod.sh
+          key: utsure-${{ runner.os }}-${{ env.UTSURE_TOOLCHAIN_ID_PREFIX }}-ffmpeg-${{ env.UTSURE_FFMPEG_SOURCE }}-${{ env.UTSURE_FFMPEG_MANGETSU_COMMIT }}-mangetsu-${{ steps.mangetsu-build.outputs.commit }}-${{ hashFiles('.github/workflows/windows-msys2.yml', 'scripts/ci/windows-msys2-build-ffmpeg.sh') }}
 
       - name: Build FFmpeg
         run: ./scripts/ci/windows-msys2-build-ffmpeg.sh
@@ -110,6 +124,9 @@ jobs:
         with:
           path: .deps/ffmpeg
           key: ${{ steps.ffmpeg-cache.outputs.cache-primary-key }}
+
+      - name: Verify Mangetsu style rendering in FFmpeg
+        run: bash ./scripts/ci/windows-msys2-test-mangetsu-styles.sh
 
       - name: Build FFMS2
         run: ./scripts/ci/windows-msys2-build-ffms2.sh

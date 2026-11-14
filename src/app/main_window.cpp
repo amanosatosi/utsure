@@ -1842,6 +1842,8 @@ QLabel#PreviewTimeBadge {
     session_log_view_->setLineWrapMode(QPlainTextEdit::NoWrap);
     logs_tab_layout->addWidget(session_log_view_);
     editor_tabs_->addTab(logs_tab_, "Logs");
+    // The empty queue must display Main, not fall through to Logs.
+    editor_tabs_->setCurrentIndex(0);
 
     startup::checkpoint("Secondary tab placeholders and Logs");
     auto *right_tabs = new QTabWidget(content_splitter);
@@ -2973,6 +2975,9 @@ void MainWindow::add_source_jobs_from_paths(const QStringList &paths) {
     }
     recompute_automatic_output_paths_for_queue();
     select_job(first_new_index);
+    // Opening video files takes the user to their editing controls even if
+    // they were previously viewing the session log or another tab.
+    editor_tabs_->setCurrentIndex(0);
 }
 
 void MainWindow::remove_selected_job() {
@@ -5874,7 +5879,9 @@ void MainWindow::set_encode_controls_locked(const bool locked) {
     output_browse_button_->setEnabled(editable);
     same_as_input_check_->setEnabled(editable);
 
-    editor_tabs_->setTabEnabled(0, has_job);
+    // Main stays visible/selectable with an empty queue. Its job-specific
+    // inputs are disabled independently until a job is selected.
+    editor_tabs_->setTabEnabled(0, true);
     editor_tabs_->setTabEnabled(1, has_job);
     editor_tabs_->setTabEnabled(2, has_job);
     editor_tabs_->setTabEnabled(3, true);

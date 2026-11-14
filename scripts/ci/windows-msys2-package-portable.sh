@@ -117,17 +117,42 @@ write_qt_runtime_manifest() {
 }
 
 verify_mangetsu_dll() {
-  if [[ "${UTSURE_WINDOWS_MANGETSU_DLL:-0}" != "1" ]]; then
-    return 0
-  fi
-  if [[ ! -f "${bundle_dir}/mangetsu.dll" ]]; then
-    echo "Portable bundle must contain mangetsu.dll, not a version-named libass DLL." >&2
+  # Mangetsu intentionally retains libass ABI and DLL naming. Do not
+  # rename its DLL: PE import tables must match the filename on disk.
+  local mangetsu_dlls=("${libassmod_prefix}/bin"/libass*.dll)
+  if [[ ${#mangetsu_dlls[@]} -ne 1 ]]; then
+    echo "Expected exactly one freshly built libass-compatible Mangetsu DLL under ${libassmod_prefix}/bin." >&2
     exit 1
   fi
-  if find "${bundle_dir}" -maxdepth 1 -type f -iname "libass*.dll" | grep -q .; then
-    echo "Portable bundle contains a legacy libass*.dll alongside mangetsu.dll." >&2
+
+  local built_dll="${mangetsu_dlls[0]}"
+  local bundled_dll="${bundle_dir}/$(basename "${built_dll}")"
+  if [[ ! -f "${bundled_dll}" ]]; then
+    echo "Portable bundle is missing the freshly built Mangetsu DLL: $(basename "${built_dll}")" >&2
     exit 1
   fi
+  if ! cmp -s "${built_dll}" "${bundled_dll}"; then
+    echo "Bundled Mangetsu DLL differs from the current libassmod branch build." >&2
+    exit 1
+  fi
+  if [[ -e "${bundle_dir}/mangetsu.dll" ]]; then
+    echo "Unexpected renamed mangetsu.dll: use the DLL name provided by Mangetsu." >&2
+    exit 1
+  fi
+
+  # Package provenance, not a source pin: every build consumes the live branch.
+  local revision_file="${third_party_root}/libassmod/resolved-commit.txt"
+  if [[ ! -s "${revision_file}" ]]; then
+    echo "Mangetsu revision manifest missing from current build." >&2
+    exit 1
+  fi
+  local revision_sha
+  revision_sha="$(cat "${revision_file}")"
+  if [[ ${#revision_sha} -ne 40 ]] || [[ "${revision_sha}" =~ [^0-9a-f] ]]; then
+    echo "Invalid Mangetsu revision SHA from current build." >&2
+    exit 1
+  fi
+  cp "${revision_file}" "${bundle_dir}/mangetsu-commit.txt"
 }
 
 write_bundle_manifest() {
@@ -327,9 +352,8 @@ done
   done
 } | LC_ALL=C sort > "${non_qt_runtime_manifest}"
 
-strip_portable_debug_symbols
-
 verify_mangetsu_dll
+strip_portable_debug_symbols
 write_bundle_manifest
 
 bundle_dir_windows="$(cygpath -m "${bundle_dir}")"

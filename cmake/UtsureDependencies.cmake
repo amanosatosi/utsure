@@ -16,7 +16,7 @@ set(
 if("${UTSURE_FFMPEG_MANGETSU_COMMIT}" STREQUAL "")
     set(
         UTSURE_FFMPEG_MANGETSU_COMMIT
-        "6282c1941e3611ce43a4dcbe83a679c0323b8b13"
+        "4a1a02cf9489319871135710d4a8f98baf461608"
         CACHE STRING
         "Pinned Mangetsu FFmpeg commit used when UTSURE_FFMPEG_SOURCE=mangetsu."
         FORCE
