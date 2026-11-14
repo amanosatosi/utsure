@@ -43,7 +43,7 @@ Utsure v1.0 uses:
 - A pinned Mangetsu FFmpeg 9.0-branch build for the media pipeline.
 - FFMS2 for preview indexing and frame access.
 - `libx264` and `libx265` for software video encoding.
-- Mangetsu `libassmod` for subtitle rendering, including `mangetsu-style` ASS comments when rendering complete external ASS scripts.
+- The latest `mangetsu` branch of Mangetsu `libassmod` is compiled with each Windows build for subtitle rendering, including `mangetsu-style` ASS comments in complete external ASS scripts.
 - FontCollector for preparing fonts used by ASS subtitle scripts.
 
 The application is Windows-first. Linux and macOS builds are not release-validated yet, and hardware-accelerated encode/decode is not part of v1.0.

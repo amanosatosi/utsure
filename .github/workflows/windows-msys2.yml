@@ -33,7 +33,6 @@ jobs:
       UTSURE_FONTCOLLECTOR_VERSION: "4.0.2"
       UTSURE_PYINSTALLER_VERSION: "6.19.0"
       UTSURE_LIBASSMOD_REF: "mangetsu"
-      UTSURE_LIBASSMOD_COMMIT: "fb7a2f16476dd3b6ead5df485258889ccfd4849f"
       UTSURE_LIBASSMOD_ALIGNED_ALLOCATION_DEBUG: "1"
       UTSURE_PORTABLE_BUNDLE_NAME: encoder-windows-x64-portable
       UTSURE_CTEST_ARGS: "-LE slow"
@@ -84,15 +83,26 @@ jobs:
             libtool
             make
 
+      - name: Build latest Mangetsu
+        id: mangetsu-build
+        run: |
+          ./scripts/ci/windows-msys2-build-libassmod.sh
+          mangetsu_commit="$(cat "${UTSURE_THIRD_PARTY_ROOT:-.deps}/libassmod/resolved-commit.txt")"
+          if [[ ! "${mangetsu_commit}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Mangetsu build did not produce a valid source revision" >&2
+            exit 1
+          fi
+          echo "commit=${mangetsu_commit}" >> "${GITHUB_OUTPUT}"
+          echo "Mangetsu built from ${UTSURE_LIBASSMOD_REF}: ${mangetsu_commit}"
+
+      # Cached FFmpeg is tied to the Mangetsu headers/ABI used for its build.
+      # A new Mangetsu branch tip must not restore a previous integration.
       - name: Restore FFmpeg cache
         id: ffmpeg-cache
         uses: actions/cache/restore@v4
         with:
           path: .deps/ffmpeg
-          key: utsure-${{ runner.os }}-${{ env.UTSURE_TOOLCHAIN_ID_PREFIX }}-ffmpeg-${{ env.UTSURE_FFMPEG_SOURCE }}-${{ env.UTSURE_FFMPEG_MANGETSU_COMMIT }}-${{ hashFiles('.github/workflows/windows-msys2.yml', 'scripts/ci/windows-msys2-build-ffmpeg.sh') }}
-
-      - name: Build libassmod
-        run: ./scripts/ci/windows-msys2-build-libassmod.sh
+          key: utsure-${{ runner.os }}-${{ env.UTSURE_TOOLCHAIN_ID_PREFIX }}-ffmpeg-${{ env.UTSURE_FFMPEG_SOURCE }}-${{ env.UTSURE_FFMPEG_MANGETSU_COMMIT }}-mangetsu-${{ steps.mangetsu-build.outputs.commit }}-${{ hashFiles('.github/workflows/windows-msys2.yml', 'scripts/ci/windows-msys2-build-ffmpeg.sh') }}
 
       - name: Build FFmpeg
         run: ./scripts/ci/windows-msys2-build-ffmpeg.sh

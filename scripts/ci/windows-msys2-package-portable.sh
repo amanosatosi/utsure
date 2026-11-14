@@ -121,24 +121,267 @@ verify_mangetsu_dll() {
   # rename its DLL: PE import tables must match the filename on disk.
   local mangetsu_dlls=("${libassmod_prefix}/bin"/libass*.dll)
   if [[ ${#mangetsu_dlls[@]} -ne 1 ]]; then
-    echo "Expected exactly one pinned libass-compatible Mangetsu DLL under ${libassmod_prefix}/bin." >&2
+    echo "Expected exactly one freshly built libass-compatible Mangetsu DLL under ${libassmod_prefix}/bin." >&2
     exit 1
   fi
 
-  local pinned_dll="${mangetsu_dlls[0]}"
-  local bundled_dll="${bundle_dir}/$(basename "${pinned_dll}")"
+  local built_dll="${mangetsu_dlls[0]}"
+  local bundled_dll="${bundle_dir}/$(basename "${built_dll}")"
   if [[ ! -f "${bundled_dll}" ]]; then
-    echo "Portable bundle is missing the pinned Mangetsu DLL: $(basename "${pinned_dll}")" >&2
+    echo "Portable bundle is missing the freshly built Mangetsu DLL: $(basename "${built_dll}")" >&2
     exit 1
   fi
-  if ! cmp -s "${pinned_dll}" "${bundled_dll}"; then
-    echo "Bundled Mangetsu DLL differs from the pinned libassmod build." >&2
+  if ! cmp -s "${built_dll}" "${bundled_dll}"; then
+    echo "Bundled Mangetsu DLL differs from the current libassmod branch build." >&2
     exit 1
   fi
   if [[ -e "${bundle_dir}/mangetsu.dll" ]]; then
     echo "Unexpected renamed mangetsu.dll: use the DLL name provided by Mangetsu." >&2
     exit 1
   fi
+
+  # Package provenance, not a source pin: every build consumes the live branch.
+  local revision_file="${third_party_root}/libassmod/resolved-commit.txt"
+  if [[ ! -s "${revision_file}" ]] || ! grep -Eq '^[0-9a-f]{40}
+
+write_bundle_manifest() {
+  {
+    (
+      cd "${bundle_dir}"
+      find . -type f ! -name 'bundle-file-manifest.txt' | LC_ALL=C sort
+    )
+    printf './bundle-file-manifest.txt\n'
+  } | LC_ALL=C sort > "${bundle_manifest}"
+}
+
+strip_portable_debug_symbols() {
+  if [[ "${UTSURE_STRIP_PORTABLE_DEBUG:-ON}" != "ON" ]]; then
+    return 0
+  fi
+
+  if ! command -v strip >/dev/null 2>&1; then
+    echo "Portable packaging expected strip to be available for RelWithDebInfo bundle slimming."
+    exit 1
+  fi
+
+  while IFS= read -r binary_path; do
+    strip --strip-debug "${binary_path}" || {
+      echo "Failed to strip debug symbols from '${binary_path}'."
+      exit 1
+    }
+  done < <(find "${bundle_dir}" -maxdepth 1 -type f \( -name '*.exe' -o -name '*.dll' \) | LC_ALL=C sort)
+}
+
+copy_fontcollector_tool() {
+  if [[ "${package_fontcollector}" != "ON" ]]; then
+    return 0
+  fi
+
+  if [ ! -f "${fontcollector_tool_dir}/fontcollector.exe" ]; then
+    echo "Portable packaging requires FontCollector at '${fontcollector_tool_dir}/fontcollector.exe'."
+    echo "Run scripts/ci/windows-build-fontcollector.ps1 before packaging, or set UTSURE_PACKAGE_FONTCOLLECTOR=OFF for a non-release diagnostic bundle."
+    exit 1
+  fi
+
+  mkdir -p "${bundle_dir}/tools/fontcollector"
+  cp -R "${fontcollector_tool_dir}/." "${bundle_dir}/tools/fontcollector/"
+
+  if [ ! -f "${bundle_dir}/tools/fontcollector/fontcollector.exe" ]; then
+    echo "Portable bundle is missing tools/fontcollector/fontcollector.exe after copy."
+    exit 1
+  fi
+}
+
+copy_ffmpeg_cli_tools() {
+  local ffmpeg_bin_dir="${ffmpeg_prefix}/bin"
+  local tool_name=""
+  for tool_name in ffmpeg.exe ffprobe.exe; do
+    if [ ! -f "${ffmpeg_bin_dir}/${tool_name}" ]; then
+      echo "Portable packaging requires ${tool_name} at '${ffmpeg_bin_dir}/${tool_name}'."
+      exit 1
+    fi
+
+    cp "${ffmpeg_bin_dir}/${tool_name}" "${bundle_dir}/${tool_name}"
+  done
+}
+
+windeployqt="$(find_windeployqt)"
+
+if [ ! -f "${app_executable}" ]; then
+  echo "Portable packaging expected '${app_executable}' to exist."
+  exit 1
+fi
+
+rm -rf "${bundle_dir}" "${validation_root}"
+rm -f "${bundle_zip}"
+mkdir -p "${bundle_dir}" "${artifact_root}"
+
+cp "${app_executable}" "${bundle_dir}/"
+cp "${project_root}/LICENSE" "${bundle_dir}/"
+mkdir -p "${bundle_dir}/fonts" "${bundle_dir}/licenses"
+cp "${project_root}/src/app/resources/fonts/Pyidaungsu-2.5.3_Regular.ttf" "${bundle_dir}/fonts/"
+cp "${project_root}/src/app/resources/fonts/Pyidaungsu-2.5.3_Bold.ttf" "${bundle_dir}/fonts/"
+cp "${project_root}/third_party/licenses/Pyidaungsu-OFL-1.1.txt" "${bundle_dir}/licenses/"
+
+"${windeployqt}" --no-translations "${bundle_dir}/utsure.exe"
+
+if [ -f "${qt_iconengines_dir}/qsvgicon.dll" ]; then
+  mkdir -p "${bundle_dir}/iconengines"
+  cp "${qt_iconengines_dir}/qsvgicon.dll" "${bundle_dir}/iconengines/"
+fi
+
+if [ -f "${qt_imageformats_dir}/qsvg.dll" ]; then
+  mkdir -p "${bundle_dir}/imageformats"
+  cp "${qt_imageformats_dir}/qsvg.dll" "${bundle_dir}/imageformats/"
+fi
+
+if [ -f "${qt_plugin_root}/platforms/qoffscreen.dll" ]; then
+  mkdir -p "${bundle_dir}/platforms"
+  cp "${qt_plugin_root}/platforms/qoffscreen.dll" "${bundle_dir}/platforms/"
+fi
+
+if [ -f "${qt_iconengines_dir}/qsvgicon.dll" ] && [ ! -f "${bundle_dir}/iconengines/qsvgicon.dll" ]; then
+  echo "Portable bundle is missing Qt's SVG icon engine plugin (iconengines/qsvgicon.dll)."
+  exit 1
+fi
+
+write_qt_runtime_manifest
+
+copy_fontcollector_tool
+copy_ffmpeg_cli_tools
+
+if ! command -v objdump >/dev/null 2>&1; then
+  echo "Portable packaging requires objdump from MSYS2 binutils." >&2
+  exit 1
+fi
+
+declare -A scanned_binaries=()
+declare -A copied_non_qt_dependencies=()
+declare -a scan_queue=()
+
+# Keep known FFmpeg 9 / QtMultimedia runtimes even when a library loads them
+# dynamically rather than through a regular PE import.
+required_msys2_ffmpeg_dlls=(
+  libgme.dll
+  libbluray-4.dll
+  libgnutls-30.dll
+  libmodplug-1.dll
+  libaom.dll
+  libcairo-2.dll
+  libdav1d-7.dll
+  libgobject-2.0-0.dll
+)
+
+for dependency_name in "${required_msys2_ffmpeg_dlls[@]}"; do
+  dependency_path="${msys2_bin_dir}/${dependency_name}"
+  if [[ ! -f "${dependency_path}" ]]; then
+    echo "Missing required MSYS2 runtime DLL: ${dependency_path}" >&2
+    exit 1
+  fi
+  cp "${dependency_path}" "${bundle_dir}/${dependency_name}"
+  copied_non_qt_dependencies["${dependency_name,,}"]=1
+done
+
+# Examine each EXE and DLL as it will be distributed. This includes the Qt
+# platform/image/icon plugins, FFmpeg CLI tools and nested FontCollector helper.
+while IFS= read -r -d '' bundled_binary; do
+  scan_queue+=("${bundled_binary}")
+done < <(find "${bundle_dir}" -type f \( -iname '*.exe' -o -iname '*.dll' \) -print0)
+
+while [[ ${#scan_queue[@]} -gt 0 ]]; do
+  current_binary="${scan_queue[0]}"
+  scan_queue=("${scan_queue[@]:1}")
+
+  if [[ -n "${scanned_binaries["${current_binary}"]:-}" ]]; then
+    continue
+  fi
+  scanned_binaries["${current_binary}"]=1
+
+  if ! imports="$(list_imported_dll_names "${current_binary}")"; then
+    echo "Failed to inspect PE imports for '${current_binary}'." >&2
+    exit 1
+  fi
+
+  while IFS= read -r dependency_name; do
+    [[ -z "${dependency_name}" ]] && continue
+
+    if dependency_path="$(resolve_runtime_dll "${dependency_name}" "$(dirname "${current_binary}")")"; then
+      dependency_filename="$(basename "${dependency_path}")"
+      if [[ "${dependency_path}" != "${bundle_dir}/"* ]]; then
+        if [[ ! -f "${bundle_dir}/${dependency_filename}" ]]; then
+          cp "${dependency_path}" "${bundle_dir}/${dependency_filename}"
+        fi
+        dependency_path="${bundle_dir}/${dependency_filename}"
+      fi
+
+      if [[ ! "${dependency_filename}" =~ ^(Qt6|qt).*\.dll$ ]]; then
+        copied_non_qt_dependencies["${dependency_filename,,}"]=1
+      fi
+      if [[ -z "${scanned_binaries["${dependency_path}"]:-}" ]]; then
+        scan_queue+=("${dependency_path}")
+      fi
+    elif ! is_windows_runtime_dll "${dependency_name}"; then
+      echo "Unresolved portable DLL import '${dependency_name}' in '${current_binary}'." >&2
+      echo "Not present in the package, pinned dependency prefixes, MSYS2 or Windows System32." >&2
+      exit 1
+    fi
+  done <<< "${imports}"
+done
+
+for dependency_name in "${required_msys2_ffmpeg_dlls[@]}"; do
+  if [[ ! -f "${bundle_dir}/${dependency_name}" ]]; then
+    echo "Portable bundle is missing required runtime '${dependency_name}'." >&2
+    exit 1
+  fi
+done
+
+{
+  for dependency_name in "${!copied_non_qt_dependencies[@]}"; do
+    printf '%s\n' "${dependency_name}"
+  done
+} | LC_ALL=C sort > "${non_qt_runtime_manifest}"
+
+verify_mangetsu_dll
+strip_portable_debug_symbols
+write_bundle_manifest
+
+bundle_dir_windows="$(cygpath -m "${bundle_dir}")"
+bundle_zip_windows="$(cygpath -m "${bundle_zip}")"
+validation_root_windows="$(cygpath -m "${validation_root}")"
+validation_bundle_windows="${validation_root_windows}/${bundle_name}"
+
+powershell.exe -NoProfile -Command "\
+\$ErrorActionPreference='Stop'; \
+if (Test-Path '${bundle_zip_windows}') { Remove-Item -Force '${bundle_zip_windows}' }; \
+Compress-Archive -Path '${bundle_dir_windows}' -DestinationPath '${bundle_zip_windows}'"
+
+powershell.exe -NoProfile -Command "\
+\$ErrorActionPreference='Stop'; \
+if (Test-Path '${validation_root_windows}') { Remove-Item -Recurse -Force '${validation_root_windows}' }; \
+Expand-Archive -Path '${bundle_zip_windows}' -DestinationPath '${validation_root_windows}'; \
+\$portablePath='${validation_bundle_windows}'; \
+\$env:PATH=\"\$portablePath;\$env:SystemRoot\\System32;\$env:SystemRoot\"; \
+\$env:QT_QPA_PLATFORM='offscreen'; \
+\$env:QT_PLUGIN_PATH=''; \
+\$env:QML2_IMPORT_PATH=''; \
+if (!(Test-Path \"\$portablePath/fonts/Pyidaungsu-2.5.3_Regular.ttf\")) { throw \"Portable bundle is missing bundled Pyidaungsu Regular font\" }; \
+if (!(Test-Path \"\$portablePath/fonts/Pyidaungsu-2.5.3_Bold.ttf\")) { throw \"Portable bundle is missing bundled Pyidaungsu Bold font\" }; \
+if (!(Test-Path \"\$portablePath/licenses/Pyidaungsu-OFL-1.1.txt\")) { throw \"Portable bundle is missing Pyidaungsu OFL license notice\" }; \
+if ('${package_fontcollector}' -eq 'ON') { \
+  \$fontCollectorPath=\"\$portablePath/tools/fontcollector/fontcollector.exe\"; \
+  if (!(Test-Path \$fontCollectorPath)) { throw \"Portable bundle is missing tools/fontcollector/fontcollector.exe\" }; \
+  & \$fontCollectorPath --help | Out-Null; \
+}; \
+& \"\$portablePath/utsure.exe\" --dump-window-structure --smoke-test; \
+if (\$LASTEXITCODE -ne 0) { throw \"Portable utsure.exe smoke test failed with exit code \$LASTEXITCODE\" }"
+
+echo "Portable bundle created at ${bundle_dir}"
+echo "Portable zip created at ${bundle_zip}"
+ "${revision_file}"; then
+    echo "Missing or invalid Mangetsu branch revision from this build." >&2
+    exit 1
+  fi
+  cp "${revision_file}" "${bundle_dir}/mangetsu-commit.txt"
 }
 
 write_bundle_manifest() {
