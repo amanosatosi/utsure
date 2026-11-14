@@ -54,7 +54,7 @@ class ForcedQueueNotification;
 
 class MainWindow final : public QMainWindow {
 public:
-    explicit MainWindow(QWidget *parent = nullptr);
+    explicit MainWindow(AppSettings::LoadResult settings);
     ~MainWindow() override;
 
     [[nodiscard]] QString window_structure_summary() const;
@@ -132,6 +132,7 @@ public:
     };
 
 private:
+    void build_secondary_editor_tabs();
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dragMoveEvent(QDragMoveEvent *event) override;
     void dragLeaveEvent(QDragLeaveEvent *event) override;
@@ -388,6 +389,8 @@ private:
     QPushButton *output_browse_button_{nullptr};
     QCheckBox *same_as_input_check_{nullptr};
     QTabWidget *editor_tabs_{nullptr};
+    QWidget *encode_tab_page_{nullptr};
+    QWidget *special_tab_page_{nullptr};
     QWidget *logs_tab_{nullptr};
     QCheckBox *subtitle_enable_check_{nullptr};
     QLineEdit *subtitle_path_edit_{nullptr};

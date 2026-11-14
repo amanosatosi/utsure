@@ -30,6 +30,7 @@ signals:
     void preview_failed(quint64 request_token, qint64 requested_time_us, QString title, QString detail);
 
 private:
+    void start_worker();
     void dispatch_request(const PreviewFrameRenderRequest &request);
     void finish_request();
     void handle_preview_skipped(quint64 request_token, qint64 requested_time_us);

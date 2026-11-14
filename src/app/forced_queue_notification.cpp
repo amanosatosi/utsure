@@ -242,14 +242,6 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
     button_row->addWidget(dismiss_button_, 1);
     root_layout->addLayout(button_row);
 
-    success_sound_ = new QSoundEffect(this);
-    success_sound_->setLoopCount(1);
-    success_sound_->setVolume(0.85F);
-    success_sound_->setSource(QUrl(QStringLiteral("qrc:/audio/\u6C7A\u5B9A\u30DC\u30BF\u30F3\u3092\u62BC\u305941.wav")));
-    failure_sound_ = new QSoundEffect(this);
-    failure_sound_->setLoopCount(1);
-    failure_sound_->setVolume(0.85F);
-    failure_sound_->setSource(QUrl(QStringLiteral("qrc:/audio/\u30D3\u30FC\u30D7\u97F34.wav")));
     visible_timer_ = new QTimer(this);
     visible_timer_->setSingleShot(true);
     fade_animation_ = new QPropertyAnimation(this, "windowOpacity", this);
@@ -262,16 +254,6 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
     connect(dismiss_button_, &QPushButton::clicked, this, [this]() { dismiss(); });
     connect(primary_button_, &QPushButton::clicked, this, [this]() { handle_primary_action(); });
     connect(secondary_button_, &QPushButton::clicked, this, [this]() { handle_secondary_action(); });
-    connect(success_sound_, &QSoundEffect::statusChanged, this, [this]() {
-        if (success_sound_->status() == QSoundEffect::Error) {
-            log_sound_failure_once(true, success_sound_, "QSoundEffect entered Error status");
-        }
-    });
-    connect(failure_sound_, &QSoundEffect::statusChanged, this, [this]() {
-        if (failure_sound_->status() == QSoundEffect::Error) {
-            log_sound_failure_once(false, failure_sound_, "QSoundEffect entered Error status");
-        }
-    });
 }
 
 ForcedQueueNotification::~ForcedQueueNotification() {
@@ -530,10 +512,19 @@ void ForcedQueueNotification::play_sound_once(const bool success) {
     }
 
     stop_sounds();
-    QSoundEffect *sound_effect = success ? success_sound_ : failure_sound_;
+    QSoundEffect *&sound_effect = success ? success_sound_ : failure_sound_;
     if (sound_effect == nullptr) {
-        log_sound_failure_once(success, nullptr, "QSoundEffect object is unavailable");
-        return;
+        sound_effect = new QSoundEffect(this);
+        sound_effect->setLoopCount(1);
+        sound_effect->setVolume(0.85F);
+        connect(sound_effect, &QSoundEffect::statusChanged, this, [this, sound = sound_effect, success]() {
+            if (sound->status() == QSoundEffect::Error) {
+                log_sound_failure_once(success, sound, "QSoundEffect entered Error status");
+            }
+        });
+        sound_effect->setSource(QUrl(success
+            ? QStringLiteral("qrc:/audio/\u6C7A\u5B9A\u30DC\u30BF\u30F3\u3092\u62BC\u305941.wav")
+            : QStringLiteral("qrc:/audio/\u30D3\u30FC\u30D7\u97F34.wav")));
     }
     const QString resource_path = QStringLiteral(":") + sound_effect->source().path();
     if (!QFile::exists(resource_path)) {

@@ -8,6 +8,10 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+permissions:
+  contents: read
+  actions: read
+
 concurrency:
   group: utsure-windows-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -95,8 +99,7 @@ jobs:
           echo "commit=${mangetsu_commit}" >> "${GITHUB_OUTPUT}"
           echo "Mangetsu built from ${UTSURE_LIBASSMOD_REF}: ${mangetsu_commit}"
 
-      # Cached FFmpeg is tied to the Mangetsu headers/ABI used for its build.
-      # A new Mangetsu branch tip must not restore a previous integration.
+      # Cache FFmpeg only against the exact Mangetsu revision used in this build.
       - name: Restore FFmpeg cache
         id: ffmpeg-cache
         uses: actions/cache/restore@v4
@@ -128,6 +131,39 @@ jobs:
 
       - name: Package portable bundle
         run: ./scripts/ci/windows-msys2-package-portable.sh
+
+      - name: Download measured startup baseline
+        if: github.event_name == 'push' && contains(github.event.head_commit.message, '[startup-baseline]')
+        id: startup-baseline
+        uses: actions/download-artifact@v8
+        with:
+          name: encoder-windows-x64-portable
+          path: artifacts/startup-baseline
+          github-token: ${{ github.token }}
+          run-id: 43612049502
+
+      - name: Profile baseline on the same runner
+        if: steps.startup-baseline.outcome == 'success'
+        shell: pwsh
+        run: |
+          $bundle = $env:UTSURE_PORTABLE_BUNDLE_NAME
+          Expand-Archive "artifacts/startup-baseline/$bundle.zip" -DestinationPath artifacts/startup-baseline
+          ./scripts/ci/windows-profile-startup.ps1 -PortableDirectory "artifacts/startup-baseline/$bundle" -ReportDirectory artifacts/startup-profile/baseline -Commit a24d0695b13b63f9228db235cf14a67141ce4a0b
+
+      - name: Profile native portable startup
+        shell: pwsh
+        run: ./scripts/ci/windows-profile-startup.ps1 -PortableDirectory "artifacts/portable-validation/$env:UTSURE_PORTABLE_BUNDLE_NAME" -ReportDirectory artifacts/startup-profile/optimized -VerifyDiagnostics
+
+      - name: Upload startup profile
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-startup-profile
+          path: |
+            artifacts/startup-profile/**/*.csv
+            artifacts/startup-profile/**/*.json
+            artifacts/startup-profile/**/*.txt
+            !artifacts/startup-profile/**/crash-dumps/**
 
       - name: Package debug symbols
         run: bash ./scripts/ci/windows-msys2-package-symbols.sh

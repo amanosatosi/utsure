@@ -130,7 +130,9 @@ qint64 bytes_for_duration_or_default(const QAudioFormat &audio_format, const qin
 
 }  // namespace
 
-PreviewAudioController::PreviewAudioController(QObject *parent) : QObject(parent) {
+PreviewAudioController::PreviewAudioController(QObject *parent) : QObject(parent) {}
+
+void PreviewAudioController::start_worker() {
     worker_ = new PreviewAudioWorker();
     worker_->moveToThread(&worker_thread_);
 
@@ -196,6 +198,9 @@ bool PreviewAudioController::start_preview(const PreviewAudioPlaybackRequest &re
         return false;
     }
 
+    if (worker_ == nullptr) {
+        start_worker();
+    }
     request_audio_chunk(true);
     refill_timer_->start();
     return true;

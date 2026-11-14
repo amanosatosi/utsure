@@ -1,4 +1,5 @@
 #include "ui_font.hpp"
+#include "startup_profile.hpp"
 
 #include <QApplication>
 #include <QFontDatabase>
@@ -37,6 +38,7 @@ QString load_bundled_pyidaungsu_family() {
     }
     attempted = true;
 
+    const utsure::app::startup::Stage stage("Bundled Pyidaungsu registration");
     const int regular_id = QFontDatabase::addApplicationFont(kBundledRegularPath);
     const int bold_id = QFontDatabase::addApplicationFont(kBundledBoldPath);
 
@@ -62,11 +64,13 @@ UiFontResolution resolve_pyidaungsu(
     const AppSettings::UiFontSettings &settings,
     const QFont &system_fallback
 ) {
-    const QStringList system_families = QFontDatabase::families();
-    const QString system_pyidaungsu = matching_family_or_empty(system_families, kPyidaungsuFamily);
-    if (!system_pyidaungsu.isEmpty()) {
+    const bool system_pyidaungsu = [] {
+        const utsure::app::startup::Stage stage("Installed Pyidaungsu lookup");
+        return QFontDatabase::hasFamily(kPyidaungsuFamily);
+    }();
+    if (system_pyidaungsu) {
         return UiFontResolution{
-            .family = system_pyidaungsu,
+            .family = kPyidaungsuFamily,
             .point_size = normalize_point_size(settings.point_size),
             .source = UiFontSource::system_pyidaungsu,
             .diagnostic = "Using system Pyidaungsu for the app UI font."
@@ -104,19 +108,15 @@ UiFontResolution UiFontManager::resolve(
     const QString requested_family = settings.family.trimmed();
 
     if (requested_family.isEmpty() || family_matches(requested_family, kPyidaungsuFamily)) {
-        auto result = pyidaungsu;
-        result.point_size = point_size;
-        return result;
+        return pyidaungsu;
     }
 
-    const QStringList families = QFontDatabase::families();
-    const QString saved_family = matching_family_or_empty(families, requested_family);
-    if (!saved_family.isEmpty()) {
+    if (QFontDatabase::hasFamily(requested_family)) {
         return UiFontResolution{
-            .family = saved_family,
+            .family = requested_family,
             .point_size = point_size,
             .source = UiFontSource::saved_family,
-            .diagnostic = "Using saved app UI font family '" + saved_family + "'."
+            .diagnostic = "Using saved app UI font family '" + requested_family + "'."
         };
     }
 
