@@ -56,11 +56,11 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M53 Animated yellow progress arc correction implemented; awaiting GitHub Actions validation.
 - [x] M54 Set the displayed application version to Utsure v3.0 on master; awaiting GitHub Actions validation.
 - [x] M55 Profile Windows portable startup and establish a baseline before changing runtime behavior.
-- [ ] M56 Remove measured startup work and validate the optimized Windows portable build.
+- [ ] M56 Windows CI and the same-runner warm comparison passed. Cold desktop measurements and interactive audio/preview verification remain open.
 
 ### M56 Optimize Windows portable startup
 
-Status: In progress.
+Status: Implemented on master. Windows CI run 43616220926 passed 123 tests, both smoke checks, 22 native launches and closes, and portable diagnostic dump generation. Warm median fell from 204.8 ms to 183.3 ms. Reboot-controlled startup and interactive audio/preview are pending. See [the startup report](docs/dev/windows-startup.md).
 
 * Defer notification audio, worker threads, the drag overlay, and the Encode and Special editors to their first use.
 * Share the validated settings snapshot, reduce font and icon lookup work, and retain early crash handling.
