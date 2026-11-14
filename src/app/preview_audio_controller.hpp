@@ -44,6 +44,8 @@ signals:
     void preview_audio_failed(QString detail);
 
 private:
+    void start_worker();
+
     struct ResolvedOutputFormat final {
         QAudioDevice device{};
         QAudioFormat format{};

@@ -24,7 +24,9 @@ QString format_elapsed_milliseconds(const qint64 elapsed_microseconds) {
 
 }  // namespace
 
-PreviewFrameRendererController::PreviewFrameRendererController(QObject *parent) : QObject(parent) {
+PreviewFrameRendererController::PreviewFrameRendererController(QObject *parent) : QObject(parent) {}
+
+void PreviewFrameRendererController::start_worker() {
     worker_ = new PreviewFrameRendererWorker(&latest_request_generation_);
     worker_->moveToThread(&worker_thread_);
 
@@ -69,6 +71,9 @@ void PreviewFrameRendererController::clear_cache() {
     qCInfo(previewControllerLog) << "clear_cache requested";
     pending_request_.reset();
     latest_request_generation_.store(++dispatch_generation_counter_, std::memory_order_release);
+    if (worker_ == nullptr) {
+        return;
+    }
     QMetaObject::invokeMethod(
         worker_,
         [worker = worker_]() {
@@ -79,6 +84,9 @@ void PreviewFrameRendererController::clear_cache() {
 }
 
 void PreviewFrameRendererController::dispatch_request(const PreviewFrameRenderRequest &request) {
+    if (worker_ == nullptr) {
+        start_worker();
+    }
     request_in_flight_ = true;
     active_request_ = request;
     const qint64 queue_wait_us = std::max<qint64>(0, steady_clock_now_microseconds() - request.enqueued_steady_us);

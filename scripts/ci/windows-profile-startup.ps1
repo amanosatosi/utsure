@@ -1,7 +1,9 @@
 param(
     [Parameter(Mandatory)][string]$PortableDirectory,
     [string]$ReportDirectory = 'artifacts/startup-profile',
-    [ValidateRange(1, 100)][int]$Launches = 11
+    [ValidateRange(1, 100)][int]$Launches = 11,
+    [string]$Commit = $env:GITHUB_SHA,
+    [switch]$VerifyDiagnostics
 )
 
 $ErrorActionPreference = 'Stop'
@@ -13,6 +15,7 @@ $variables = @{
     QT_PLUGIN_PATH = ''
     QML2_IMPORT_PATH = ''
     UTSURE_CRASH_DUMP_DIR = (Join-Path $report 'crash-dumps')
+    QT_FORCE_STDERR_LOGGING = '1'
 }
 $previous = @{}
 foreach ($name in $variables.Keys) {
@@ -32,7 +35,9 @@ try {
         LogicalProcessors = $machine.NumberOfLogicalProcessors
         MemoryBytes = $machine.TotalPhysicalMemory
         ExecutableSha256 = (Get-FileHash -LiteralPath $executable).Hash
-        Commit = $env:GITHUB_SHA
+        Commit = $Commit
+        QtCoreSha256 = (Get-FileHash -LiteralPath (Join-Path $portable 'Qt6Core.dll')).Hash
+        QtCoreVersion = (Get-Item -LiteralPath (Join-Path $portable 'Qt6Core.dll')).VersionInfo.FileVersion
         Build = $env:UTSURE_CMAKE_BUILD_TYPE
         PlatformPlugin = 'windows'
         Method = 'Sequential launches of the same directory. The first sample has uncontrolled cache state.'
@@ -101,6 +106,27 @@ try {
     }
     $samples | Export-Csv -NoTypeInformation (Join-Path $report 'samples.csv')
     $samples | Format-Table | Out-Host
+
+    if ($VerifyDiagnostics) {
+        $diagnostic = Start-Process -FilePath $executable -ArgumentList '--write-diagnostic-dump' -WorkingDirectory $portable `
+            -PassThru -RedirectStandardError (Join-Path $report 'diagnostic.stderr.txt')
+        try {
+            if (!$diagnostic.WaitForExit(30000) -or $diagnostic.ExitCode -ne 0) {
+                throw 'Portable diagnostic dump command failed.'
+            }
+            $dumps = @(Get-ChildItem -LiteralPath $env:UTSURE_CRASH_DUMP_DIR -Filter '*.dmp' -File)
+            if (!$dumps -or !($dumps | Where-Object { $_.Length -gt 0 -and (Test-Path -LiteralPath ($_.FullName -replace '\.dmp$', '.json')) })) {
+                throw 'Portable diagnostic command did not produce a dump and JSON sidecar.'
+            }
+            $dumps | Select-Object Name, Length | Format-Table | Out-Host
+        } finally {
+            if (!$diagnostic.HasExited) {
+                $diagnostic.Kill()
+                $diagnostic.WaitForExit()
+            }
+            $diagnostic.Dispose()
+        }
+    }
 } finally {
     foreach ($name in $previous.Keys) {
         [Environment]::SetEnvironmentVariable($name, $previous[$name])

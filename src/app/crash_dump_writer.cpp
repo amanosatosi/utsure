@@ -57,6 +57,11 @@ std::filesystem::path &cached_crash_dump_directory() {
     return *path;
 }
 
+bool &cached_crash_dump_directory_writable() {
+    static bool writable{false};
+    return writable;
+}
+
 std::vector<CrashContextSnapshot> &mutable_runner_contexts() {
     static auto *contexts = new std::vector<CrashContextSnapshot>();
     return *contexts;
@@ -878,17 +883,19 @@ std::filesystem::path default_crash_dump_directory() {
     return raw_default_crash_dump_directory();
 }
 
-std::filesystem::path resolve_crash_dump_directory_for_test(
-    const CrashDumpDirectoryResolutionOptions &options
+static std::filesystem::path resolve_crash_dump_directory(
+    const CrashDumpDirectoryResolutionOptions &options,
+    bool &writable
 ) {
     if (options.override_directory.has_value() && !options.override_directory->empty()) {
-        ensure_directory_writable(*options.override_directory);
+        writable = ensure_directory_writable(*options.override_directory);
         return *options.override_directory;
     }
 
     if (options.executable_path.has_value() && !options.executable_path->empty()) {
         const auto portable_directory = options.executable_path->parent_path() / "crash-dumps";
         if (!options.simulate_portable_directory_failure && ensure_directory_writable(portable_directory)) {
+            writable = true;
             return portable_directory;
         }
     }
@@ -899,8 +906,13 @@ std::filesystem::path resolve_crash_dump_directory_for_test(
     } else {
         local_directory = raw_default_crash_dump_directory();
     }
-    ensure_directory_writable(local_directory);
+    writable = ensure_directory_writable(local_directory);
     return local_directory;
+}
+
+std::filesystem::path resolve_crash_dump_directory_for_test(const CrashDumpDirectoryResolutionOptions &options) {
+    bool writable = false;
+    return resolve_crash_dump_directory(options, writable);
 }
 
 void initialize_crash_dump_directory() noexcept {
@@ -921,14 +933,17 @@ void initialize_crash_dump_directory() noexcept {
         options.executable_path = std::filesystem::current_path() / "utsure";
         options.local_app_data_directory = std::filesystem::temp_directory_path();
 #endif
-        auto resolved_directory = resolve_crash_dump_directory_for_test(options);
+        bool writable = false;
+        auto resolved_directory = resolve_crash_dump_directory(options, writable);
         const std::lock_guard lock(crash_directory_mutex());
+        cached_crash_dump_directory_writable() = writable;
         cached_crash_dump_directory() = std::move(resolved_directory);
     } catch (...) {
         try {
             auto fallback = raw_default_crash_dump_directory();
-            ensure_directory_writable(fallback);
+            const bool writable = ensure_directory_writable(fallback);
             const std::lock_guard lock(crash_directory_mutex());
+            cached_crash_dump_directory_writable() = writable;
             cached_crash_dump_directory() = std::move(fallback);
         } catch (...) {
         }
@@ -1236,6 +1251,7 @@ void reset_crash_context_for_tests() {
     {
         const std::lock_guard directory_lock(crash_directory_mutex());
         cached_crash_dump_directory().clear();
+        cached_crash_dump_directory_writable() = false;
     }
 }
 
@@ -1562,7 +1578,6 @@ void configure_crash_log_flushing() noexcept {
 }
 
 void install_crash_handlers() noexcept {
-    initialize_crash_dump_directory();
     try {
         update_crash_context(CrashContextUpdate{
             .build_version = current_build_version(),
@@ -1589,6 +1604,7 @@ void install_crash_handlers() noexcept {
     std::signal(SIGFPE, signal_handler);
     signal_handlers_installed_storage().store(true);
 #endif
+    initialize_crash_dump_directory();
 }
 
 CrashDumpSetupStatus crash_dump_setup_status() noexcept {
@@ -1599,7 +1615,10 @@ CrashDumpSetupStatus crash_dump_setup_status() noexcept {
     status.resolved_directory = default_crash_dump_directory();
     std::error_code error{};
     status.directory_exists = std::filesystem::exists(status.resolved_directory, error);
-    status.directory_writable = ensure_directory_writable(status.resolved_directory);
+    {
+        const std::lock_guard lock(crash_directory_mutex());
+        status.directory_writable = cached_crash_dump_directory_writable();
+    }
 #if defined(_WIN32)
     status.enabled = true;
     status.unhandled_exception_filter_installed = unhandled_exception_filter_installed_storage().load();

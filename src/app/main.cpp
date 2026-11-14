@@ -19,6 +19,7 @@
 #include <QTimer>
 
 #include <cmath>
+#include <utility>
 
 namespace {
 
@@ -93,7 +94,7 @@ int main(int argc, char *argv[]) {
     }
     startup::checkpoint("Application icon initialization");
 
-    const auto settings_load_result = AppSettings::load_default_location();
+    auto settings_load_result = AppSettings::load_default_location();
     startup::checkpoint("Settings load in main");
     const UiFontResolution ui_font_resolution = UiFontManager::apply(app, settings_load_result.settings.ui_font);
     startup::checkpoint("UI font resolution and application");
@@ -108,19 +109,6 @@ int main(int argc, char *argv[]) {
         utsure::app::crash::format_crash_dump_setup_log(utsure::app::crash::crash_dump_setup_status())
     );
     startup::checkpoint("Crash directory setup status");
-    const auto recent_crash_artifacts = utsure::app::crash::find_recent_crash_artifacts(
-        utsure::app::crash::default_crash_dump_directory(),
-        3
-    );
-    for (const auto &artifact : recent_crash_artifacts) {
-        qWarning().noquote()
-            << "Recent utsure crash dump found:"
-            << QString::fromStdWString(artifact.dump_path.wstring())
-            << "sidecar:"
-            << QString::fromStdWString(artifact.sidecar_path.wstring())
-            << "Please include these when reporting a crash.";
-    }
-    startup::checkpoint("Recent crash dump scan");
 
     QCommandLineParser parser;
     parser.setApplicationDescription("utsure desktop encode job runner");
@@ -167,15 +155,25 @@ int main(int argc, char *argv[]) {
         return 2;
     }
 
-    MainWindow mainWindow;
+    MainWindow mainWindow(std::move(settings_load_result));
     startup::checkpoint("MainWindow constructor return");
-    if (!application_icon.isNull()) {
-        mainWindow.setWindowIcon(application_icon);
-    }
-    startup::checkpoint("Window icon assignment");
     startup::observe_first_paint(mainWindow);
     mainWindow.show();
     startup::checkpoint("MainWindow show");
+
+    QTimer::singleShot(250, &mainWindow, [] {
+        const auto recent_artifacts = utsure::app::crash::find_recent_crash_artifacts(
+            utsure::app::crash::default_crash_dump_directory(), 3
+        );
+        for (const auto &artifact : recent_artifacts) {
+            qWarning().noquote()
+                << "Recent utsure crash dump found:"
+                << QString::fromStdWString(artifact.dump_path.wstring())
+                << "sidecar:"
+                << QString::fromStdWString(artifact.sidecar_path.wstring())
+                << "Please include these when reporting a crash.";
+        }
+    });
 
     if (parser.isSet(dumpWindowStructureOption)) {
         qInfo().noquote() << mainWindow.window_structure_summary();

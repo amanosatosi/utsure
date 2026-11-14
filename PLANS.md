@@ -55,11 +55,20 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M52 Accurate, legible toolbar progress ring implemented; awaiting GitHub Actions visual/build verification.
 - [x] M53 Animated yellow progress arc correction implemented; awaiting GitHub Actions validation.
 - [x] M54 Set the displayed application version to Utsure v3.0 on master; awaiting GitHub Actions validation.
-- [ ] M55 Profile Windows portable startup and establish a baseline before changing runtime behavior.
+- [x] M55 Profile Windows portable startup and establish a baseline before changing runtime behavior.
+- [ ] M56 Remove measured startup work and validate the optimized Windows portable build.
+
+### M56 Optimize Windows portable startup
+
+Status: In progress.
+
+* Defer notification audio, worker threads, the drag overlay, and the Encode and Special editors to their first use.
+* Share the validated settings snapshot, reduce font and icon lookup work, and retain early crash handling.
+* Compare the optimized package with the M55 baseline on the same Windows runner. Reboot-controlled measurements remain a separate desktop verification step.
 
 ### M55 Profile Windows portable startup
 
-Status: In progress.
+Status: Warm baseline recorded in Windows CI run 43612049502. All 123 tests and both portable launch checks passed. Warm median was 248.5 ms across ten launches.
 
 * Trace process creation to main on Windows, startup stages through the first paint, and the subsequent event-loop turn.
 * Run repeated native launches of the extracted portable build in Windows CI and retain timings and host details.

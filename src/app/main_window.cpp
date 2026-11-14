@@ -64,6 +64,7 @@
 #include <QModelIndex>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPixmapCache>
 #include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
@@ -618,21 +619,24 @@ QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size, Q
         return {};
     }
 
-    QString svg_failure_reason{};
-    const QByteArray svg_bytes = load_svg_resource_bytes(resource_path, &svg_failure_reason);
-    if (svg_bytes.isEmpty()) {
-        if (failure_reason != nullptr) {
-            *failure_reason = svg_failure_reason;
-        }
-        return {};
+    const qreal device_pixel_ratio = qApp->devicePixelRatio();
+    const QString cache_key = QString("utsure-icon:%1:%2x%3@%4")
+        .arg(resource_path).arg(icon_size.width()).arg(icon_size.height()).arg(device_pixel_ratio);
+    QPixmap pixmap;
+    if (QPixmapCache::find(cache_key, &pixmap)) {
+        return fixed_color_icon_from_pixmap(pixmap);
     }
-
     const QIcon direct_icon(resource_path);
-    const QPixmap direct_pixmap = direct_icon.pixmap(icon_size);
+    const QPixmap direct_pixmap = direct_icon.pixmap(icon_size, device_pixel_ratio);
     if (!direct_pixmap.isNull()) {
+        QPixmapCache::insert(cache_key, direct_pixmap);
         return fixed_color_icon_from_pixmap(direct_pixmap);
     }
 
+    const QByteArray svg_bytes = load_svg_resource_bytes(resource_path, failure_reason);
+    if (svg_bytes.isEmpty()) {
+        return {};
+    }
     QSvgRenderer renderer(svg_bytes);
     if (!renderer.isValid()) {
         if (failure_reason != nullptr) {
@@ -642,7 +646,7 @@ QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size, Q
     }
 
     constexpr qreal kDevicePixelRatio = 2.0;
-    QPixmap pixmap(
+    pixmap = QPixmap(
         static_cast<int>(std::lround(static_cast<qreal>(icon_size.width()) * kDevicePixelRatio)),
         static_cast<int>(std::lround(static_cast<qreal>(icon_size.height()) * kDevicePixelRatio))
     );
@@ -653,6 +657,8 @@ QIcon load_resource_icon(const QString &resource_path, const QSize &icon_size, Q
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
     renderer.render(&painter, QRectF(QPointF(0.0, 0.0), QSizeF(icon_size)));
+    painter.end();
+    QPixmapCache::insert(cache_key, pixmap);
 
     return fixed_color_icon_from_pixmap(pixmap);
 }
@@ -761,6 +767,7 @@ void apply_icon_or_text(
     QString failure_reason{};
     const QIcon icon = load_resource_icon(resource_path, icon_size, &failure_reason);
     const bool has_icon = !icon.isNull();
+    const bool fallback_changed = button->property("iconFallback").toBool() != !has_icon;
 
     button->setIconSize(icon_size);
     button->setIcon(has_icon ? icon : QIcon{});
@@ -787,7 +794,9 @@ void apply_icon_or_text(
             << QString("Icon fallback active for '%1': %2").arg(resource_path, failure_reason);
     }
 
-    refresh_widget_style(button);
+    if (fallback_changed && button->testAttribute(Qt::WA_WState_Polished)) {
+        refresh_widget_style(button);
+    }
 }
 
 void apply_native_caption_accent(QWidget *window) {
@@ -1027,13 +1036,11 @@ void set_log_text_preserving_user_scroll(QPlainTextEdit *log_view, const QString
 
 }  // namespace
 
-MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
+MainWindow::MainWindow(AppSettings::LoadResult settings)
+    : app_settings_(std::move(settings.settings)),
+      app_settings_path_(std::move(settings.config_path)) {
     namespace startup = utsure::app::startup;
     startup::checkpoint("QMainWindow base construction");
-    const auto settings_load_result = AppSettings::load_default_location();
-    app_settings_ = settings_load_result.settings;
-    app_settings_path_ = settings_load_result.config_path;
-    startup::checkpoint("Settings load in MainWindow");
 
     setWindowTitle(QString("Utsure v%1")
                        .arg(to_qstring(utsure::core::BuildInfo::project_version())));
@@ -1501,7 +1508,9 @@ QLabel#PreviewTimeBadge {
         qWarning().noquote()
             << QString("Brand logo fallback active for ':/icons/logo.svg': %1").arg(brand_logo_failure_reason);
     }
-    refresh_widget_style(brand_mark);
+    if (brand_mark->property("logoFallback").toBool() && brand_mark->testAttribute(Qt::WA_WState_Polished)) {
+        refresh_widget_style(brand_mark);
+    }
 
     auto *brand_name = new QLabel("utsure", toolbar_brand_widget);
     brand_name->setObjectName("BrandName");
@@ -1765,8 +1774,10 @@ QLabel#PreviewTimeBadge {
     auto *intro_group = new QGroupBox("Intro", main_tab_content);
     auto *intro_layout = new QGridLayout(intro_group);
     intro_enable_check_ = new QCheckBox("Enable intro clip", intro_group);
+    intro_enable_check_->setChecked(app_settings_.intro_enabled);
     const auto intro_row = create_path_field(intro_group, "Optional intro media", "Choose intro media");
     intro_path_edit_ = intro_row.line_edit;
+    intro_path_edit_->setText(app_settings_.last_intro_path);
     intro_browse_button_ = intro_row.browse_button;
     intro_music_check_ = new QCheckBox("Use separate intro music", intro_group);
     const auto intro_music_row = create_path_field(intro_group, "Optional intro music", "Choose intro music");
@@ -1787,8 +1798,10 @@ QLabel#PreviewTimeBadge {
     auto *endcard_group = new QGroupBox("EndCard", main_tab_content);
     auto *endcard_layout = new QGridLayout(endcard_group);
     endcard_enable_check_ = new QCheckBox("Enable endcard clip", endcard_group);
+    endcard_enable_check_->setChecked(app_settings_.outro_enabled);
     const auto endcard_row = create_path_field(endcard_group, "Optional endcard media", "Choose endcard media");
     endcard_path_edit_ = endcard_row.line_edit;
+    endcard_path_edit_->setText(app_settings_.last_outro_path);
     endcard_browse_button_ = endcard_row.browse_button;
     endcard_music_check_ = new QCheckBox("Use separate endcard music", endcard_group);
     const auto endcard_music_row = create_path_field(endcard_group, "Optional endcard music", "Choose endcard music");
@@ -1817,127 +1830,10 @@ QLabel#PreviewTimeBadge {
     editor_tabs_->addTab(wrap_in_scroll_area(main_tab_content, editor_tabs_), "Main");
 
     startup::checkpoint("Main tab");
-    auto *encode_tab_content = new QWidget(editor_tabs_);
-    auto *encode_tab_layout = new QVBoxLayout(encode_tab_content);
-    encode_tab_layout->setContentsMargins(8, 8, 8, 8);
-    encode_tab_layout->setSpacing(8);
-
-    auto *encode_settings_row = new QHBoxLayout();
-    encode_settings_row->setContentsMargins(0, 0, 0, 0);
-    encode_settings_row->setSpacing(8);
-
-    auto *video_group = new QGroupBox("Video", encode_tab_content);
-    auto *video_layout = new QFormLayout(video_group);
-    video_codec_combo_ = new QComboBox(video_group);
-    video_codec_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    video_codec_combo_->setMinimumContentsLength(18);
-    video_codec_combo_->addItem("H.265", static_cast<int>(utsure::core::media::OutputVideoCodec::h265));
-    video_codec_combo_->addItem("H.264", static_cast<int>(utsure::core::media::OutputVideoCodec::h264));
-    resize_preset_combo_ = new QComboBox(video_group);
-    resize_preset_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    resize_preset_combo_->setMinimumContentsLength(18);
-    resize_preset_combo_->addItem("Source", 0);
-    resize_preset_combo_->addItem("1080p", 1080);
-    resize_preset_combo_->addItem("720p", 720);
-    resize_preset_combo_->addItem("540p", 540);
-    resize_preset_combo_->addItem("480p", 480);
-    preset_combo_ = new QComboBox(video_group);
-    preset_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    preset_combo_->setMinimumContentsLength(18);
-    preset_combo_->addItems(QStringList{
-        "ultrafast",
-        "superfast",
-        "veryfast",
-        "faster",
-        "fast",
-        "medium",
-        "slow",
-        "slower",
-        "veryslow"
-    });
-    crf_spin_box_ = new QSpinBox(video_group);
-    crf_spin_box_->setRange(0, 51);
-    video_layout->addRow("Codec", video_codec_combo_);
-    video_layout->addRow("Resolution", resize_preset_combo_);
-    video_layout->addRow("CRF", crf_spin_box_);
-    video_layout->addRow("Preset", preset_combo_);
-
-    auto *audio_group = new QGroupBox("Audio", encode_tab_content);
-    auto *audio_layout = new QFormLayout(audio_group);
-    audio_format_combo_ = new QComboBox(audio_group);
-    audio_format_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    audio_format_combo_->setMinimumContentsLength(18);
-    audio_format_combo_->addItem("Auto", static_cast<int>(utsure::core::media::AudioOutputMode::auto_select));
-    audio_format_combo_->addItem("AAC", static_cast<int>(utsure::core::media::AudioOutputMode::encode_aac));
-    audio_format_combo_->addItem(
-        "Copy source",
-        static_cast<int>(utsure::core::media::AudioOutputMode::copy_source)
-    );
-    audio_format_combo_->addItem("No audio", static_cast<int>(utsure::core::media::AudioOutputMode::disable));
-    audio_quality_combo_ = new QComboBox(audio_group);
-    audio_quality_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    audio_quality_combo_->setMinimumContentsLength(18);
-    audio_quality_combo_->addItem("128 kbps", 128);
-    audio_quality_combo_->addItem("160 kbps", 160);
-    audio_quality_combo_->addItem("192 kbps", 192);
-    audio_quality_combo_->addItem("256 kbps", 256);
-    audio_quality_combo_->addItem("320 kbps", 320);
-    audio_track_combo_ = new QComboBox(audio_group);
-    audio_track_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    audio_track_combo_->setMinimumContentsLength(18);
-    audio_layout->addRow("Format", audio_format_combo_);
-    audio_layout->addRow("Quality", audio_quality_combo_);
-    audio_layout->addRow("Track", audio_track_combo_);
-
-    encode_settings_row->addWidget(video_group, 1);
-    encode_settings_row->addWidget(audio_group, 1);
-    encode_tab_layout->addLayout(encode_settings_row);
-    encode_tab_layout->addStretch(1);
-    editor_tabs_->addTab(wrap_in_scroll_area(encode_tab_content, editor_tabs_), "Encode");
-
-    startup::checkpoint("Encode tab");
-    auto *special_tab_content = new QWidget(editor_tabs_);
-    auto *special_tab_layout = new QVBoxLayout(special_tab_content);
-    special_tab_layout->setContentsMargins(8, 8, 8, 8);
-    special_tab_layout->setSpacing(8);
-
-    auto *thumbnail_group = new QGroupBox("Thumbnail Pre-roll", special_tab_content);
-    auto *thumbnail_layout = new QGridLayout(thumbnail_group);
-    thumbnail_enable_check_ = new QCheckBox("Enable thumbnail pre-roll", thumbnail_group);
-    const auto thumbnail_row = create_path_field(
-        thumbnail_group,
-        "Auto thumbnail.* from subtitle folder or manual image",
-        "Choose thumbnail image"
-    );
-    thumbnail_image_path_edit_ = thumbnail_row.line_edit;
-    thumbnail_image_browse_button_ = thumbnail_row.browse_button;
-    thumbnail_title_edit_ = new QLineEdit(thumbnail_group);
-    thumbnail_title_edit_->setPlaceholderText("thumbnail.ass Dialogue actor/name utsure_data text");
-    thumbnail_title_edit_->installEventFilter(this);
-    thumbnail_auto_button_ = new QPushButton("Auto", thumbnail_group);
-    thumbnail_auto_button_->setToolTip("Load thumbnail.* and matching thumbnail.ass from the selected subtitle folder");
-    thumbnail_auto_button_->setCursor(Qt::PointingHandCursor);
-    thumbnail_reset_title_button_ = new QPushButton("Reset title", thumbnail_group);
-    thumbnail_reset_title_button_->setToolTip("Reload the utsure_data text from thumbnail.ass");
-    thumbnail_reset_title_button_->setCursor(Qt::PointingHandCursor);
-    thumbnail_layout->addWidget(thumbnail_enable_check_, 0, 0, 1, 2);
-    thumbnail_layout->addWidget(new QLabel("Picture", thumbnail_group), 1, 0);
-    thumbnail_layout->addWidget(thumbnail_row.container, 1, 1);
-    thumbnail_layout->addWidget(new QLabel("Title", thumbnail_group), 2, 0);
-    thumbnail_layout->addWidget(thumbnail_title_edit_, 2, 1);
-    thumbnail_layout->addWidget(thumbnail_auto_button_, 3, 0);
-    thumbnail_layout->addWidget(thumbnail_reset_title_button_, 3, 1);
-    auto *thumbnail_note = new QLabel(
-        "When enabled, the rendered thumbnail is inserted as the first two output frames before intro, main, and endcard content.",
-        thumbnail_group
-    );
-    thumbnail_note->setObjectName("MutedNote");
-    thumbnail_note->setWordWrap(true);
-    thumbnail_layout->addWidget(thumbnail_note, 4, 0, 1, 2);
-    special_tab_layout->addWidget(thumbnail_group);
-    special_tab_layout->addStretch(1);
-    editor_tabs_->addTab(wrap_in_scroll_area(special_tab_content, editor_tabs_), "Special");
-
+    encode_tab_page_ = new QWidget(editor_tabs_);
+    special_tab_page_ = new QWidget(editor_tabs_);
+    editor_tabs_->addTab(encode_tab_page_, "Encode");
+    editor_tabs_->addTab(special_tab_page_, "Special");
     logs_tab_ = new QWidget(editor_tabs_);
     auto *logs_tab_layout = new QVBoxLayout(logs_tab_);
     logs_tab_layout->setContentsMargins(8, 8, 8, 8);
@@ -1947,7 +1843,7 @@ QLabel#PreviewTimeBadge {
     logs_tab_layout->addWidget(session_log_view_);
     editor_tabs_->addTab(logs_tab_, "Logs");
 
-    startup::checkpoint("Special and Logs tabs");
+    startup::checkpoint("Secondary tab placeholders and Logs");
     auto *right_tabs = new QTabWidget(content_splitter);
     right_tabs->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *preview_corner_widget = new QWidget(right_tabs);
@@ -2107,8 +2003,6 @@ QLabel#PreviewTimeBadge {
 
     root_layout->addWidget(content_widget, 1);
     setCentralWidget(central_widget);
-    source_drop_overlay_ = new SourceDropOverlayWidget(central_widget);
-    update_source_drop_overlay_geometry();
 
     QTimer::singleShot(0, this, [this, body_splitter, content_splitter]() {
         body_splitter->setSizes(QList<int>{160, 410});
@@ -2116,9 +2010,7 @@ QLabel#PreviewTimeBadge {
         apply_native_caption_accent(this);
     });
 
-    startup::checkpoint("Preview and Task Log tabs, layout, and drop overlay");
-    ensure_runner_slot_count(1);
-    startup::checkpoint("Encode runner slot initialization");
+    startup::checkpoint("Preview and Task Log tabs and layout");
     connect(
         preview_renderer_controller_,
         &PreviewFrameRendererController::preview_loading,
@@ -2173,10 +2065,6 @@ QLabel#PreviewTimeBadge {
     connect(intro_music_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_intro_music_file);
     connect(endcard_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_endcard_clip);
     connect(endcard_music_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_endcard_music_file);
-    connect(thumbnail_image_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_thumbnail_image);
-    connect(thumbnail_auto_button_, &QPushButton::clicked, this, &MainWindow::restore_selected_job_auto_thumbnail_selection);
-    connect(thumbnail_reset_title_button_, &QPushButton::clicked, this, &MainWindow::reset_selected_job_thumbnail_title);
-
     connect(queue_table_, &QTableWidget::itemChanged, this, &MainWindow::handle_queue_item_changed);
     connect(queue_table_, &QTableWidget::itemSelectionChanged, this, &MainWindow::handle_queue_selection_changed);
     connect(queue_table_, &QTableWidget::customContextMenuRequested, this, &MainWindow::show_queue_context_menu);
@@ -2237,6 +2125,154 @@ QLabel#PreviewTimeBadge {
     });
     connect(endcard_music_check_, &QCheckBox::toggled, this, [bind_editor_change](bool) { bind_editor_change(); });
     connect(endcard_music_path_edit_, &QLineEdit::textChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
+    connect(frame_back_button_, &QPushButton::clicked, this, [this]() { step_selected_job_frame(-1); });
+    connect(frame_forward_button_, &QPushButton::clicked, this, [this]() { step_selected_job_frame(1); });
+    connect(set_in_button_, &QPushButton::clicked, this, &MainWindow::set_selected_job_trim_in);
+    connect(set_out_button_, &QPushButton::clicked, this, &MainWindow::set_selected_job_trim_out);
+    connect(jump_in_button_, &QPushButton::clicked, this, &MainWindow::jump_selected_job_to_in);
+    connect(jump_out_button_, &QPushButton::clicked, this, &MainWindow::jump_selected_job_to_out);
+    connect(trim_timeline_widget_, &TrimTimelineWidget::seek_requested, this, &MainWindow::handle_timeline_seek);
+
+    startup::checkpoint("MainWindow signal connections");
+    append_session_log(QString("[info] Settings file: %1").arg(QDir::toNativeSeparators(app_settings_path_)));
+    if (!settings.warning.trimmed().isEmpty()) {
+        append_session_log("[warning] " + settings.warning);
+    }
+    refresh_all_views();
+    startup::checkpoint("Initial view refresh");
+}
+
+void MainWindow::build_secondary_editor_tabs() {
+    auto *encode_tab_content = new QWidget();
+    auto *encode_tab_layout = new QVBoxLayout(encode_tab_content);
+    encode_tab_layout->setContentsMargins(8, 8, 8, 8);
+    encode_tab_layout->setSpacing(8);
+
+    auto *encode_settings_row = new QHBoxLayout();
+    encode_settings_row->setContentsMargins(0, 0, 0, 0);
+    encode_settings_row->setSpacing(8);
+
+    auto *video_group = new QGroupBox("Video", encode_tab_content);
+    auto *video_layout = new QFormLayout(video_group);
+    video_codec_combo_ = new QComboBox(video_group);
+    video_codec_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    video_codec_combo_->setMinimumContentsLength(18);
+    video_codec_combo_->addItem("H.265", static_cast<int>(utsure::core::media::OutputVideoCodec::h265));
+    video_codec_combo_->addItem("H.264", static_cast<int>(utsure::core::media::OutputVideoCodec::h264));
+    resize_preset_combo_ = new QComboBox(video_group);
+    resize_preset_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    resize_preset_combo_->setMinimumContentsLength(18);
+    resize_preset_combo_->addItem("Source", 0);
+    resize_preset_combo_->addItem("1080p", 1080);
+    resize_preset_combo_->addItem("720p", 720);
+    resize_preset_combo_->addItem("540p", 540);
+    resize_preset_combo_->addItem("480p", 480);
+    preset_combo_ = new QComboBox(video_group);
+    preset_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    preset_combo_->setMinimumContentsLength(18);
+    preset_combo_->addItems(QStringList{
+        "ultrafast",
+        "superfast",
+        "veryfast",
+        "faster",
+        "fast",
+        "medium",
+        "slow",
+        "slower",
+        "veryslow"
+    });
+    crf_spin_box_ = new QSpinBox(video_group);
+    crf_spin_box_->setRange(0, 51);
+    video_layout->addRow("Codec", video_codec_combo_);
+    video_layout->addRow("Resolution", resize_preset_combo_);
+    video_layout->addRow("CRF", crf_spin_box_);
+    video_layout->addRow("Preset", preset_combo_);
+
+    auto *audio_group = new QGroupBox("Audio", encode_tab_content);
+    auto *audio_layout = new QFormLayout(audio_group);
+    audio_format_combo_ = new QComboBox(audio_group);
+    audio_format_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    audio_format_combo_->setMinimumContentsLength(18);
+    audio_format_combo_->addItem("Auto", static_cast<int>(utsure::core::media::AudioOutputMode::auto_select));
+    audio_format_combo_->addItem("AAC", static_cast<int>(utsure::core::media::AudioOutputMode::encode_aac));
+    audio_format_combo_->addItem(
+        "Copy source",
+        static_cast<int>(utsure::core::media::AudioOutputMode::copy_source)
+    );
+    audio_format_combo_->addItem("No audio", static_cast<int>(utsure::core::media::AudioOutputMode::disable));
+    audio_quality_combo_ = new QComboBox(audio_group);
+    audio_quality_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    audio_quality_combo_->setMinimumContentsLength(18);
+    audio_quality_combo_->addItem("128 kbps", 128);
+    audio_quality_combo_->addItem("160 kbps", 160);
+    audio_quality_combo_->addItem("192 kbps", 192);
+    audio_quality_combo_->addItem("256 kbps", 256);
+    audio_quality_combo_->addItem("320 kbps", 320);
+    audio_track_combo_ = new QComboBox(audio_group);
+    audio_track_combo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    audio_track_combo_->setMinimumContentsLength(18);
+    audio_layout->addRow("Format", audio_format_combo_);
+    audio_layout->addRow("Quality", audio_quality_combo_);
+    audio_layout->addRow("Track", audio_track_combo_);
+
+    encode_settings_row->addWidget(video_group, 1);
+    encode_settings_row->addWidget(audio_group, 1);
+    encode_tab_layout->addLayout(encode_settings_row);
+    encode_tab_layout->addStretch(1);
+    auto *encode_page_layout = new QVBoxLayout(encode_tab_page_);
+    encode_page_layout->setContentsMargins(0, 0, 0, 0);
+    encode_page_layout->addWidget(wrap_in_scroll_area(encode_tab_content, encode_tab_page_));
+
+
+    auto *special_tab_content = new QWidget();
+    auto *special_tab_layout = new QVBoxLayout(special_tab_content);
+    special_tab_layout->setContentsMargins(8, 8, 8, 8);
+    special_tab_layout->setSpacing(8);
+
+    auto *thumbnail_group = new QGroupBox("Thumbnail Pre-roll", special_tab_content);
+    auto *thumbnail_layout = new QGridLayout(thumbnail_group);
+    thumbnail_enable_check_ = new QCheckBox("Enable thumbnail pre-roll", thumbnail_group);
+    const auto thumbnail_row = create_path_field(
+        thumbnail_group,
+        "Auto thumbnail.* from subtitle folder or manual image",
+        "Choose thumbnail image"
+    );
+    thumbnail_image_path_edit_ = thumbnail_row.line_edit;
+    thumbnail_image_browse_button_ = thumbnail_row.browse_button;
+    thumbnail_title_edit_ = new QLineEdit(thumbnail_group);
+    thumbnail_title_edit_->setPlaceholderText("thumbnail.ass Dialogue actor/name utsure_data text");
+    thumbnail_title_edit_->installEventFilter(this);
+    thumbnail_auto_button_ = new QPushButton("Auto", thumbnail_group);
+    thumbnail_auto_button_->setToolTip("Load thumbnail.* and matching thumbnail.ass from the selected subtitle folder");
+    thumbnail_auto_button_->setCursor(Qt::PointingHandCursor);
+    thumbnail_reset_title_button_ = new QPushButton("Reset title", thumbnail_group);
+    thumbnail_reset_title_button_->setToolTip("Reload the utsure_data text from thumbnail.ass");
+    thumbnail_reset_title_button_->setCursor(Qt::PointingHandCursor);
+    thumbnail_layout->addWidget(thumbnail_enable_check_, 0, 0, 1, 2);
+    thumbnail_layout->addWidget(new QLabel("Picture", thumbnail_group), 1, 0);
+    thumbnail_layout->addWidget(thumbnail_row.container, 1, 1);
+    thumbnail_layout->addWidget(new QLabel("Title", thumbnail_group), 2, 0);
+    thumbnail_layout->addWidget(thumbnail_title_edit_, 2, 1);
+    thumbnail_layout->addWidget(thumbnail_auto_button_, 3, 0);
+    thumbnail_layout->addWidget(thumbnail_reset_title_button_, 3, 1);
+    auto *thumbnail_note = new QLabel(
+        "When enabled, the rendered thumbnail is inserted as the first two output frames before intro, main, and endcard content.",
+        thumbnail_group
+    );
+    thumbnail_note->setObjectName("MutedNote");
+    thumbnail_note->setWordWrap(true);
+    thumbnail_layout->addWidget(thumbnail_note, 4, 0, 1, 2);
+    special_tab_layout->addWidget(thumbnail_group);
+    special_tab_layout->addStretch(1);
+    auto *special_page_layout = new QVBoxLayout(special_tab_page_);
+    special_page_layout->setContentsMargins(0, 0, 0, 0);
+    special_page_layout->addWidget(wrap_in_scroll_area(special_tab_content, special_tab_page_));
+
+    connect(thumbnail_image_browse_button_, &QPushButton::clicked, this, &MainWindow::choose_thumbnail_image);
+    connect(thumbnail_auto_button_, &QPushButton::clicked, this, &MainWindow::restore_selected_job_auto_thumbnail_selection);
+    connect(thumbnail_reset_title_button_, &QPushButton::clicked, this, &MainWindow::reset_selected_job_thumbnail_title);
+
+    const auto bind_editor_change = [this]() { sync_selected_job_from_editor(); };
     connect(thumbnail_enable_check_, &QCheckBox::clicked, this, [this](bool) {
         if (!is_valid_job_index(selected_job_index_)) {
             return;
@@ -2277,36 +2313,6 @@ QLabel#PreviewTimeBadge {
     });
     connect(audio_track_combo_, &QComboBox::currentTextChanged, this, [bind_editor_change](const QString &) { bind_editor_change(); });
 
-    connect(frame_back_button_, &QPushButton::clicked, this, [this]() { step_selected_job_frame(-1); });
-    connect(frame_forward_button_, &QPushButton::clicked, this, [this]() { step_selected_job_frame(1); });
-    connect(set_in_button_, &QPushButton::clicked, this, &MainWindow::set_selected_job_trim_in);
-    connect(set_out_button_, &QPushButton::clicked, this, &MainWindow::set_selected_job_trim_out);
-    connect(jump_in_button_, &QPushButton::clicked, this, &MainWindow::jump_selected_job_to_in);
-    connect(jump_out_button_, &QPushButton::clicked, this, &MainWindow::jump_selected_job_to_out);
-    connect(trim_timeline_widget_, &TrimTimelineWidget::seek_requested, this, &MainWindow::handle_timeline_seek);
-
-    startup::checkpoint("MainWindow signal connections");
-    forced_queue_notification_ = new utsure::app::ForcedQueueNotification(this);
-    forced_queue_notification_->set_open_logs_handler([this]() {
-        if (!shutting_down_ && editor_tabs_ != nullptr && logs_tab_ != nullptr) {
-            editor_tabs_->setCurrentWidget(logs_tab_);
-        }
-    });
-    forced_queue_notification_->set_log_handler([this](const QString &line) {
-        if (!shutting_down_) {
-            append_session_log(line);
-        }
-    });
-
-    startup::checkpoint("Notification setup");
-    append_session_log("[info] Window ready.");
-    append_session_log(QString("[info] Settings file: %1").arg(QDir::toNativeSeparators(app_settings_path_)));
-    if (!settings_load_result.warning.trimmed().isEmpty()) {
-        append_session_log("[warning] " + settings_load_result.warning);
-    }
-    refresh_profile_combo();
-    refresh_all_views();
-    startup::checkpoint("Initial view refresh");
 }
 
 MainWindow::~MainWindow() {
@@ -4180,7 +4186,7 @@ void MainWindow::handle_queue_rows_moved(
 }
 
 void MainWindow::handle_same_as_input_toggled(const bool enabled) {
-    if (loading_selected_job_ || selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+    if (loading_selected_job_ || video_codec_combo_ == nullptr || !is_valid_job_index(selected_job_index_)) {
         return;
     }
 
@@ -5036,7 +5042,7 @@ void MainWindow::handle_timeline_seek(const qint64 time_us) {
 }
 
 void MainWindow::sync_selected_job_from_editor() {
-    if (loading_selected_job_ || selected_job_index_ < 0 || selected_job_index_ >= static_cast<int>(jobs_.size())) {
+    if (loading_selected_job_ || video_codec_combo_ == nullptr || !is_valid_job_index(selected_job_index_)) {
         return;
     }
 
@@ -5138,6 +5144,10 @@ void MainWindow::sync_selected_job_from_editor() {
 void MainWindow::load_selected_job_into_editor() {
     loading_selected_job_ = true;
 
+    if (is_valid_job_index(selected_job_index_) && video_codec_combo_ == nullptr) {
+        build_secondary_editor_tabs();
+    }
+
     if (!is_valid_job_index(selected_job_index_)) {
         output_name_text_edit_->clear();
         output_path_edit_->clear();
@@ -5152,19 +5162,21 @@ void MainWindow::load_selected_job_into_editor() {
         endcard_path_edit_->setText(app_settings_.last_outro_path);
         endcard_music_check_->setChecked(false);
         endcard_music_path_edit_->clear();
-        thumbnail_enable_check_->setChecked(false);
-        int codec_index = video_codec_combo_->findData(static_cast<int>(app_settings_.last_used.codec));
-        video_codec_combo_->setCurrentIndex(codec_index >= 0 ? codec_index : 0);
-        preset_combo_->setCurrentText(app_settings_.last_used.preset);
-        crf_spin_box_->setValue(app_settings_.last_used.crf);
-        resize_preset_combo_->setCurrentIndex(0);
-        int audio_mode_index = audio_format_combo_->findData(static_cast<int>(app_settings_.last_used.audio_mode));
-        audio_format_combo_->setCurrentIndex(audio_mode_index >= 0 ? audio_mode_index : 0);
-        int audio_quality_index = audio_quality_combo_->findData(app_settings_.last_used.audio_bitrate_kbps);
-        audio_quality_combo_->setCurrentIndex(audio_quality_index >= 0 ? audio_quality_index : audio_quality_combo_->findData(192));
-        audio_track_combo_->clear();
-        thumbnail_image_path_edit_->clear();
-        thumbnail_title_edit_->clear();
+        if (video_codec_combo_ != nullptr) {
+            thumbnail_enable_check_->setChecked(false);
+            const int codec_index = video_codec_combo_->findData(static_cast<int>(app_settings_.last_used.codec));
+            video_codec_combo_->setCurrentIndex(codec_index >= 0 ? codec_index : 0);
+            preset_combo_->setCurrentText(app_settings_.last_used.preset);
+            crf_spin_box_->setValue(app_settings_.last_used.crf);
+            resize_preset_combo_->setCurrentIndex(0);
+            const int audio_mode_index = audio_format_combo_->findData(static_cast<int>(app_settings_.last_used.audio_mode));
+            audio_format_combo_->setCurrentIndex(audio_mode_index >= 0 ? audio_mode_index : 0);
+            const int audio_quality_index = audio_quality_combo_->findData(app_settings_.last_used.audio_bitrate_kbps);
+            audio_quality_combo_->setCurrentIndex(audio_quality_index >= 0 ? audio_quality_index : audio_quality_combo_->findData(192));
+            audio_track_combo_->clear();
+            thumbnail_image_path_edit_->clear();
+            thumbnail_title_edit_->clear();
+        }
     } else {
         const auto &job = jobs_[static_cast<std::size_t>(selected_job_index_)];
         output_name_text_edit_->setText(job.output_name_custom_text);
@@ -5855,9 +5867,6 @@ void MainWindow::refresh_queue_table() {
 void MainWindow::set_encode_controls_locked(const bool locked) {
     const bool has_job = selected_job_index_ >= 0 && selected_job_index_ < static_cast<int>(jobs_.size());
     const bool editable = has_job && !locked;
-    const bool audio_quality_enabled = editable &&
-        audio_format_combo_->currentData().toInt() ==
-            static_cast<int>(utsure::core::media::AudioOutputMode::encode_aac);
 
     output_name_text_edit_->setEnabled(editable);
     output_path_edit_->setEnabled(editable);
@@ -5886,11 +5895,18 @@ void MainWindow::set_encode_controls_locked(const bool locked) {
     endcard_music_check_->setEnabled(editable);
     endcard_music_path_edit_->setEnabled(editable && endcard_music_check_->isChecked());
     endcard_music_browse_button_->setEnabled(editable && endcard_music_check_->isChecked());
+    profile_combo_->setEnabled(editable && !app_settings_.encoding_profiles.empty());
+    if (video_codec_combo_ == nullptr) {
+        return;
+    }
+
+    const bool audio_quality_enabled = editable &&
+        audio_format_combo_->currentData().toInt() ==
+            static_cast<int>(utsure::core::media::AudioOutputMode::encode_aac);
     video_codec_combo_->setEnabled(editable);
     preset_combo_->setEnabled(editable);
     crf_spin_box_->setEnabled(editable);
     resize_preset_combo_->setEnabled(editable);
-    profile_combo_->setEnabled(editable && !app_settings_.encoding_profiles.empty());
     audio_format_combo_->setEnabled(editable);
     audio_quality_combo_->setEnabled(audio_quality_enabled);
     audio_track_combo_->setEnabled(editable);
@@ -6109,6 +6125,7 @@ void MainWindow::update_start_button_visuals() {
         }
         start_button_->setToolTip(queue_start_planning_active_ ? "Preparing..." : (stop_requested_ ? "Stopping..." : "Encoding..."));
         start_button_->setText(QString{});
+        const bool fallback_changed = start_button_->property("iconFallback").toBool();
         start_button_->setProperty("iconFallback", false);
         start_button_->setIconSize(QSize(kBusyRingIconSize, kBusyRingIconSize));
         start_button_->setIcon(make_busy_icon(
@@ -6121,7 +6138,9 @@ void MainWindow::update_start_button_visuals() {
         start_button_->setMaximumWidth(30);
         start_button_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
         start_button_->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        refresh_widget_style(start_button_);
+        if (fallback_changed) {
+            refresh_widget_style(start_button_);
+        }
         return;
     }
 
@@ -6172,7 +6191,10 @@ void MainWindow::advance_busy_spinner() {
 
 void MainWindow::set_source_drop_overlay_visible(const bool visible) {
     if (source_drop_overlay_ == nullptr) {
-        return;
+        if (!visible) {
+            return;
+        }
+        source_drop_overlay_ = new SourceDropOverlayWidget(centralWidget());
     }
 
     if (!visible) {
@@ -6544,8 +6566,7 @@ void MainWindow::present_job_terminal_notification(
     const QString &status_text,
     const QString &output_path
 ) {
-    if (!job_notification_tracker_.claim_terminal(job_run_id) || shutting_down_ ||
-        forced_queue_notification_ == nullptr || !is_valid_job_index(job_index)) {
+    if (!job_notification_tracker_.claim_terminal(job_run_id) || shutting_down_ || !is_valid_job_index(job_index)) {
         return;
     }
 
@@ -6556,6 +6577,19 @@ void MainWindow::present_job_terminal_notification(
         failure_summary = failure_summary.left(kMaximumFailureSummaryLength - 1) + QStringLiteral("\u2026");
     }
 
+    if (forced_queue_notification_ == nullptr) {
+        forced_queue_notification_ = new utsure::app::ForcedQueueNotification(this);
+        forced_queue_notification_->set_open_logs_handler([this]() {
+            if (!shutting_down_ && editor_tabs_ != nullptr && logs_tab_ != nullptr) {
+                editor_tabs_->setCurrentWidget(logs_tab_);
+            }
+        });
+        forced_queue_notification_->set_log_handler([this](const QString &line) {
+            if (!shutting_down_) {
+                append_session_log(line);
+            }
+        });
+    }
     forced_queue_notification_->present(utsure::app::JobTerminalNotificationData{
         .run_id = job_run_id,
         .outcome = succeeded ? utsure::app::JobTerminalNotificationOutcome::succeeded
