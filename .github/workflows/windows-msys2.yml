@@ -87,6 +87,14 @@ jobs:
             libtool
             make
 
+      - name: Validate shell script syntax
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' script; do
+            echo "bash -n ${script}"
+            bash -n "${script}"
+          done < <(find scripts/ci -type f -name '*.sh' -print0)
+
       - name: Build latest Mangetsu
         id: mangetsu-build
         run: |
