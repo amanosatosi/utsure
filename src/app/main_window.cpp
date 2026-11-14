@@ -4186,7 +4186,7 @@ void MainWindow::handle_queue_rows_moved(
 }
 
 void MainWindow::handle_same_as_input_toggled(const bool enabled) {
-    if (loading_selected_job_ || video_codec_combo_ == nullptr || !is_valid_job_index(selected_job_index_)) {
+    if (loading_selected_job_ || !is_valid_job_index(selected_job_index_)) {
         return;
     }
 

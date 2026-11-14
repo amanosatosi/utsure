@@ -15,6 +15,7 @@ $variables = @{
     QT_PLUGIN_PATH = ''
     QML2_IMPORT_PATH = ''
     UTSURE_CRASH_DUMP_DIR = (Join-Path $report 'crash-dumps')
+    UTSURE_GIT_COMMIT = $Commit
     QT_FORCE_STDERR_LOGGING = '1'
 }
 $previous = @{}
@@ -50,27 +51,27 @@ try {
             -RedirectStandardOutput (Join-Path $report "launch-$index.stdout.txt")
 
         try {
-            $ready = '^\[startup\]\s+([\d.]+)\s+[\d.]+\s+Event loop turn after first paint$'
+            $readyPattern = '(?m)^\[startup\][ \t]+([0-9]+\.[0-9]+)[ \t]+[0-9.]+[ \t]+Event loop turn after first paint\r?\n'
+            $creationPattern = '(?m)^\[startup\] Process creation to main \(ms\): ([0-9]+\.[0-9]+)\r?\n'
             $deadline = [Diagnostics.Stopwatch]::StartNew()
             do {
                 if ($process.HasExited) {
                     throw "Portable application exited before it was ready (code $($process.ExitCode))."
                 }
                 Start-Sleep -Milliseconds 25
-                $lines = @(Get-Content -LiteralPath $log)
-                $readyMatch = $lines | Select-String -Pattern $ready | Select-Object -First 1
-            } until ($readyMatch -or $deadline.Elapsed.TotalSeconds -ge 30)
-            if (!$readyMatch) {
+                $logText = [string](Get-Content -LiteralPath $log -Raw)
+                $readyMatch = [regex]::Match($logText, $readyPattern)
+                $creationMatch = [regex]::Match($logText, $creationPattern)
+            } until (($readyMatch.Success -and $creationMatch.Success) -or $deadline.Elapsed.TotalSeconds -ge 30)
+            if (!$readyMatch.Success) {
                 throw "Timed out waiting for first paint and event-loop readiness. See $log"
             }
-            $creationMatch = $lines | Select-String -SimpleMatch '[startup] Process creation to main (ms): ' |
-                Select-Object -First 1
-            if (!$creationMatch) {
+            if (!$creationMatch.Success) {
                 throw "Missing process creation timing. See $log"
             }
             $culture = [Globalization.CultureInfo]::InvariantCulture
-            $preMain = [double]::Parse(($creationMatch.Line -split ': ')[-1], $culture)
-            $fromMain = [double]::Parse($readyMatch.Matches[0].Groups[1].Value, $culture)
+            $preMain = [double]::Parse($creationMatch.Groups[1].Value, $culture)
+            $fromMain = [double]::Parse($readyMatch.Groups[1].Value, $culture)
 
             $idleCpu = $null
             if ($index -eq $Launches) {
