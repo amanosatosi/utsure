@@ -1,4 +1,5 @@
 #include "ui_font.hpp"
+#include "startup_profile.hpp"
 
 #include <QApplication>
 #include <QFontDatabase>
@@ -37,6 +38,7 @@ QString load_bundled_pyidaungsu_family() {
     }
     attempted = true;
 
+    const utsure::app::startup::Stage stage("Bundled Pyidaungsu registration");
     const int regular_id = QFontDatabase::addApplicationFont(kBundledRegularPath);
     const int bold_id = QFontDatabase::addApplicationFont(kBundledBoldPath);
 
@@ -62,7 +64,10 @@ UiFontResolution resolve_pyidaungsu(
     const AppSettings::UiFontSettings &settings,
     const QFont &system_fallback
 ) {
-    const QStringList system_families = QFontDatabase::families();
+    const QStringList system_families = [] {
+        const utsure::app::startup::Stage stage("Installed Qt font database enumeration");
+        return QFontDatabase::families();
+    }();
     const QString system_pyidaungsu = matching_family_or_empty(system_families, kPyidaungsuFamily);
     if (!system_pyidaungsu.isEmpty()) {
         return UiFontResolution{

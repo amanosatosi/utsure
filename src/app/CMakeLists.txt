@@ -37,6 +37,8 @@ qt_add_executable(utsure_encoder_app WIN32
     queue_terminal_notification.cpp
     queue_terminal_notification.hpp
     resources/app_resources.qrc
+    startup_profile.cpp
+    startup_profile.hpp
     trim_timeline_widget.cpp
     trim_timeline_widget.hpp
     ui_font.cpp

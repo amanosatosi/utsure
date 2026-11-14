@@ -54,6 +54,7 @@ add_executable(utsure_app_ui_font_tests
     ui_font_tests.cpp
     "${CMAKE_SOURCE_DIR}/src/app/app_settings.cpp"
     "${CMAKE_SOURCE_DIR}/src/app/ui_font.cpp"
+    "${CMAKE_SOURCE_DIR}/src/app/startup_profile.cpp"
     "${CMAKE_SOURCE_DIR}/src/app/resources/app_resources.qrc"
 )
 

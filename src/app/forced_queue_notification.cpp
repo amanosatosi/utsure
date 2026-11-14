@@ -1,4 +1,5 @@
 #include "forced_queue_notification.hpp"
+#include "startup_profile.hpp"
 
 #include <QCloseEvent>
 #include <QDesktopServices>
@@ -242,14 +243,17 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
     button_row->addWidget(dismiss_button_, 1);
     root_layout->addLayout(button_row);
 
-    success_sound_ = new QSoundEffect(this);
-    success_sound_->setLoopCount(1);
-    success_sound_->setVolume(0.85F);
-    success_sound_->setSource(QUrl(QStringLiteral("qrc:/audio/\u6C7A\u5B9A\u30DC\u30BF\u30F3\u3092\u62BC\u305941.wav")));
-    failure_sound_ = new QSoundEffect(this);
-    failure_sound_->setLoopCount(1);
-    failure_sound_->setVolume(0.85F);
-    failure_sound_->setSource(QUrl(QStringLiteral("qrc:/audio/\u30D3\u30FC\u30D7\u97F34.wav")));
+    {
+        const utsure::app::startup::Stage stage("Qt Multimedia notification sounds and sources");
+        success_sound_ = new QSoundEffect(this);
+        success_sound_->setLoopCount(1);
+        success_sound_->setVolume(0.85F);
+        success_sound_->setSource(QUrl(QStringLiteral("qrc:/audio/\u6C7A\u5B9A\u30DC\u30BF\u30F3\u3092\u62BC\u305941.wav")));
+        failure_sound_ = new QSoundEffect(this);
+        failure_sound_->setLoopCount(1);
+        failure_sound_->setVolume(0.85F);
+        failure_sound_->setSource(QUrl(QStringLiteral("qrc:/audio/\u30D3\u30FC\u30D7\u97F34.wav")));
+    }
     visible_timer_ = new QTimer(this);
     visible_timer_->setSingleShot(true);
     fade_animation_ = new QPropertyAnimation(this, "windowOpacity", this);

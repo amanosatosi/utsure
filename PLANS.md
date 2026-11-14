@@ -55,6 +55,15 @@ This file is the living execution plan for the repository. Update it when a mile
 - [x] M52 Accurate, legible toolbar progress ring implemented; awaiting GitHub Actions visual/build verification.
 - [x] M53 Animated yellow progress arc correction implemented; awaiting GitHub Actions validation.
 - [x] M54 Set the displayed application version to Utsure v3.0 on master; awaiting GitHub Actions validation.
+- [ ] M55 Profile Windows portable startup and establish a baseline before changing runtime behavior.
+
+### M55 Profile Windows portable startup
+
+Status: In progress.
+
+* Trace process creation to main on Windows, startup stages through the first paint, and the subsequent event-loop turn.
+* Run repeated native launches of the extracted portable build in Windows CI and retain timings and host details.
+* Treat hosted-runner measurements as warm-launch evidence. Use reboot-controlled launches and WPR for cold-start and loader attribution.
 
 ### M54 Display Utsure v3.0
 

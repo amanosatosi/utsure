@@ -1,4 +1,5 @@
 #include "main_window.hpp"
+#include "startup_profile.hpp"
 
 #include "batch_import_planner.hpp"
 #include "encode_job_duplicate.hpp"
@@ -1027,9 +1028,12 @@ void set_log_text_preserving_user_scroll(QPlainTextEdit *log_view, const QString
 }  // namespace
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
+    namespace startup = utsure::app::startup;
+    startup::checkpoint("QMainWindow base construction");
     const auto settings_load_result = AppSettings::load_default_location();
     app_settings_ = settings_load_result.settings;
     app_settings_path_ = settings_load_result.config_path;
+    startup::checkpoint("Settings load in MainWindow");
 
     setWindowTitle(QString("Utsure v%1")
                        .arg(to_qstring(utsure::core::BuildInfo::project_version())));
@@ -1037,6 +1041,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
     setMinimumSize(960, 500);
     setAcceptDrops(true);
 
+    startup::checkpoint("MainWindow properties");
     setStyleSheet(R"(
 QWidget {
     background: #0b0b0e;
@@ -1435,8 +1440,11 @@ QLabel#PreviewTimeBadge {
 }
 )");
 
+    startup::checkpoint("MainWindow stylesheet assignment");
     preview_audio_controller_ = new PreviewAudioController(this);
+    startup::checkpoint("Preview audio controller");
     preview_renderer_controller_ = new PreviewFrameRendererController(this);
+    startup::checkpoint("Preview frame controller");
     busy_spinner_timer_ = new QTimer(this);
     busy_spinner_timer_->setInterval(90);
     preview_playback_timer_ = new QTimer(this);
@@ -1716,6 +1724,7 @@ QLabel#PreviewTimeBadge {
     profile_corner_layout->addWidget(profile_combo_);
     editor_tabs_->setCornerWidget(profile_corner, Qt::TopRightCorner);
 
+    startup::checkpoint("Window shell, toolbar, queue, and output widgets");
     auto *main_tab_content = new QWidget(editor_tabs_);
     auto *main_tab_layout = new QVBoxLayout(main_tab_content);
     main_tab_layout->setContentsMargins(8, 8, 8, 8);
@@ -1807,6 +1816,7 @@ QLabel#PreviewTimeBadge {
     main_tab_layout->addStretch(1);
     editor_tabs_->addTab(wrap_in_scroll_area(main_tab_content, editor_tabs_), "Main");
 
+    startup::checkpoint("Main tab");
     auto *encode_tab_content = new QWidget(editor_tabs_);
     auto *encode_tab_layout = new QVBoxLayout(encode_tab_content);
     encode_tab_layout->setContentsMargins(8, 8, 8, 8);
@@ -1885,6 +1895,7 @@ QLabel#PreviewTimeBadge {
     encode_tab_layout->addStretch(1);
     editor_tabs_->addTab(wrap_in_scroll_area(encode_tab_content, editor_tabs_), "Encode");
 
+    startup::checkpoint("Encode tab");
     auto *special_tab_content = new QWidget(editor_tabs_);
     auto *special_tab_layout = new QVBoxLayout(special_tab_content);
     special_tab_layout->setContentsMargins(8, 8, 8, 8);
@@ -1936,6 +1947,7 @@ QLabel#PreviewTimeBadge {
     logs_tab_layout->addWidget(session_log_view_);
     editor_tabs_->addTab(logs_tab_, "Logs");
 
+    startup::checkpoint("Special and Logs tabs");
     auto *right_tabs = new QTabWidget(content_splitter);
     right_tabs->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto *preview_corner_widget = new QWidget(right_tabs);
@@ -2104,7 +2116,9 @@ QLabel#PreviewTimeBadge {
         apply_native_caption_accent(this);
     });
 
+    startup::checkpoint("Preview and Task Log tabs, layout, and drop overlay");
     ensure_runner_slot_count(1);
+    startup::checkpoint("Encode runner slot initialization");
     connect(
         preview_renderer_controller_,
         &PreviewFrameRendererController::preview_loading,
@@ -2271,6 +2285,7 @@ QLabel#PreviewTimeBadge {
     connect(jump_out_button_, &QPushButton::clicked, this, &MainWindow::jump_selected_job_to_out);
     connect(trim_timeline_widget_, &TrimTimelineWidget::seek_requested, this, &MainWindow::handle_timeline_seek);
 
+    startup::checkpoint("MainWindow signal connections");
     forced_queue_notification_ = new utsure::app::ForcedQueueNotification(this);
     forced_queue_notification_->set_open_logs_handler([this]() {
         if (!shutting_down_ && editor_tabs_ != nullptr && logs_tab_ != nullptr) {
@@ -2283,6 +2298,7 @@ QLabel#PreviewTimeBadge {
         }
     });
 
+    startup::checkpoint("Notification setup");
     append_session_log("[info] Window ready.");
     append_session_log(QString("[info] Settings file: %1").arg(QDir::toNativeSeparators(app_settings_path_)));
     if (!settings_load_result.warning.trimmed().isEmpty()) {
@@ -2290,6 +2306,7 @@ QLabel#PreviewTimeBadge {
     }
     refresh_profile_combo();
     refresh_all_views();
+    startup::checkpoint("Initial view refresh");
 }
 
 MainWindow::~MainWindow() {

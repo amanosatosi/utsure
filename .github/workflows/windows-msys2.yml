@@ -117,6 +117,17 @@ jobs:
       - name: Package portable bundle
         run: ./scripts/ci/windows-msys2-package-portable.sh
 
+      - name: Profile native portable startup
+        shell: pwsh
+        run: ./scripts/ci/windows-profile-startup.ps1 -PortableDirectory "artifacts/portable-validation/$env:UTSURE_PORTABLE_BUNDLE_NAME"
+
+      - name: Upload startup profile
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-startup-profile
+          path: artifacts/startup-profile/
+
       - name: Package debug symbols
         run: bash ./scripts/ci/windows-msys2-package-symbols.sh
 
