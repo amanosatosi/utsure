@@ -142,7 +142,20 @@ verify_mangetsu_dll() {
 
   # Package provenance, not a source pin: every build consumes the live branch.
   local revision_file="${third_party_root}/libassmod/resolved-commit.txt"
-  if [[ ! -s "${revision_file}" ]] || ! grep -Eq '^[0-9a-f]{40}
+  if [[ ! -s "${revision_file}" ]]; then
+    echo "Mangetsu revision manifest missing from current build." >&2
+    exit 1
+  fi
+  local revision_sha
+  revision_sha="$(cat "${revision_file}")"
+  if [[ ${#revision_sha} -ne 40 ]] || [[ "${revision_sha}" =~ [^0-9a-f] ]]; then
+    echo "Invalid Mangetsu revision SHA from current build." >&2
+    exit 1
+  fi
+  cp "${revision_file}" "${bundle_dir}/mangetsu-commit.txt"
+}
+
+write_bundle_manifest() {
   {
     (
       cd "${bundle_dir}"
