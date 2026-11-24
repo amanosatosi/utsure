@@ -1201,40 +1201,40 @@ std::vector<CrashArtifactPaths> find_recent_crash_artifacts(
     const std::filesystem::path &directory,
     const std::size_t max_count
 ) {
-    std::vector<CrashArtifactPaths> artifacts{};
+    std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> dumps;
     std::error_code error{};
-    if (!std::filesystem::exists(directory, error)) {
-        return artifacts;
+    if (max_count == 0) {
+        return {};
     }
 
-    for (const auto &entry : std::filesystem::directory_iterator(directory, error)) {
-        if (error || !entry.is_regular_file(error)) {
+    for (std::filesystem::directory_iterator entry(directory, error), end;
+         !error && entry != end;
+         entry.increment(error)) {
+        const auto &path = entry->path();
+        std::error_code file_error;
+        if (path.extension() != ".dmp" || !entry->is_regular_file(file_error)) {
             continue;
         }
-        const auto path = entry.path();
-        if (path.extension() != ".dmp") {
-            continue;
-        }
-        const auto stem = path.stem().string();
+        const auto modified = entry->last_write_time(file_error);
+        dumps.emplace_back(file_error ? std::filesystem::file_time_type::min() : modified, path);
+    }
+
+    const auto count = std::min(dumps.size(), max_count);
+    std::partial_sort(dumps.begin(), dumps.begin() + static_cast<std::ptrdiff_t>(count), dumps.end(),
+                      [](const auto &left, const auto &right) { return left.first > right.first; });
+    std::vector<CrashArtifactPaths> artifacts;
+    artifacts.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        auto &path = dumps[index].second;
+        auto sidecar = path;
+        sidecar.replace_extension(".json");
+        auto log = path;
+        log.replace_extension(".log.txt");
         artifacts.push_back(CrashArtifactPaths{
-            .dump_path = path,
-            .sidecar_path = directory / (stem + ".json"),
-            .log_path = directory / (stem + ".log.txt")
+            .dump_path = std::move(path),
+            .sidecar_path = std::move(sidecar),
+            .log_path = std::move(log)
         });
-    }
-
-    std::sort(
-        artifacts.begin(),
-        artifacts.end(),
-        [](const CrashArtifactPaths &left, const CrashArtifactPaths &right) {
-            std::error_code left_error{};
-            std::error_code right_error{};
-            return std::filesystem::last_write_time(left.dump_path, left_error) >
-                std::filesystem::last_write_time(right.dump_path, right_error);
-        }
-    );
-    if (artifacts.size() > max_count) {
-        artifacts.resize(max_count);
     }
     return artifacts;
 }

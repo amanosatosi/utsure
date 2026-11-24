@@ -51,6 +51,9 @@ class TrimTimelineWidget;
 namespace utsure::app {
 class ForcedQueueNotification;
 }
+namespace utsure::core::media {
+struct MediaInspectionResult;
+}
 
 class MainWindow final : public QMainWindow {
 public:
@@ -133,7 +136,10 @@ public:
     };
 
 private:
-    void build_secondary_editor_tabs();
+    void build_encode_tab();
+    void build_special_tab();
+    struct PreparedImport;
+    void append_imported_jobs(PreparedImport result);
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dragMoveEvent(QDragMoveEvent *event) override;
     void dragLeaveEvent(QDragLeaveEvent *event) override;
@@ -177,7 +183,6 @@ private:
     [[nodiscard]] QString format_job_state_display_text(const UiEncodeJob &job) const;
     [[nodiscard]] bool job_is_terminal(const UiEncodeJob &job) const;
     [[nodiscard]] bool job_has_minimum_required_fields(const UiEncodeJob &job) const;
-    [[nodiscard]] QString current_audio_quality_label() const;
     [[nodiscard]] bool is_valid_job_index(int index) const;
     [[nodiscard]] bool can_accept_source_drop(const QMimeData *mime_data) const;
     [[nodiscard]] bool any_runner_slot_running() const;
@@ -242,13 +247,13 @@ private:
 
     void sync_selected_job_from_editor();
     void load_selected_job_into_editor();
-    void select_job(int index);
+    void select_job(int index, utsure::core::media::MediaInspectionResult *inspection = nullptr);
     void apply_last_used_settings_to_job(UiEncodeJob &job) const;
     void persist_last_used_encode_choices_from_job(const UiEncodeJob &job);
     void persist_intro_outro_settings_from_editor();
     void persist_app_settings_warning(const QString &context, const QString &detail);
     void ensure_runner_slot_count(int slot_count);
-    void ensure_job_inspection(int job_index);
+    void ensure_job_inspection(int job_index, utsure::core::media::MediaInspectionResult *inspection = nullptr);
     void reset_job_for_rerun(UiEncodeJob &job);
     void refresh_queue_order_indices();
     void recompute_automatic_output_paths_for_queue();
@@ -349,6 +354,7 @@ private:
     std::size_t queue_quarantine_baseline_{0};
     bool queue_run_active_{false};
     bool queue_start_planning_active_{false};
+    bool import_in_progress_{false};
     bool stop_requested_{false};
     bool queue_stop_due_to_failure_{false};
     bool shutting_down_{false};

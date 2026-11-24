@@ -1,5 +1,26 @@
 # Windows portable startup profiling
 
+## Run on a Windows desktop
+
+Download the `utsure-windows-startup-benchmark` artifact from the Windows Actions comparison run and extract it to a local drive. Both folders contain standalone portable apps built on the same runner using RelWithDebInfo and the same dependency prefixes. Run the launcher from the extracted folder to compare both builds. It shows progress and creates a timestamped `Utsure-startup-*` folder with CSV samples, per-launch stage logs, hardware details, and loaded module names.
+
+```powershell
+.\Run-UtsureBenchmark.cmd
+.\Run-UtsureBenchmark.cmd -VideoOrFolder .\fixtures -ExpectedJobs 12 -SettingsFile .\benchmark-settings.json
+.\Run-UtsureBenchmark.cmd -VideoOrFolder 'D:\Media\Episode 01.mkv' -SettingsFile "$env:LOCALAPPDATA\utsure\settings.json"
+```
+
+The harness copies supplied settings before launch. Each import uses the ordinary add-source path and times from the import request through queue population and first-source inspection. Utsure keeps its queue in memory. The folder fixture measures initial population of twelve jobs with existing settings.
+
+For cold samples, extract the packages before reboot, alternate variants across reboots, and run one variant per reboot with a consistent delay after sign-in. Leave antivirus in its normal configuration. Launch the script before opening either app folder in Explorer. The `-Cold` flag labels the operator-reported first launch after reboot and records one sample.
+
+```powershell
+.\Run-UtsureBenchmark.cmd -Cold -Variant baseline
+.\Run-UtsureBenchmark.cmd -Cold -Variant optimized
+```
+
+For investigation with Windows Performance Recorder, use `-Trace -Launches 1 -Variant optimized` from an elevated terminal. Open the resulting `startup.etl` in Windows Performance Analyzer and filter process lifetime, image loads, hard faults, CPU scheduling, and file I/O around `utsure.exe`. Correlate antivirus processes and file activity with the pre-main interval before attributing a slow launch to DLL loading or scanning. Capture traced samples separately to keep tracing overhead out of the comparison. [WPR command-line options](https://learn.microsoft.com/en-us/windows-hardware/test/wpt/wpr-command-line-options)
+
 ## Results
 
 [Windows CI run 43616220926](https://github.com/amanosatosi/utsure/actions/runs/43616220926) compared portable commits `a24d069` and `b873b6f` on the same Azure runner. The host ran Windows Server 2025 Datacenter 10.0.26100 with four AMD EPYC 9V74 logical CPUs and 16 GiB RAM. Both packages used MSYS2 UCRT64, x64 RelWithDebInfo, Qt 6.12.0, and the native Windows platform plugin. The Qt6Core file hashes differed despite the matching version. The packages ran in sequence with ten warm samples each.

@@ -53,22 +53,40 @@ target_link_libraries(utsure_encoder_app
     PRIVATE
         Qt6::Multimedia
         Qt6::Widgets
-        Qt6::Svg
         utsure::encoder_core
 )
 
+add_executable(utsure_svg_to_ico EXCLUDE_FROM_ALL tools/svg_to_ico.cpp)
+target_link_libraries(utsure_svg_to_ico PRIVATE Qt6::Gui Qt6::Svg)
+target_compile_features(utsure_svg_to_ico PRIVATE cxx_std_20)
+utsure_enable_warnings(utsure_svg_to_ico)
+
+set(icon_output_dir "${CMAKE_CURRENT_BINARY_DIR}/raster-icons")
+set(raster_icons "")
+foreach(icon IN ITEMS add remove settings info icon logo play stop browse frame-back frame-forward pause
+                      set-in set-out jump-in jump-out chevron-up chevron-down)
+    set(source_icon "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/${icon}.svg")
+    set(raster_icon "${icon_output_dir}/${icon}.png")
+    set(icon_size 64)
+    if(icon STREQUAL "icon")
+        set(icon_size 256)
+    elseif(icon STREQUAL "logo" OR icon STREQUAL "add")
+        set(icon_size 128)
+    endif()
+    add_custom_command(
+        OUTPUT "${raster_icon}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${icon_output_dir}"
+        COMMAND $<TARGET_FILE:utsure_svg_to_ico> --png "${icon_size}" "${source_icon}" "${raster_icon}"
+        DEPENDS utsure_svg_to_ico "${source_icon}"
+        VERBATIM
+    )
+    list(APPEND raster_icons "${raster_icon}")
+endforeach()
+qt_add_resources(utsure_encoder_app "app_icons"
+    PREFIX "/icons" BASE "${icon_output_dir}" FILES ${raster_icons}
+)
+
 if(WIN32)
-    add_executable(utsure_svg_to_ico EXCLUDE_FROM_ALL
-        tools/svg_to_ico.cpp
-    )
-
-    target_link_libraries(utsure_svg_to_ico
-        PRIVATE
-            Qt6::Gui
-            Qt6::Svg
-    )
-
-    target_compile_features(utsure_svg_to_ico PRIVATE cxx_std_20)
 
     set(utsure_windows_icon_svg "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/icon.svg")
     set(utsure_windows_icon_ico "${CMAKE_CURRENT_BINARY_DIR}/resources/utsure.ico")
@@ -100,7 +118,6 @@ if(WIN32)
     )
 
     target_link_libraries(utsure_encoder_app PRIVATE dbghelp dwmapi ole32 psapi)
-    utsure_enable_warnings(utsure_svg_to_ico)
 endif()
 
 target_compile_features(utsure_encoder_app PRIVATE cxx_std_20)

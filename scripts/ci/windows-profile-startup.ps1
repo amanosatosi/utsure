@@ -17,7 +17,8 @@ $report = (New-Item -ItemType Directory -Force -Path $ReportDirectory).FullName
 if ($Cold) { $Launches = 1 }
 $appArguments = '--startup-profile'
 if ($OpenPath) {
-    $resolvedSource = (Resolve-Path -LiteralPath $OpenPath).Path.TrimEnd('\')
+    $resolvedSource = (Resolve-Path -LiteralPath $OpenPath).Path
+    if ($resolvedSource.EndsWith('\')) { $resolvedSource += '.' }
     $appArguments += ' --startup-profile-open "' + $resolvedSource + '"'
 }
 $variables = @{

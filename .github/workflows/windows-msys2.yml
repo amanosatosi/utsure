@@ -4,6 +4,12 @@ on:
   push:
     branches:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      compare_startup:
+        description: Build both revisions and publish a portable comparison package
+        type: boolean
+        default: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -13,7 +19,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: utsure-windows-${{ github.workflow }}-${{ github.ref }}
+  group: utsure-windows-${{ github.workflow }}-${{ github.ref }}-${{ (inputs.compare_startup || contains(github.event.head_commit.message, '[startup-comparison]')) && github.sha || 'regular' }}
   cancel-in-progress: true
 
 jobs:
@@ -41,6 +47,7 @@ jobs:
       UTSURE_WINDOWS_MANGETSU_DLL: "1"
       UTSURE_LIBASSMOD_ALIGNED_ALLOCATION_DEBUG: "1"
       UTSURE_PORTABLE_BUNDLE_NAME: encoder-windows-x64-portable
+      UTSURE_STARTUP_BASELINE: c54141802f67844de0e7ded3682fbf7adb8585fa
 
     defaults:
       run:
@@ -123,15 +130,64 @@ jobs:
         run: ./scripts/ci/windows-msys2-package-portable.sh
 
       - name: Profile native portable startup
+        id: profile-startup
         shell: pwsh
         run: |
           $portable = "artifacts/portable-validation/$env:UTSURE_PORTABLE_BUNDLE_NAME"
           $fixture = 'build/tests/app/media/runner-lifecycle-main.mp4'
           $batch = (New-Item -ItemType Directory -Force artifacts/benchmark-fixtures).FullName
           1..12 | ForEach-Object { Copy-Item -LiteralPath $fixture (Join-Path $batch "Episode-$_.mp4") }
+          $settings = 'artifacts/benchmark-settings.json'
+          '{"version":1,"lastUsed":{"preset":"fast","crf":20},"uiFont":{"family":"Pyidaungsu","pointSize":11},"toshiMode":{"enabled":true}}' | Set-Content $settings
           ./scripts/ci/windows-profile-startup.ps1 -PortableDirectory $portable -ReportDirectory artifacts/startup-profile/empty -VerifyDiagnostics
-          ./scripts/ci/windows-profile-startup.ps1 -PortableDirectory $portable -ReportDirectory artifacts/startup-profile/single -OpenPath $fixture -Launches 6
-          ./scripts/ci/windows-profile-startup.ps1 -PortableDirectory $portable -ReportDirectory artifacts/startup-profile/batch -OpenPath $batch -ExpectedJobs 12 -Launches 6
+          ./scripts/ci/windows-profile-startup.ps1 -PortableDirectory $portable -ReportDirectory artifacts/startup-profile/single -OpenPath $fixture -SettingsFile $settings -Launches 6
+          ./scripts/ci/windows-profile-startup.ps1 -PortableDirectory $portable -ReportDirectory artifacts/startup-profile/batch -OpenPath $batch -SettingsFile $settings -ExpectedJobs 12 -Launches 6
+
+      - name: Build and package startup baseline with the same toolchain
+        if: inputs.compare_startup || (github.event_name == 'push' && contains(github.event.head_commit.message, '[startup-comparison]'))
+        id: build-startup-baseline
+        run: |
+          mkdir -p artifacts/baseline-source/scripts/ci
+          git fetch --depth=1 origin "${UTSURE_STARTUP_BASELINE}"
+          git archive "${UTSURE_STARTUP_BASELINE}" | tar -x -C artifacts/baseline-source
+          cp scripts/ci/windows-msys2-build.sh artifacts/baseline-source/scripts/ci/
+          export UTSURE_THIRD_PARTY_ROOT="$PWD/.deps"
+          export UTSURE_ARTIFACT_ROOT="$PWD/artifacts/baseline-package"
+          cd artifacts/baseline-source
+          UTSURE_BUILD_APP_ONLY=ON ./scripts/ci/windows-msys2-build.sh
+          ./scripts/ci/windows-msys2-package-portable.sh
+
+      - name: Profile baseline on the same runner
+        if: steps.build-startup-baseline.outcome == 'success'
+        shell: pwsh
+        run: |
+          $portable = "artifacts/baseline-package/portable-validation/$env:UTSURE_PORTABLE_BUNDLE_NAME"
+          $settings = 'artifacts/benchmark-settings.json'
+          $fixture = 'build/tests/app/media/runner-lifecycle-main.mp4'
+          ./scripts/ci/windows-profile-startup.ps1 -PortableDirectory $portable -ReportDirectory artifacts/startup-profile/baseline/empty -Commit $env:UTSURE_STARTUP_BASELINE
+          ./scripts/ci/windows-profile-startup.ps1 -PortableDirectory $portable -ReportDirectory artifacts/startup-profile/baseline/single -Commit $env:UTSURE_STARTUP_BASELINE -OpenPath $fixture -SettingsFile $settings -Launches 6
+          ./scripts/ci/windows-profile-startup.ps1 -PortableDirectory $portable -ReportDirectory artifacts/startup-profile/baseline/batch -Commit $env:UTSURE_STARTUP_BASELINE -OpenPath artifacts/benchmark-fixtures -SettingsFile $settings -ExpectedJobs 12 -Launches 6
+
+      - name: Assemble portable benchmark package
+        if: steps.build-startup-baseline.outcome == 'success'
+        shell: pwsh
+        run: |
+          $package = (New-Item -ItemType Directory -Force artifacts/startup-benchmark).FullName
+          $bundle = $env:UTSURE_PORTABLE_BUNDLE_NAME
+          Copy-Item -Recurse "artifacts/baseline-package/portable-validation/$bundle" "$package/baseline"
+          Copy-Item -Recurse "artifacts/portable-validation/$bundle" "$package/optimized"
+          $env:UTSURE_STARTUP_BASELINE | Set-Content "$package/baseline/benchmark-commit.txt"
+          $env:GITHUB_SHA | Set-Content "$package/optimized/benchmark-commit.txt"
+          Copy-Item scripts/ci/Run-UtsureBenchmark.cmd,scripts/ci/Run-UtsureBenchmark.ps1,scripts/ci/windows-profile-startup.ps1,docs/dev/windows-startup.md,artifacts/benchmark-settings.json $package
+          Copy-Item -Recurse artifacts/benchmark-fixtures "$package/fixtures"
+
+      - name: Upload portable benchmark package
+        if: steps.build-startup-baseline.outcome == 'success'
+        uses: actions/upload-artifact@v6
+        with:
+          name: utsure-windows-startup-benchmark
+          path: artifacts/startup-benchmark/
+          if-no-files-found: error
 
       - name: Upload startup profile
         if: always()

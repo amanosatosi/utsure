@@ -8,7 +8,11 @@ This file is the living execution plan for the repository. Update it when a mile
 
 ### M57 Desktop startup and first import
 
-Status: In progress on master. Extend profiling through the first idle event dispatch, capture UI timer lateness and process resources, and measure the ordinary video import path with single-file and batch fixtures. Establish an instrumented baseline before changing runtime behavior.
+Status: Instrumented baseline `c541418` is running in Windows CI. The implementation phase targets the earlier profile's UI construction and first paint costs and the synchronous work in the first-import path. Compare both packages with the same compiler and dependencies in one Windows run.
+
+* Keep the Main tab visible at launch. Construct log editors on first visit and leave background work off the GUI thread.
+* Prepare imports and probe the first source off-thread. Apply the completed queue update on the GUI thread and keep edits to existing jobs responsive.
+* Record timing, CPU, memory, event-loop timer lateness, and populated-queue import on Windows. Include the two portable builds and the benchmark launcher in a GitHub Actions artifact.
 
 - [x] M0 Repository inspection completed.
 - [x] M1 Repo scaffolding docs completed.

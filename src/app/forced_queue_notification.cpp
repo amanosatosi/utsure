@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QEasingCurve>
 #include <QFile>
+#include <QIcon>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -19,7 +20,6 @@
 #include <QScreen>
 #include <QShowEvent>
 #include <QSoundEffect>
-#include <QSvgRenderer>
 #include <QTimer>
 #include <QToolButton>
 #include <QUrl>
@@ -63,21 +63,6 @@ QString sound_status_name(const QSoundEffect::Status status) {
         return "Error";
     }
     return "Unknown";
-}
-
-QPixmap render_svg_pixmap(const QString &resource_path, const QSize &logical_size) {
-    QSvgRenderer renderer(resource_path);
-    if (!renderer.isValid()) {
-        return {};
-    }
-
-    constexpr qreal kDevicePixelRatio = 2.0;
-    QPixmap pixmap(logical_size * kDevicePixelRatio);
-    pixmap.setDevicePixelRatio(kDevicePixelRatio);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    renderer.render(&painter, QRectF(QPointF(0.0, 0.0), QSizeF(logical_size)));
-    return pixmap;
 }
 
 class StatusIconWidget final : public QWidget {
@@ -150,7 +135,7 @@ ForcedQueueNotification::ForcedQueueNotification(QWidget *owner_window)
     header_layout->setSpacing(7);
     auto *logo_label = new QLabel(header);
     logo_label->setFixedSize(30, 30);
-    logo_label->setPixmap(render_svg_pixmap(":/icons/logo.svg", logo_label->size()));
+    logo_label->setPixmap(QIcon(":/icons/logo.png").pixmap(logo_label->size(), logo_label->devicePixelRatioF()));
     logo_label->setScaledContents(false);
     logo_label->setAlignment(Qt::AlignCenter);
     auto *brand_label = new QLabel("UTSURE", header);

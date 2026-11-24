@@ -127,6 +127,24 @@ bool write_ico_file(
 }  // namespace
 
 int main(int argc, char *argv[]) {
+    if (argc == 5 && QByteArray(argv[1]) == "--png") {
+        bool valid_size = false;
+        const int size = QByteArray(argv[2]).toInt(&valid_size);
+        QByteArray bytes;
+        QString error_message;
+        if (!valid_size || size <= 0 || size > 1024 ||
+            !render_svg_to_png(QString::fromLocal8Bit(argv[3]), size, bytes, error_message)) {
+            std::fprintf(stderr, "Icon rendering failed: %s\n", error_message.toLocal8Bit().constData());
+            return 1;
+        }
+        QFile output(QString::fromLocal8Bit(argv[4]));
+        if (!output.open(QIODevice::WriteOnly) || output.write(bytes) != bytes.size()) {
+            std::fprintf(stderr, "PNG write failed: %s\n", output.errorString().toLocal8Bit().constData());
+            return 1;
+        }
+        return 0;
+    }
+
     if (argc != 3) {
         std::fprintf(stderr, "usage: svg_to_ico <input.svg> <output.ico>\n");
         return 1;

@@ -1,24 +1,4 @@
 <RCC>
-  <qresource prefix="/icons">
-    <file alias="add.svg">icons/add.svg</file>
-    <file alias="remove.svg">icons/remove.svg</file>
-    <file alias="settings.svg">icons/settings.svg</file>
-    <file alias="info.svg">icons/info.svg</file>
-    <file alias="icon.svg">icons/icon.svg</file>
-    <file alias="logo.svg">icons/logo.svg</file>
-    <file alias="play.svg">icons/play.svg</file>
-    <file alias="stop.svg">icons/stop.svg</file>
-    <file alias="browse.svg">icons/browse.svg</file>
-    <file alias="frame-back.svg">icons/frame-back.svg</file>
-    <file alias="frame-forward.svg">icons/frame-forward.svg</file>
-    <file alias="pause.svg">icons/pause.svg</file>
-    <file alias="set-in.svg">icons/set-in.svg</file>
-    <file alias="set-out.svg">icons/set-out.svg</file>
-    <file alias="jump-in.svg">icons/jump-in.svg</file>
-    <file alias="jump-out.svg">icons/jump-out.svg</file>
-    <file alias="chevron-up.svg">icons/chevron-up.svg</file>
-    <file alias="chevron-down.svg">icons/chevron-down.svg</file>
-  </qresource>
   <qresource prefix="/fonts">
     <file alias="Pyidaungsu-2.5.3_Regular.ttf">fonts/Pyidaungsu-2.5.3_Regular.ttf</file>
     <file alias="Pyidaungsu-2.5.3_Bold.ttf">fonts/Pyidaungsu-2.5.3_Bold.ttf</file>

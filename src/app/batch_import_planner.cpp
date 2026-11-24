@@ -227,7 +227,7 @@ BatchImportOrderInfo BatchImportPlanner::detect_order_info(const std::filesystem
     const std::string stem = normalize_stem_text(path_component_to_string(path.stem()));
     BatchImportOrderInfo result{};
 
-    const std::vector<std::regex> season_episode_patterns{
+    static const std::vector<std::regex> season_episode_patterns{
         std::regex(R"(\bs\s*0*([0-9]{1,2})\s*e\s*0*([0-9]{1,4})\b)", std::regex_constants::icase),
         std::regex(R"(\b([0-9]{1,2})\s*x\s*0*([0-9]{1,4})\b)", std::regex_constants::icase)
     };
@@ -241,7 +241,7 @@ BatchImportOrderInfo BatchImportPlanner::detect_order_info(const std::filesystem
     }
 
     if (!result.episode_number.has_value()) {
-        const std::vector<std::regex> episode_patterns{
+        static const std::vector<std::regex> episode_patterns{
             std::regex(R"(\bep(?:isode)?\s*0*([0-9]{1,4})\b)", std::regex_constants::icase),
             std::regex(R"(\b-\s*0*([0-9]{1,4})(?:\s|$|v[0-9]+\b))", std::regex_constants::icase),
             std::regex(R"(\b0*([0-9]{1,4})v[0-9]+\b)", std::regex_constants::icase)
@@ -256,7 +256,7 @@ BatchImportOrderInfo BatchImportPlanner::detect_order_info(const std::filesystem
     }
 
     if (!result.episode_number.has_value()) {
-        std::regex token_pattern(R"(\b([0-9]{1,4})\b)");
+        static const std::regex token_pattern(R"(\b([0-9]{1,4})\b)");
         for (std::sregex_iterator iterator(stem.begin(), stem.end(), token_pattern), end; iterator != end; ++iterator) {
             const auto begin = static_cast<std::size_t>(iterator->position(1));
             const auto token = (*iterator)[1].str();
@@ -272,12 +272,10 @@ BatchImportOrderInfo BatchImportPlanner::detect_order_info(const std::filesystem
         }
     }
 
+    static const std::regex version_pattern(R"((?:\b[0-9]{1,4}\s*)?v\s*([0-9]+)\b)",
+                                            std::regex_constants::icase);
     std::smatch version_match{};
-    if (std::regex_search(
-            stem,
-            version_match,
-            std::regex(R"((?:\b[0-9]{1,4}\s*)?v\s*([0-9]+)\b)", std::regex_constants::icase)
-        )) {
+    if (std::regex_search(stem, version_match, version_pattern)) {
         result.version_number = parse_int_token(version_match[1].str());
     }
 

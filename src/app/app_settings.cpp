@@ -448,8 +448,6 @@ AppSettings::LoadResult AppSettings::load(const QString &config_path) {
     };
 
     QFileInfo info(config_path);
-    QDir().mkpath(info.absolutePath());
-
     if (!info.exists()) {
         QString save_error;
         if (!result.settings.save(config_path, &save_error)) {
@@ -481,7 +479,7 @@ AppSettings::LoadResult AppSettings::load(const QString &config_path) {
         return result;
     }
 
-    const auto fallback = defaults();
+    const auto &fallback = result.settings;
     const QJsonObject root = document.object();
     result.settings.version = root.value("version").toInt(kCurrentVersion);
     result.settings.last_used = encode_choices_from_json(root.value("lastUsed").toObject(), fallback.last_used);
