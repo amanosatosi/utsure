@@ -116,7 +116,7 @@ private:
         timer->setTimerType(Qt::PreciseTimer);
         constexpr auto interval = std::chrono::milliseconds(10);
         connect(timer, &QTimer::timeout, this,
-                [this, previous = Clock::now(), started = Clock::now(), maximum = 0.0]() mutable {
+                [this, interval, previous = Clock::now(), started = Clock::now(), maximum = 0.0]() mutable {
             const auto now = Clock::now();
             maximum = std::max(maximum, milliseconds(now - previous - interval));
             previous = now;

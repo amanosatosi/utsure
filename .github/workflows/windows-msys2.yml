@@ -151,6 +151,7 @@ jobs:
           git fetch --depth=1 origin "${UTSURE_STARTUP_BASELINE}"
           git archive "${UTSURE_STARTUP_BASELINE}" | tar -x -C artifacts/baseline-source
           cp scripts/ci/windows-msys2-build.sh artifacts/baseline-source/scripts/ci/
+          cp src/app/startup_profile.cpp src/app/startup_profile.hpp artifacts/baseline-source/src/app/
           export UTSURE_THIRD_PARTY_ROOT="$PWD/.deps"
           export UTSURE_ARTIFACT_ROOT="$PWD/artifacts/baseline-package"
           cd artifacts/baseline-source
