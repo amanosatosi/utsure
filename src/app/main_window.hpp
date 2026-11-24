@@ -58,6 +58,7 @@ public:
     ~MainWindow() override;
 
     [[nodiscard]] QString window_structure_summary() const;
+    void add_source_jobs_from_paths(const QStringList &paths);
     enum class UiJobState : std::uint8_t {
         queued = 0,
         starting,
@@ -191,7 +192,6 @@ private:
     [[nodiscard]] std::optional<double> current_taskbar_progress_fraction() const;
 
     void add_source_jobs();
-    void add_source_jobs_from_paths(const QStringList &paths);
     void remove_selected_job();
     void move_selected_jobs(int direction);
     void sort_queue_by_detected_order();

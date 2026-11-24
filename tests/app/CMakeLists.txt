@@ -72,6 +72,9 @@ target_link_libraries(utsure_app_ui_font_tests
 )
 
 target_compile_features(utsure_app_ui_font_tests PRIVATE cxx_std_20)
+if(WIN32)
+    target_link_libraries(utsure_app_ui_font_tests PRIVATE psapi)
+endif()
 
 utsure_enable_warnings(utsure_app_ui_font_tests)
 

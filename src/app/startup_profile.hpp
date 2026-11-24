@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
 
 class QWidget;
 
@@ -10,7 +11,9 @@ using Clock = std::chrono::steady_clock;
 
 void begin(int argc, char *argv[], Clock::time_point main_entry);
 void checkpoint(const char *label);
-void observe_first_paint(QWidget &window);
+void observe_first_paint(QWidget &window, std::function<void()> after_ready = {});
+void begin_import();
+void finish_import(int job_count);
 
 class Stage final {
 public:

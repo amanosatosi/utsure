@@ -6,11 +6,14 @@
 #include <QWidget>
 
 #include <array>
+#include <algorithm>
 #include <cstdio>
 #include <string_view>
+#include <utility>
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <psapi.h>
 #endif
 
 namespace utsure::app::startup {
@@ -32,6 +35,8 @@ struct Profile {
 
 Profile storage;
 Profile *active_profile{nullptr};
+bool profiling{false};
+Clock::time_point import_started{};
 
 double milliseconds(Clock::duration duration) {
     return std::chrono::duration<double, std::milli>(duration).count();
@@ -58,9 +63,32 @@ void report() {
     active_profile = nullptr;
 }
 
+void report_process_resources() {
+#if defined(_WIN32)
+    const HANDLE process = GetCurrentProcess();
+    FILETIME creation{}, exit{}, kernel{}, user{};
+    if (GetProcessTimes(process, &creation, &exit, &kernel, &user)) {
+        const auto ticks = [](FILETIME time) {
+            return (static_cast<unsigned long long>(time.dwHighDateTime) << 32) | time.dwLowDateTime;
+        };
+        std::fprintf(stderr, "[startup] Ready CPU (ms): %.3f\n",
+                     static_cast<double>(ticks(kernel) + ticks(user)) / 10000.0);
+    }
+    PROCESS_MEMORY_COUNTERS_EX memory{};
+    memory.cb = sizeof(memory);
+    if (GetProcessMemoryInfo(process, reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&memory), sizeof(memory))) {
+        std::fprintf(stderr, "[startup] Ready working set (bytes): %llu\n",
+                     static_cast<unsigned long long>(memory.WorkingSetSize));
+        std::fprintf(stderr, "[startup] Ready private memory (bytes): %llu\n",
+                     static_cast<unsigned long long>(memory.PrivateUsage));
+    }
+#endif
+}
+
 class FirstPaintObserver final : public QObject {
 public:
-    explicit FirstPaintObserver(QWidget &window) : QObject(&window) {
+    FirstPaintObserver(QWidget &window, std::function<void()> after_ready)
+        : QObject(&window), after_ready_(std::move(after_ready)) {
         window.installEventFilter(this);
     }
 
@@ -69,13 +97,35 @@ private:
         if (event->type() == QEvent::Paint) {
             window->removeEventFilter(this);
             checkpoint("First window paint event");
-            QTimer::singleShot(0, window, [] {
+            QTimer::singleShot(0, this, [this] {
                 checkpoint("Event loop turn after first paint");
+                report_process_resources();
                 report();
+                monitor_event_loop();
+                if (after_ready_) {
+                    after_ready_();
+                }
             });
-            deleteLater();
         }
         return false;
+    }
+    std::function<void()> after_ready_;
+
+    void monitor_event_loop() {
+        auto *timer = new QTimer(this);
+        timer->setTimerType(Qt::PreciseTimer);
+        constexpr auto interval = std::chrono::milliseconds(10);
+        connect(timer, &QTimer::timeout, this,
+                [this, previous = Clock::now(), started = Clock::now(), maximum = 0.0]() mutable {
+            const auto now = Clock::now();
+            maximum = std::max(maximum, milliseconds(now - previous - interval));
+            previous = now;
+            if (now - started >= std::chrono::seconds(1)) {
+                std::fprintf(stderr, "[startup] Maximum UI timer lateness (ms): %.3f\n", maximum);
+                deleteLater();
+            }
+        });
+        timer->start(interval);
     }
 };
 
@@ -98,6 +148,7 @@ void begin(int argc, char *argv[], Clock::time_point main_entry) {
     }
 
     storage.main_entry = main_entry;
+    profiling = true;
     storage.previous_checkpoint = main_entry;
     active_profile = &storage;
 #if defined(_WIN32)
@@ -125,10 +176,25 @@ void checkpoint(const char *label) {
     }
 }
 
-void observe_first_paint(QWidget &window) {
+void observe_first_paint(QWidget &window, std::function<void()> after_ready) {
     if (active_profile != nullptr) {
-        new FirstPaintObserver(window);
+        new FirstPaintObserver(window, std::move(after_ready));
     }
+}
+
+void begin_import() {
+    if (profiling) {
+        import_started = Clock::now();
+    }
+}
+
+void finish_import(int job_count) {
+    if (import_started == Clock::time_point{}) {
+        return;
+    }
+    std::fprintf(stderr, "[startup] Video import (ms): %.3f (%d jobs)\n",
+                 milliseconds(Clock::now() - import_started), job_count);
+    import_started = {};
 }
 
 Stage::Stage(const char *label)

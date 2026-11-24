@@ -2911,6 +2911,7 @@ void MainWindow::add_source_jobs_from_paths(const QStringList &paths) {
         return;
     }
 
+    utsure::app::startup::begin_import();
     std::vector<std::filesystem::path> import_paths{};
     import_paths.reserve(static_cast<std::size_t>(paths.size()));
     for (const QString &path : paths) {
@@ -2920,6 +2921,7 @@ void MainWindow::add_source_jobs_from_paths(const QStringList &paths) {
     }
     const auto import_plan = BatchImportPlanner::plan(import_paths);
     if (import_plan.jobs.empty()) {
+        utsure::app::startup::finish_import(0);
         append_session_log("[warning] No supported video files were found in the import selection.");
         return;
     }
@@ -2973,6 +2975,7 @@ void MainWindow::add_source_jobs_from_paths(const QStringList &paths) {
     }
     recompute_automatic_output_paths_for_queue();
     select_job(first_new_index);
+    utsure::app::startup::finish_import(static_cast<int>(import_plan.jobs.size()));
 }
 
 void MainWindow::remove_selected_job() {

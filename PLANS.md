@@ -4,6 +4,12 @@ This file is the living execution plan for the repository. Update it when a mile
 
 ## Current status
 
+- [ ] M57 Measure desktop startup and first import with a reproducible Windows portable benchmark.
+
+### M57 Desktop startup and first import
+
+Status: In progress on master. Extend profiling through the first idle event dispatch, capture UI timer lateness and process resources, and measure the ordinary video import path with single-file and batch fixtures. Establish an instrumented baseline before changing runtime behavior.
+
 - [x] M0 Repository inspection completed.
 - [x] M1 Repo scaffolding docs completed.
 - [x] M2 Project skeleton completed.

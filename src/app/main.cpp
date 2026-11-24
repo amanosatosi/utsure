@@ -130,6 +130,10 @@ int main(int argc, char *argv[]) {
     parser.addOption(dumpWindowStructureOption);
     parser.addOption(writeDiagnosticDumpOption);
     parser.addOption(QCommandLineOption("startup-profile", "Log startup stages through the first window paint."));
+    const QCommandLineOption profileImportOption(
+        "startup-profile-open", "Open a video or folder when the window is shown, for startup profiling.", "path"
+    );
+    parser.addOption(profileImportOption);
     parser.process(app);
     startup::checkpoint("Command line parsing");
 
@@ -157,7 +161,12 @@ int main(int argc, char *argv[]) {
 
     MainWindow mainWindow(std::move(settings_load_result));
     startup::checkpoint("MainWindow constructor return");
-    startup::observe_first_paint(mainWindow);
+    const auto profile_paths = parser.values(profileImportOption);
+    startup::observe_first_paint(mainWindow, [&mainWindow, profile_paths] {
+        if (!profile_paths.empty()) {
+            mainWindow.add_source_jobs_from_paths(profile_paths);
+        }
+    });
     mainWindow.show();
     startup::checkpoint("MainWindow show");
 
