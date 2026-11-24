@@ -23,6 +23,40 @@ For investigation with Windows Performance Recorder, use `-Trace -Launches 1 -Va
 
 ## Results
 
+### Desktop startup and first import
+
+[Windows CI run 45491979048](https://github.com/amanosatosi/utsure/actions/runs/45491979048) compared the pre-optimization source at `c541418` with `d72ecb6`, using the same timing code in both executables. Both packages were built in one job with MSYS2 UCRT64, Qt 6.12.0 and x64 RelWithDebInfo. The native Windows plugin ran on Windows Server 2025 Datacenter 10.0.26100 with four AMD EPYC 7763 logical CPUs and 16 GiB RAM. The [portable benchmark package](https://github.com/amanosatosi/utsure/actions/runs/45491979048/artifacts/14967428646) includes both builds and the [raw profile artifact](https://github.com/amanosatosi/utsure/actions/runs/45491979048/artifacts/14967548419) includes timing logs and samples.
+
+| Metric | Baseline | Optimized |
+| --- | ---: | ---: |
+| Warm process creation to readiness, median (10 launches) | 201.4 ms | 194.7 ms |
+| Warm readiness range | 189.9–218.2 ms | 185.9–214.8 ms |
+| Warm process creation to first Qt paint event, median | 180.2 ms | 173.2 ms |
+| Warm process creation to `main()`, median | 40.6 ms | 39.3 ms |
+| CPU time through readiness, median | 343.8 ms | 335.9 ms |
+| Working set at readiness, median | 59.3 MiB | 58.0 MiB |
+| Private memory at readiness, median | 60.2 MiB | 60.0 MiB |
+| Idle CPU over one second, one sample | 0 ms | 0 ms |
+| Single-video import, warm median (5 launches) | 18.2 ms | 9.5 ms |
+| Twelve-job import, warm median (5 launches) | 29.8 ms | 13.6 ms |
+| Maximum timer lateness, empty queue | 1.10 ms | 1.06 ms |
+| Maximum timer lateness, single-video import | 24.47 ms | 12.46 ms |
+| Maximum timer lateness, twelve-job import | 37.30 ms | 16.23 ms |
+| First launch, uncontrolled cache state | 206.7 ms | 281.4 ms |
+| Cold launch after reboot | Unmeasured | Unmeasured |
+
+Readiness is the first queued callback after a paint event on the main window. Timer lateness is the largest observed delay relative to a 10 ms timer over the next second. It includes OS scheduling and estimates event-loop stalls. The paint mark records Qt paint dispatch. Desktop composition and Explorer launch delays require their own trace. Each import starts at the readiness callback and exercises the ordinary source import path with a copy of non-default settings. The single-video and batch scenarios use valid audio-bearing inputs. Import timing covers a queue update and media inspection of the selected source. Preview rendering starts through its own on-demand path.
+
+* The median warm window appeared 7.0 ms earlier. Startup now shows Main with its job controls disabled until a job is selected. Encode, Special and both log panes materialize when visited. Initial view refresh dropped from 3.25 to 2.09 ms. `show()` still took 53.8 ms, up from 51.2 ms, and includes layout and polishing for the visible window.
+* First import scans paths and subtitle sidecars and probes the first video on a worker. The GUI applies the completed queue update in one pass. Reusing filename patterns and skipping unchanged encode-settings saves also reduce work. Single-file and batch import medians fell 48% and 54% respectively.
+* App icons rasterize at build time. `Qt6Svg.dll`, `qsvgicon.dll` and `qsvg.dll` left the idle module snapshot. Qt Multimedia, FFmpeg, FFMS2 and Mangetsu remain in the portable dependency chain. No hardware encoder enumeration, saved-queue restoration or preview renderer startup runs before user activity.
+* Settings load took 0.24 ms warm, font resolution and application took 15.7 ms, and `QApplication` took 20.5 ms. Early crash handling took 1.2 ms. Recent-dump scanning starts off-thread and reads each dump timestamp once. These timings cover local runner paths. A redirected profile, network sources or a directory subject to antivirus scanning can produce a different result.
+* The previous runner's 1,268 ms first launch included 818 ms before `main()`. The two first-launch samples in this run followed different build, extraction and smoke-test histories. The warm optimized build falls inside the 100–200 ms target in the median on this runner. Reboot-controlled client measurements and WPR traces remain necessary to establish the cold and lower-end desktop results and attribute the observed pre-main variability.
+
+All 132 CTest tests passed, including the nine slow regression cases. CI passed dependency audit, offscreen smoke tests from the build and both extracted portable bundles, 46 native launch-and-close cycles, and diagnostic dump and sidecar checks. The first baseline attempt failed to compile the profiling timer because its interval was missing from the lambda capture. The successful paired run uses the corrected profiler in both binaries.
+
+### Previous startup comparison
+
 [Windows CI run 43616220926](https://github.com/amanosatosi/utsure/actions/runs/43616220926) compared portable commits `a24d069` and `b873b6f` on the same Azure runner. The host ran Windows Server 2025 Datacenter 10.0.26100 with four AMD EPYC 9V74 logical CPUs and 16 GiB RAM. Both packages used MSYS2 UCRT64, x64 RelWithDebInfo, Qt 6.12.0, and the native Windows platform plugin. The Qt6Core file hashes differed despite the matching version. The packages ran in sequence with ten warm samples each.
 
 | Metric | Baseline | Optimized |

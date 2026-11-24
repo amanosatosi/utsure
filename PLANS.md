@@ -4,11 +4,11 @@ This file is the living execution plan for the repository. Update it when a mile
 
 ## Current status
 
-- [ ] M57 Measure desktop startup and first import with a reproducible Windows portable benchmark.
+- [x] M57 Optimize startup and first import and publish the paired Windows benchmark. Client cold and ETW measurements remain open.
 
 ### M57 Desktop startup and first import
 
-Status: Instrumented baseline `c541418` is running in Windows CI. The implementation phase targets the earlier profile's UI construction and first paint costs and the synchronous work in the first-import path. Compare both packages with the same compiler and dependencies in one Windows run.
+Status: Implemented on master and verified in Windows CI run 45491979048. All 132 tests passed. Warm startup fell from 201.4 to 194.7 ms, single-video import from 18.2 to 9.5 ms, and twelve-job import from 29.8 to 13.6 ms. The CI artifact contains both portable builds and the timestamped benchmark launcher. See [the startup report](docs/dev/windows-startup.md).
 
 * Keep the Main tab visible at launch. Construct log editors on first visit and leave background work off the GUI thread.
 * Prepare imports and probe the first source off-thread. Apply the completed queue update on the GUI thread and keep edits to existing jobs responsive.
