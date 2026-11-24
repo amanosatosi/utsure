@@ -5,8 +5,9 @@ param(
     [string]$Commit = $env:GITHUB_SHA,
     [string]$OpenPath,
     [int]$ExpectedJobs = 1,
-    [switch]$UseExistingSettings,
+    [string]$SettingsFile,
     [switch]$Cold,
+    [switch]$Trace,
     [switch]$VerifyDiagnostics
 )
 
@@ -27,9 +28,10 @@ $variables = @{
     UTSURE_CRASH_DUMP_DIR = (Join-Path $report 'crash-dumps')
     UTSURE_GIT_COMMIT = $Commit
     QT_FORCE_STDERR_LOGGING = '1'
+    UTSURE_STARTUP_PROFILE_SETTINGS = (Join-Path $report 'settings.json')
 }
-if (!$UseExistingSettings) {
-    $variables['LOCALAPPDATA'] = (New-Item -ItemType Directory -Force -Path (Join-Path $report 'settings')).FullName
+if ($SettingsFile) {
+    Copy-Item -LiteralPath $SettingsFile -Destination $variables['UTSURE_STARTUP_PROFILE_SETTINGS']
 }
 $previous = @{}
 foreach ($name in $variables.Keys) {
@@ -37,6 +39,7 @@ foreach ($name in $variables.Keys) {
     [Environment]::SetEnvironmentVariable($name, $variables[$name])
 }
 
+$recording = $false
 try {
     $os = Get-CimInstance Win32_OperatingSystem
     $machine = Get-CimInstance Win32_ComputerSystem
@@ -52,7 +55,14 @@ try {
         Build = $env:UTSURE_CMAKE_BUILD_TYPE
         PlatformPlugin = 'windows'
         CacheMethod = $(if ($Cold) { 'Operator-reported first launch after reboot' } else { 'Sequential launches' })
-        Settings = $(if ($UseExistingSettings) { 'Existing user profile' } else { 'Isolated profile' })
+        Settings = $(if ($SettingsFile) { 'Copy of supplied settings' } else { 'Isolated defaults' })
+        Trace = [bool]$Trace
+    }
+
+    if ($Trace) {
+        & "$env:SystemRoot\System32\wpr.exe" -start GeneralProfile -filemode
+        if ($LASTEXITCODE -ne 0) { throw 'Windows Performance Recorder could not start.' }
+        $recording = $true
     }
 
     $samples = foreach ($index in 1..$Launches) {
@@ -165,6 +175,9 @@ try {
         }
     }
 } finally {
+    if ($recording) {
+        & "$env:SystemRoot\System32\wpr.exe" -stop (Join-Path $report 'startup.etl')
+    }
     foreach ($name in $previous.Keys) {
         [Environment]::SetEnvironmentVariable($name, $previous[$name])
     }

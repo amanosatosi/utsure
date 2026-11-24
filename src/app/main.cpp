@@ -94,7 +94,12 @@ int main(int argc, char *argv[]) {
     }
     startup::checkpoint("Application icon initialization");
 
-    auto settings_load_result = AppSettings::load_default_location();
+    const QString profile_settings = app.arguments().contains("--startup-profile")
+        ? qEnvironmentVariable("UTSURE_STARTUP_PROFILE_SETTINGS")
+        : QString{};
+    auto settings_load_result = profile_settings.isEmpty()
+        ? AppSettings::load_default_location()
+        : AppSettings::load(profile_settings);
     startup::checkpoint("Settings load in main");
     const UiFontResolution ui_font_resolution = UiFontManager::apply(app, settings_load_result.settings.ui_font);
     startup::checkpoint("UI font resolution and application");
